@@ -224,6 +224,14 @@ function num(value: unknown){
   return Number.isFinite(n) ? n : 0;
 }
 
+function payloadOf(value: any){
+  return value?.payload || value;
+}
+
+function moneyAmount(value: any){
+  return num(value?.Amount ?? value?.CurrencyAmount ?? value);
+}
+
 function mapAmazonStatus(order: any): IngestOrder['status']{
   const status = String(order?.OrderStatus || '').toLowerCase();
   if(status.includes('cancel')) return 'CANCELLED';
@@ -236,8 +244,10 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
   let items: any[] = [];
   try{
     const itemPayload: any = await amazonRequest(`/orders/v0/orders/${encodeURIComponent(orderId)}/orderItems`, {}, tenantId);
-    items = Array.isArray(itemPayload?.OrderItems) ? itemPayload.OrderItems : [];
+    const payload = payloadOf(itemPayload);
+    items = Array.isArray(payload?.OrderItems) ? payload.OrderItems : [];
   }catch{}
+  const financials = await amazonOrderFinancials(orderId, tenantId);
   const amount = num(order?.OrderTotal?.Amount);
   const mappedItems = items.map(item => {
     const price = num(item?.ItemPrice?.Amount);
@@ -257,13 +267,13 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     status: mapAmazonStatus(order),
     currency: order?.OrderTotal?.CurrencyCode || 'BRL',
     grossAmount: amount,
-    shippingAmount: 0,
-    feeAmount: 0,
+    shippingAmount: financials.shippingAmount,
+    feeAmount: financials.feeAmount,
     taxAmount: 0,
     paidAt: order.PurchaseDate,
     customer: {
       externalId: order.BuyerInfo?.BuyerEmail || undefined,
-      name: order.BuyerInfo?.BuyerName || 'Cliente Amazon',
+      name: order.BuyerInfo?.BuyerName || order.BuyerInfo?.BuyerCounty || order.ShippingAddress?.City || 'Cliente Amazon',
       city: order.ShippingAddress?.City,
       state: order.ShippingAddress?.StateOrRegion,
       zip: order.ShippingAddress?.PostalCode
@@ -274,22 +284,58 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
   };
 }
 
+async function amazonOrderFinancials(orderId: string, tenantId: string){
+  try{
+    const response: any = await amazonRequest(`/finances/v0/orders/${encodeURIComponent(orderId)}/financialEvents`, {}, tenantId);
+    const events = payloadOf(response)?.FinancialEvents || {};
+    let feeAmount = 0;
+    let shippingAmount = 0;
+    const visitFee = (fee: any) => {
+      const type = String(fee?.FeeType || '').toLowerCase();
+      const amount = Math.abs(moneyAmount(fee?.FeeAmount));
+      if(!amount) return;
+      if(type.includes('shipping') || type.includes('ship') || type.includes('freight') || type.includes('delivery') || type.includes('easyship') || type.includes('postage')) shippingAmount += amount;
+      else feeAmount += amount;
+    };
+    const visitCharge = (charge: any) => {
+      const type = String(charge?.ChargeType || '').toLowerCase();
+      const amount = Math.abs(moneyAmount(charge?.ChargeAmount));
+      if(amount && (type.includes('shipping') || type.includes('freight') || type.includes('delivery'))) shippingAmount += amount;
+    };
+    const arrays = Object.values(events).flatMap((value: any) => Array.isArray(value) ? value : []);
+    for(const event of arrays){
+      for(const fee of event.FeeList || []) visitFee(fee);
+      for(const item of [...(event.ShipmentItemList || []), ...(event.ShipmentItemAdjustmentList || [])]){
+        for(const fee of item.ItemFeeList || []) visitFee(fee);
+        for(const charge of item.ItemChargeList || []) visitCharge(charge);
+      }
+    }
+    return { feeAmount, shippingAmount };
+  }catch{
+    return { feeAmount: 0, shippingAmount: 0 };
+  }
+}
+
 export async function syncAmazonOrders(days = 365, tenantId?: string){
   const conn = await getAmazonConnection(tenantId);
   const createdAfter = new Date(Date.now() - Math.max(1, days) * 86400000).toISOString();
-  const payload: any = await amazonRequest('/orders/v0/orders', {
-    query: {
-      MarketplaceIds: conn.marketplaceId,
-      CreatedAfter: createdAfter,
-      OrderStatuses: 'Pending,Unshipped,PartiallyShipped,Shipped,Canceled'
-    }
-  }, conn.tenantId);
-  const orders = Array.isArray(payload?.Orders) ? payload.Orders : [];
   let count = 0;
-  for(const order of orders){
-    await ingestOrder(await mapAmazonOrder(order, conn.tenantId));
-    count++;
-  }
+  let nextToken = '';
+  do{
+    const response: any = await amazonRequest('/orders/v0/orders', {
+      query: nextToken ? { NextToken: nextToken } : {
+        MarketplaceIds: conn.marketplaceId,
+        CreatedAfter: createdAfter
+      }
+    }, conn.tenantId);
+    const payload = payloadOf(response);
+    const orders = Array.isArray(payload?.Orders) ? payload.Orders : [];
+    for(const order of orders){
+      await ingestOrder(await mapAmazonOrder(order, conn.tenantId));
+      count++;
+    }
+    nextToken = payload?.NextToken || '';
+  }while(nextToken && count < 1000);
   await db.integration.update({ where: { id: conn.integrationId }, data: { lastSyncAt: new Date(), lastError: null } });
   return count;
 }
