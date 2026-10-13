@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import { db } from './db';
 import { decryptSecret, encryptSecret } from './crypto-secrets';
 import { ingestOrder, type IngestOrder } from './orders';
@@ -192,80 +191,24 @@ export async function getAmazonConnection(tenantId?: string): Promise<AmazonConn
   };
 }
 
-function requireAwsSigningEnv(){
-  const accessKey = env('AMAZON_AWS_ACCESS_KEY_ID') || env('AWS_ACCESS_KEY_ID');
-  const secretKey = env('AMAZON_AWS_SECRET_ACCESS_KEY') || env('AWS_SECRET_ACCESS_KEY');
-  if(!accessKey || !secretKey){
-    throw new Error('Amazon conectada, mas faltam AMAZON_AWS_ACCESS_KEY_ID e AMAZON_AWS_SECRET_ACCESS_KEY para assinar chamadas SP-API');
-  }
-  return { accessKey, secretKey, sessionToken: env('AMAZON_AWS_SESSION_TOKEN') || env('AWS_SESSION_TOKEN') };
-}
-
-function hash(value: string){
-  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function hmac(key: crypto.BinaryLike, value: string, encoding?: crypto.BinaryToTextEncoding){
-  return crypto.createHmac('sha256', key).update(value, 'utf8').digest(encoding as any);
-}
-
 function amzDate(date = new Date()){
   return date.toISOString().replace(/[:-]|\.\d{3}/g, '');
 }
 
-function dateStamp(value: string){
-  return value.slice(0, 8);
-}
-
-function signingKey(secretKey: string, stamp: string, region: string){
-  const kDate = hmac(`AWS4${secretKey}`, stamp);
-  const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, 'execute-api');
-  return hmac(kService, 'aws4_request');
-}
-
 async function amazonRequest<T = any>(path: string, options: { method?: string; query?: Record<string, string>; body?: unknown } = {}, tenantId?: string): Promise<T>{
   const conn = await getAmazonConnection(tenantId);
-  const aws = requireAwsSigningEnv();
   const method = options.method || 'GET';
   const url = new URL(path, conn.endpoint);
   for(const [key, value] of Object.entries(options.query || {})){
     if(value) url.searchParams.set(key, value);
   }
   const body = options.body ? JSON.stringify(options.body) : '';
-  const now = amzDate();
-  const stamp = dateStamp(now);
-  const host = url.host;
-  const headers: Record<string, string> = {
-    host,
-    'x-amz-access-token': conn.accessToken,
-    'x-amz-date': now
-  };
-  if(aws.sessionToken) headers['x-amz-security-token'] = aws.sessionToken;
-  const sortedHeaderKeys = Object.keys(headers).sort();
-  const canonicalHeaders = sortedHeaderKeys.map(key => `${key}:${headers[key]}\n`).join('');
-  const signedHeaders = sortedHeaderKeys.join(';');
-  const canonicalQuery = [...url.searchParams.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&');
-  const canonicalRequest = [
-    method,
-    url.pathname,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    hash(body)
-  ].join('\n');
-  const credentialScope = `${stamp}/${conn.awsRegion}/execute-api/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', now, credentialScope, hash(canonicalRequest)].join('\n');
-  const signature = hmac(signingKey(aws.secretKey, stamp, conn.awsRegion), stringToSign, 'hex');
-  const authorization = `AWS4-HMAC-SHA256 Credential=${aws.accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   const r = await fetch(url, {
     method,
     headers: {
-      ...headers,
-      authorization,
+      'x-amz-access-token': conn.accessToken,
+      'x-amz-date': amzDate(),
+      'user-agent': 'IronAirHub/1.0',
       ...(body ? { 'content-type': 'application/json' } : {})
     },
     body: body || undefined,
@@ -367,7 +310,6 @@ export async function amazonStatus(tenantId?: string){
     endpoint: metadata.endpoint || endpoint(),
     expiresAt: connected ? metadata.expiresAt || null : null,
     refreshTokenAvailable: connected && Boolean(integration?.refreshTokenEncrypted),
-    awsSigningConfigured: Boolean((env('AMAZON_AWS_ACCESS_KEY_ID') || env('AWS_ACCESS_KEY_ID')) && (env('AMAZON_AWS_SECRET_ACCESS_KEY') || env('AWS_SECRET_ACCESS_KEY'))),
     lastSyncAt: connected ? integration?.lastSyncAt || null : null,
     lastError: integration?.lastError || null,
     connectedAt: connected ? integration?.connectedAt || null : null,
