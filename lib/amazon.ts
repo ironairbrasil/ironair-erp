@@ -1,0 +1,378 @@
+import crypto from 'crypto';
+import { db } from './db';
+import { decryptSecret, encryptSecret } from './crypto-secrets';
+import { ingestOrder, type IngestOrder } from './orders';
+import { getTenantId } from './tenant';
+
+const PROVIDER = 'Amazon';
+const LWA_TOKEN_URL = 'https://api.amazon.com/auth/o2/token';
+const DEFAULT_MARKETPLACE_ID = 'A2Q3Y263D00KWC';
+const DEFAULT_ENDPOINT = 'https://sellingpartnerapi-na.amazon.com';
+const DEFAULT_AWS_REGION = 'us-east-1';
+
+type AmazonToken = {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  token_type?: string;
+};
+
+type AmazonConnection = {
+  tenantId: string;
+  integrationId: string;
+  accessToken: string;
+  refreshToken: string;
+  marketplaceId: string;
+  endpoint: string;
+  awsRegion: string;
+};
+
+function env(name: string){
+  return process.env[name]?.trim() || '';
+}
+
+function clientId(){
+  return env('AMAZON_SPAPI_CLIENT_ID') || env('AMAZON_CLIENT_ID');
+}
+
+function clientSecret(){
+  return env('AMAZON_SPAPI_CLIENT_SECRET') || env('AMAZON_CLIENT_SECRET');
+}
+
+function appId(){
+  return env('AMAZON_SPAPI_APP_ID') || env('AMAZON_APP_ID');
+}
+
+function envRefreshToken(){
+  return env('AMAZON_SPAPI_REFRESH_TOKEN') || env('AMAZON_REFRESH_TOKEN');
+}
+
+function marketplaceId(){
+  return env('AMAZON_SPAPI_MARKETPLACE_ID') || env('AMAZON_MARKETPLACE_ID') || DEFAULT_MARKETPLACE_ID;
+}
+
+function endpoint(){
+  return env('AMAZON_SPAPI_ENDPOINT') || DEFAULT_ENDPOINT;
+}
+
+function awsRegion(){
+  return env('AMAZON_SPAPI_AWS_REGION') || env('AWS_REGION') || DEFAULT_AWS_REGION;
+}
+
+function tokenExpiresAt(expiresIn: unknown){
+  const seconds = Number(expiresIn || 0);
+  if(!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+async function postLwaRefresh(refreshToken: string): Promise<AmazonToken>{
+  const id = clientId();
+  const secret = clientSecret();
+  if(!id || !secret) throw new Error('Credenciais Amazon SP-API ausentes no servidor');
+  if(!refreshToken) throw new Error('AMAZON_SPAPI_REFRESH_TOKEN ausente no servidor');
+  const r = await fetch(LWA_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: id,
+      client_secret: secret
+    }),
+    cache: 'no-store'
+  });
+  const json = await r.json().catch(() => ({}));
+  if(!r.ok || !json.access_token) throw new Error(json.error_description || json.error || 'amazon_lwa_refresh_failed');
+  return json;
+}
+
+function amazonMetadata(token: AmazonToken, extra: Record<string, unknown> = {}){
+  return {
+    ...extra,
+    appId: appId() || undefined,
+    marketplaceId: marketplaceId(),
+    region: env('AMAZON_SPAPI_REGION') || 'NA',
+    endpoint: endpoint(),
+    awsRegion: awsRegion(),
+    tokenType: token.token_type,
+    expiresAt: tokenExpiresAt(token.expires_in),
+    refreshTokenAvailable: true,
+    connectedVia: 'SELF_AUTHORIZATION',
+    refreshedAt: new Date().toISOString()
+  };
+}
+
+export async function connectAmazonFromEnv(tenantId?: string){
+  const scopedTenantId = tenantId || await getTenantId();
+  const refreshToken = envRefreshToken();
+  const token = await postLwaRefresh(refreshToken);
+  const integration = await db.integration.upsert({
+    where: { tenantId_provider: { tenantId: scopedTenantId, provider: PROVIDER } },
+    create: {
+      tenantId: scopedTenantId,
+      provider: PROVIDER,
+      mode: 'OAUTH',
+      status: 'CONNECTED',
+      accessTokenEncrypted: encryptSecret(token.access_token),
+      refreshTokenEncrypted: encryptSecret(token.refresh_token || refreshToken),
+      scopes: 'sellingpartnerapi::migration',
+      connectedAt: new Date(),
+      metadata: amazonMetadata(token)
+    },
+    update: {
+      mode: 'OAUTH',
+      status: 'CONNECTED',
+      accessTokenEncrypted: encryptSecret(token.access_token),
+      refreshTokenEncrypted: encryptSecret(token.refresh_token || refreshToken),
+      scopes: 'sellingpartnerapi::migration',
+      connectedAt: new Date(),
+      disconnectedAt: null,
+      lastError: null,
+      metadata: amazonMetadata(token)
+    }
+  });
+  return integration;
+}
+
+export async function refreshAmazonConnection(integration: { id: string; tenantId: string; refreshTokenEncrypted: string | null; metadata: unknown }){
+  if(!integration.refreshTokenEncrypted) throw new Error('Amazon sem refresh token');
+  const refreshToken = decryptSecret(integration.refreshTokenEncrypted);
+  const token = await postLwaRefresh(refreshToken);
+  const updated = await db.integration.update({
+    where: { id: integration.id },
+    data: {
+      accessTokenEncrypted: encryptSecret(token.access_token),
+      refreshTokenEncrypted: encryptSecret(token.refresh_token || refreshToken),
+      status: 'CONNECTED',
+      lastError: null,
+      metadata: amazonMetadata(token, (integration.metadata as Record<string, unknown>) || {})
+    }
+  });
+  return updated;
+}
+
+export async function refreshAmazonTenant(tenantId?: string){
+  const scopedTenantId = tenantId || await getTenantId();
+  let integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId: scopedTenantId, provider: PROVIDER } } });
+  if(!integration || !integration.refreshTokenEncrypted){
+    if(envRefreshToken()) integration = await connectAmazonFromEnv(scopedTenantId);
+    else throw new Error('Amazon não conectado');
+  }
+  const refreshed = await refreshAmazonConnection(integration);
+  return {
+    provider: PROVIDER,
+    status: refreshed.status,
+    expiresAt: (refreshed.metadata as any)?.expiresAt || null,
+    refreshedAt: (refreshed.metadata as any)?.refreshedAt || null,
+    refreshTokenAvailable: Boolean(refreshed.refreshTokenEncrypted)
+  };
+}
+
+export async function getAmazonConnection(tenantId?: string): Promise<AmazonConnection>{
+  const scopedTenantId = tenantId || await getTenantId();
+  let integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId: scopedTenantId, provider: PROVIDER } } });
+  if(!integration || integration.status !== 'CONNECTED' || !integration.accessTokenEncrypted){
+    if(envRefreshToken()) integration = await connectAmazonFromEnv(scopedTenantId);
+    else throw new Error('Amazon não conectado');
+  }
+  const expiresAt = (integration.metadata as any)?.expiresAt as string | undefined;
+  if(integration.refreshTokenEncrypted && expiresAt && new Date(expiresAt).getTime() - Date.now() < 5 * 60 * 1000){
+    integration = await refreshAmazonConnection(integration);
+  }
+  if(!integration.accessTokenEncrypted || !integration.refreshTokenEncrypted) throw new Error('Amazon sem tokens salvos');
+  const metadata = (integration.metadata as any) || {};
+  return {
+    tenantId: scopedTenantId,
+    integrationId: integration.id,
+    accessToken: decryptSecret(integration.accessTokenEncrypted),
+    refreshToken: decryptSecret(integration.refreshTokenEncrypted),
+    marketplaceId: metadata.marketplaceId || marketplaceId(),
+    endpoint: metadata.endpoint || endpoint(),
+    awsRegion: metadata.awsRegion || awsRegion()
+  };
+}
+
+function requireAwsSigningEnv(){
+  const accessKey = env('AMAZON_AWS_ACCESS_KEY_ID') || env('AWS_ACCESS_KEY_ID');
+  const secretKey = env('AMAZON_AWS_SECRET_ACCESS_KEY') || env('AWS_SECRET_ACCESS_KEY');
+  if(!accessKey || !secretKey){
+    throw new Error('Amazon conectada, mas faltam AMAZON_AWS_ACCESS_KEY_ID e AMAZON_AWS_SECRET_ACCESS_KEY para assinar chamadas SP-API');
+  }
+  return { accessKey, secretKey, sessionToken: env('AMAZON_AWS_SESSION_TOKEN') || env('AWS_SESSION_TOKEN') };
+}
+
+function hash(value: string){
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function hmac(key: crypto.BinaryLike, value: string, encoding?: crypto.BinaryToTextEncoding){
+  return crypto.createHmac('sha256', key).update(value, 'utf8').digest(encoding as any);
+}
+
+function amzDate(date = new Date()){
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, '');
+}
+
+function dateStamp(value: string){
+  return value.slice(0, 8);
+}
+
+function signingKey(secretKey: string, stamp: string, region: string){
+  const kDate = hmac(`AWS4${secretKey}`, stamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, 'execute-api');
+  return hmac(kService, 'aws4_request');
+}
+
+async function amazonRequest<T = any>(path: string, options: { method?: string; query?: Record<string, string>; body?: unknown } = {}, tenantId?: string): Promise<T>{
+  const conn = await getAmazonConnection(tenantId);
+  const aws = requireAwsSigningEnv();
+  const method = options.method || 'GET';
+  const url = new URL(path, conn.endpoint);
+  for(const [key, value] of Object.entries(options.query || {})){
+    if(value) url.searchParams.set(key, value);
+  }
+  const body = options.body ? JSON.stringify(options.body) : '';
+  const now = amzDate();
+  const stamp = dateStamp(now);
+  const host = url.host;
+  const headers: Record<string, string> = {
+    host,
+    'x-amz-access-token': conn.accessToken,
+    'x-amz-date': now
+  };
+  if(aws.sessionToken) headers['x-amz-security-token'] = aws.sessionToken;
+  const sortedHeaderKeys = Object.keys(headers).sort();
+  const canonicalHeaders = sortedHeaderKeys.map(key => `${key}:${headers[key]}\n`).join('');
+  const signedHeaders = sortedHeaderKeys.join(';');
+  const canonicalQuery = [...url.searchParams.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  const canonicalRequest = [
+    method,
+    url.pathname,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    hash(body)
+  ].join('\n');
+  const credentialScope = `${stamp}/${conn.awsRegion}/execute-api/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', now, credentialScope, hash(canonicalRequest)].join('\n');
+  const signature = hmac(signingKey(aws.secretKey, stamp, conn.awsRegion), stringToSign, 'hex');
+  const authorization = `AWS4-HMAC-SHA256 Credential=${aws.accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const r = await fetch(url, {
+    method,
+    headers: {
+      ...headers,
+      authorization,
+      ...(body ? { 'content-type': 'application/json' } : {})
+    },
+    body: body || undefined,
+    cache: 'no-store'
+  });
+  const json = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(json?.errors?.[0]?.message || json?.message || 'amazon_spapi_failed');
+  return json as T;
+}
+
+function num(value: unknown){
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapAmazonStatus(order: any): IngestOrder['status']{
+  const status = String(order?.OrderStatus || '').toLowerCase();
+  if(status.includes('cancel')) return 'CANCELLED';
+  if(status === 'pending') return 'PENDING';
+  return 'PAID';
+}
+
+async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder>{
+  const orderId = String(order.AmazonOrderId);
+  let items: any[] = [];
+  try{
+    const itemPayload: any = await amazonRequest(`/orders/v0/orders/${encodeURIComponent(orderId)}/orderItems`, {}, tenantId);
+    items = Array.isArray(itemPayload?.OrderItems) ? itemPayload.OrderItems : [];
+  }catch{}
+  const amount = num(order?.OrderTotal?.Amount);
+  const mappedItems = items.map(item => {
+    const price = num(item?.ItemPrice?.Amount);
+    const qty = Number(item?.QuantityOrdered || item?.QuantityShipped || 1);
+    return {
+      sku: String(item?.SellerSKU || item?.ASIN || `AMAZON-${orderId}`),
+      name: String(item?.Title || `Pedido Amazon ${orderId}`),
+      quantity: qty || 1,
+      unitPrice: price && qty ? price / qty : amount,
+      unitCost: 0
+    };
+  });
+  return {
+    tenantId,
+    externalId: orderId,
+    channel: 'AMAZON',
+    status: mapAmazonStatus(order),
+    currency: order?.OrderTotal?.CurrencyCode || 'BRL',
+    grossAmount: amount,
+    shippingAmount: 0,
+    feeAmount: 0,
+    taxAmount: 0,
+    paidAt: order.PurchaseDate,
+    customer: {
+      externalId: order.BuyerInfo?.BuyerEmail || undefined,
+      name: order.BuyerInfo?.BuyerName || 'Cliente Amazon',
+      city: order.ShippingAddress?.City,
+      state: order.ShippingAddress?.StateOrRegion,
+      zip: order.ShippingAddress?.PostalCode
+    },
+    items: mappedItems.length ? mappedItems : [{ sku: `AMAZON-${orderId}`, name: `Pedido Amazon ${orderId}`, quantity: 1, unitPrice: amount, unitCost: 0 }],
+    attribution: { source: 'Amazon', medium: 'marketplace', campaign: 'Amazon' },
+    skipInventory: true
+  };
+}
+
+export async function syncAmazonOrders(days = 365, tenantId?: string){
+  const conn = await getAmazonConnection(tenantId);
+  const createdAfter = new Date(Date.now() - Math.max(1, days) * 86400000).toISOString();
+  const payload: any = await amazonRequest('/orders/v0/orders', {
+    query: {
+      MarketplaceIds: conn.marketplaceId,
+      CreatedAfter: createdAfter,
+      OrderStatuses: 'Pending,Unshipped,PartiallyShipped,Shipped,Canceled'
+    }
+  }, conn.tenantId);
+  const orders = Array.isArray(payload?.Orders) ? payload.Orders : [];
+  let count = 0;
+  for(const order of orders){
+    await ingestOrder(await mapAmazonOrder(order, conn.tenantId));
+    count++;
+  }
+  await db.integration.update({ where: { id: conn.integrationId }, data: { lastSyncAt: new Date(), lastError: null } });
+  return count;
+}
+
+export async function amazonStatus(tenantId?: string){
+  const scopedTenantId = tenantId || await getTenantId();
+  const integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId: scopedTenantId, provider: PROVIDER } }, include: { webhooks: true } });
+  const configured = Boolean(clientId() && clientSecret() && (envRefreshToken() || integration?.refreshTokenEncrypted));
+  const connected = Boolean(integration?.status === 'CONNECTED' && integration?.accessTokenEncrypted && integration?.refreshTokenEncrypted);
+  const metadata = (integration?.metadata as any) || {};
+  return {
+    provider: PROVIDER,
+    status: connected ? 'CONNECTED' : 'DISCONNECTED',
+    mode: integration?.mode || 'OAUTH',
+    configured,
+    marketplaceId: metadata.marketplaceId || marketplaceId(),
+    appId: metadata.appId || appId() || null,
+    endpoint: metadata.endpoint || endpoint(),
+    expiresAt: connected ? metadata.expiresAt || null : null,
+    refreshTokenAvailable: connected && Boolean(integration?.refreshTokenEncrypted),
+    awsSigningConfigured: Boolean((env('AMAZON_AWS_ACCESS_KEY_ID') || env('AWS_ACCESS_KEY_ID')) && (env('AMAZON_AWS_SECRET_ACCESS_KEY') || env('AWS_SECRET_ACCESS_KEY'))),
+    lastSyncAt: connected ? integration?.lastSyncAt || null : null,
+    lastError: integration?.lastError || null,
+    connectedAt: connected ? integration?.connectedAt || null : null,
+    webhooks: integration?.webhooks.map(w => ({ topic: w.topic, status: w.status, callbackUrl: w.callbackUrl, lastRegisteredAt: w.lastRegisteredAt, lastError: w.lastError })) || []
+  };
+}
+
+export { PROVIDER as AMAZON_PROVIDER };

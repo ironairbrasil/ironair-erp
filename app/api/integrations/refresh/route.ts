@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getTenantId } from '@/lib/tenant';
 import { refreshMercadoLivreTenant } from '@/lib/mercadolivre';
+import { refreshAmazonTenant } from '@/lib/amazon';
 
 export const runtime = 'nodejs';
 
@@ -15,6 +16,13 @@ export async function POST(req: Request){
         results.mercadoLivre = await refreshMercadoLivreTenant(tenantId);
       }catch(e: any){
         results.mercadoLivre = { ok: false, error: e?.message || 'mercado_livre_refresh_failed' };
+      }
+    }
+    if(provider === 'all' || provider === 'Amazon' || provider === 'AMAZON'){
+      try{
+        results.amazon = await refreshAmazonTenant(tenantId);
+      }catch(e: any){
+        results.amazon = { ok: false, error: e?.message || 'amazon_refresh_failed' };
       }
     }
     return NextResponse.json({ ok: true, results });
