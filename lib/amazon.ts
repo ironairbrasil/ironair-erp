@@ -272,8 +272,8 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     taxAmount: 0,
     paidAt: order.PurchaseDate,
     customer: {
-      externalId: order.BuyerInfo?.BuyerEmail || undefined,
-      name: order.BuyerInfo?.BuyerName || order.BuyerInfo?.BuyerCounty || order.ShippingAddress?.City || 'Cliente Amazon',
+      externalId: orderId,
+      name: order.BuyerInfo?.BuyerName || 'Cliente Amazon',
       city: order.ShippingAddress?.City,
       state: order.ShippingAddress?.StateOrRegion,
       zip: order.ShippingAddress?.PostalCode

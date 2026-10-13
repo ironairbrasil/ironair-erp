@@ -320,9 +320,10 @@ async function mercadoLivreOrderExtra(order: any, tenantId: string): Promise<Mer
     const shipment: any = await mercadoLivreApi(`/shipments/${shipmentId}`, {
       headers: { 'x-format-new': 'true' }
     }, tenantId);
-    const address = shipment?.receiver_address || shipment?.destination?.receiver_address || {};
+    const address = shipment?.receiver_address || shipment?.destination?.receiver_address || shipment?.destination?.shipping_address || {};
     extra.city = address?.city?.name || address?.city_name || address?.city || undefined;
-    extra.state = address?.state?.id || address?.state?.name || address?.state_name || address?.state || undefined;
+    const state = address?.state?.id || address?.state?.name || address?.state_name || address?.state || undefined;
+    extra.state = typeof state === 'string' && /^BR-[A-Z]{2}$/i.test(state) ? state.slice(3).toUpperCase() : state;
     extra.zip = address?.zip_code || address?.zipcode || address?.zip || undefined;
   }catch{}
   extra.shippingAmount = await mercadoLivreSellerShippingCost(order, tenantId);

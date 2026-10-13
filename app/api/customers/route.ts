@@ -7,24 +7,29 @@ export async function GET(req:Request){
     const tenantId=await getTenantId(req);
     const rows=await db.customer.findMany({
       where:{tenantId},
-      take:100,
+      take:250,
       orderBy:{createdAt:'desc'},
-      include:{orders:{select:{id:true,status:true,grossAmount:true,createdAt:true,channel:true},orderBy:{createdAt:'desc'}}}
+      include:{orders:{select:{id:true,status:true,grossAmount:true,createdAt:true,paidAt:true,channel:true},orderBy:[{paidAt:'desc'},{createdAt:'desc'}]}}
     });
-    return NextResponse.json(rows.map(c=>({
-      id:c.id,
-      name:c.name,
-      city:c.city,
-      state:c.state,
-      zip:c.zip,
-      externalId:c.externalId,
-      createdAt:c.createdAt,
-      orders:c.orders.length,
-      paidOrders:c.orders.filter(o=>o.status==='PAID').length,
-      revenue:c.orders.filter(o=>o.status==='PAID').reduce((sum,o)=>sum+Number(o.grossAmount),0),
-      lastOrderAt:c.orders[0]?.createdAt,
-      lastChannel:c.orders[0]?.channel
-    })));
+    const mapped=rows.map(c=>{
+      const last=c.orders[0];
+      return {
+        id:c.id,
+        name:c.name,
+        city:c.city,
+        state:c.state,
+        zip:c.zip,
+        externalId:c.externalId,
+        createdAt:c.createdAt,
+        orders:c.orders.length,
+        paidOrders:c.orders.filter(o=>o.status==='PAID').length,
+        revenue:c.orders.filter(o=>o.status==='PAID').reduce((sum,o)=>sum+Number(o.grossAmount),0),
+        lastOrderAt:last?.paidAt||last?.createdAt||c.createdAt,
+        lastChannel:last?.channel
+      };
+    });
+    mapped.sort((a,b)=>new Date(b.lastOrderAt||0).getTime()-new Date(a.lastOrderAt||0).getTime());
+    return NextResponse.json(mapped.slice(0,100));
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'customers_error'},{status:500});
   }
