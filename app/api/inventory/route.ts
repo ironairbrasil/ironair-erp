@@ -8,7 +8,7 @@ export async function GET(req:Request){
     const balances=await db.inventoryBalance.findMany({where:{tenantId},include:{variant:{include:{product:true}},warehouse:true},orderBy:[{variant:{sku:'asc'}},{warehouse:{code:'asc'}}]});
     const movements=await db.inventoryMovement.findMany({where:{tenantId},take:100,orderBy:{createdAt:'desc'},include:{variant:true,warehouse:true}});
     return NextResponse.json({
-      balances:balances.map(r=>({...r,available:Math.max(0,r.onHand-r.reserved-r.variant.safetyStock)})),
+      balances:balances.map(r=>({...r,available:Math.max(0,r.onHand-r.reserved)})),
       movements:movements.map(m=>({...m,sku:m.variant.sku,warehouseCode:m.warehouse.code}))
     });
   }catch(e:any){

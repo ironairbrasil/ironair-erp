@@ -16,7 +16,7 @@ export async function GET(req:Request){
     unitCost:Number(v.unitCost),
     safetyStock:v.safetyStock,
     active:v.active,
-    balances:v.balances.map(b=>({warehouseCode:b.warehouse.code,onHand:b.onHand,reserved:b.reserved,available:Math.max(0,b.onHand-b.reserved-v.safetyStock)}))
+    balances:v.balances.map(b=>({warehouseCode:b.warehouse.code,onHand:b.onHand,reserved:b.reserved,available:Math.max(0,b.onHand-b.reserved)}))
   })));
 }
 
@@ -68,7 +68,18 @@ export async function POST(req:Request){
       },
       update:updateData
     });
-    await db.orderItem.updateMany({where:{tenantId,sku},data:{unitCost:updateData.unitCost}});
+    if(Object.prototype.hasOwnProperty.call(b,'quantity')||Object.prototype.hasOwnProperty.call(b,'physical')){
+      const quantity=Math.max(0,Math.trunc(Number(b.quantity??b.physical??0)));
+      const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId,code:'CENTRAL'}}});
+      if(warehouse){
+        await db.inventoryBalance.upsert({
+          where:{tenantId_variantId_warehouseId:{tenantId,variantId:variant.id,warehouseId:warehouse.id}},
+          create:{tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:quantity,reserved:0},
+          update:{onHand:quantity}
+        });
+      }
+    }
+    await db.orderItem.updateMany({where:{tenantId,sku},data:{variantId:variant.id,unitCost:updateData.unitCost}});
     return NextResponse.json({ok:true,id:variant.id});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});

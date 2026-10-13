@@ -3,6 +3,22 @@ import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
 import type { Channel } from '@prisma/client';
 export type IngestOrder={tenantId?:string;externalId:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean};
+const skuAliases:Record<string,string>={
+ 'IRONAIR-127':'IRON-AIR-127V',
+ 'IRONAIR127':'IRON-AIR-127V',
+ 'FBA-IRONAIR127':'IRON-AIR-127V',
+ 'FBA-IRONAIR-127':'IRON-AIR-127V',
+ 'FBA-IRONAIR-127V':'IRON-AIR-127V',
+ 'IRONAIR-220':'IRON-AIR-220V',
+ 'IRONAIR220':'IRON-AIR-220V',
+ 'FBA-IRONAIR220':'IRON-AIR-220V',
+ 'FBA-IRONAIR-220':'IRON-AIR-220V',
+ 'FBA-IRONAIR-220V':'IRON-AIR-220V'
+};
+function canonicalSku(sku:string){
+ const normalized=String(sku||'').trim().toUpperCase();
+ return skuAliases[normalized]||String(sku||'').trim();
+}
 function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
  const data:Record<string,string>={};
  for(const key of ['externalId','name','emailHash','phoneHash','city','state','zip'] as const){
@@ -16,7 +32,7 @@ export async function ingestOrder(input:IngestOrder){
  const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:true}});
  let customerId=existing?.customerId||undefined;
  if(input.customer){const key=input.customer.externalId?`${input.channel}:${input.customer.externalId}`:undefined;const data=cleanCustomerUpdate(input.customer);const customer=key?await db.customer.upsert({where:{tenantId_sourceKey:{tenantId,sourceKey:key}},create:{...data,tenantId,sourceKey:key},update:data}):await db.customer.create({data:{...data,tenantId}});customerId=customer.id}
- const prepared=await Promise.all(input.items.map(async i=>{const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:i.sku}}});return{tenantId,variantId:v?.id,sku:i.sku,name:i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
+ const prepared=await Promise.all(input.items.map(async i=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});return{tenantId,variantId:v?.id,sku:v?.sku||i.sku,name:i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
  const order=await db.$transaction(async tx=>{
    const base={status:input.status,grossAmount:input.grossAmount,discountAmount:input.discountAmount||0,shippingAmount:input.shippingAmount||0,feeAmount:input.feeAmount||0,taxAmount:input.taxAmount||0,paymentMethod:input.paymentMethod,paidAt:input.paidAt?new Date(input.paidAt):undefined,customerId};
    if(!existing)return tx.order.create({data:{tenantId,externalId:input.externalId,channel:input.channel,currency:input.currency||'BRL',...base,items:{create:prepared}}});
