@@ -1,0 +1,7 @@
+.env
+.env.local
+.next
+.next-*
+.tmp-integration-logos
+node_modules
+tsconfig.tsbuildinfo
