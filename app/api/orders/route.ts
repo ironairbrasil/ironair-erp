@@ -44,7 +44,7 @@ async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
-  const rows=await db.order.findMany({where:{tenantId},take:100,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:true,attribution:true,customer:true}});
+  const rows=await db.order.findMany({where:{tenantId},take:1000,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:true,attribution:true,customer:true}});
   return NextResponse.json(rows);
 }
 
@@ -134,14 +134,9 @@ export async function PATCH(req:Request){
   }
 }
 
-export async function DELETE(req:Request){
-  try{
-    const tenantId=await getTenantId(req);
-    const u=new URL(req.url);
-    const id=u.searchParams.get('id');
-    if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
+async function deleteOrderWithStockReverse(tenantId:string,id:string){
     const order=await db.order.findFirst({where:{id,tenantId},include:{movements:{where:{tenantId},include:{variant:true,warehouse:true}}}});
-    if(!order) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
+    if(!order) throw new Error('Pedido não encontrado');
     for(const m of order.movements){
       if(m.type==='SALE'&&m.quantity<0){
         await moveStock({
@@ -157,7 +152,19 @@ export async function DELETE(req:Request){
       }
     }
     await db.order.delete({where:{id}});
-    return NextResponse.json({ok:true});
+}
+
+export async function DELETE(req:Request){
+  try{
+    const tenantId=await getTenantId(req);
+    const u=new URL(req.url);
+    const queryId=u.searchParams.get('id');
+    let body:any={};
+    try{body=await req.json()}catch{}
+    const ids=[...(Array.isArray(body.ids)?body.ids:[]),queryId].filter(Boolean).map(String);
+    if(!ids.length) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
+    for(const id of ids) await deleteOrderWithStockReverse(tenantId,id);
+    return NextResponse.json({ok:true,deleted:ids.length});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});
   }

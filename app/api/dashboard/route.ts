@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 
+const localDay=(value:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(value);
+
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
   const u=new URL(req.url);
@@ -19,16 +21,17 @@ export async function GET(req:Request){
     db.expense.findMany({where:{tenantId,date:range}})
   ]);
   let revenue=0,cogs=0,fees=0;
-  const daily=new Map<string,{date:string;revenue:number;profit:number;orders:number}>();
+  const daily=new Map<string,{date:string;revenue:number;profit:number;salesProfit:number;orders:number}>();
   const channels=new Map<string,{name:string;invested:number;sales:number;revenue:number;cogs:number;fees:number}>();
   for(const o of paid){
-    const orderRevenue=Number(o.grossAmount)-Number(o.discountAmount)+Number(o.shippingAmount);
-    const orderFees=Number(o.feeAmount)+Number(o.taxAmount);
+    const orderRevenue=Number(o.grossAmount)-Number(o.discountAmount);
+    const orderFees=Number(o.feeAmount)+Number(o.shippingAmount)+Number(o.taxAmount);
     const orderCogs=o.items.reduce((sum,i)=>sum+Number(i.unitCost)*i.quantity,0);
     revenue+=orderRevenue; cogs+=orderCogs; fees+=orderFees;
-    const key=(o.paidAt||o.createdAt).toISOString().slice(0,10);
-    const d=daily.get(key)||{date:key,revenue:0,profit:0,orders:0};
-    d.revenue+=orderRevenue; d.profit+=orderRevenue-orderCogs-orderFees; d.orders++;
+    const salesProfit=orderRevenue-orderFees;
+    const key=localDay(o.paidAt||o.createdAt);
+    const d=daily.get(key)||{date:key,revenue:0,profit:0,salesProfit:0,orders:0};
+    d.revenue+=orderRevenue; d.salesProfit+=salesProfit; d.profit+=salesProfit-orderCogs; d.orders++;
     daily.set(key,d);
     const channel=o.channel;
     const c=channels.get(channel)||{name:channel,invested:0,sales:0,revenue:0,cogs:0,fees:0};
@@ -62,6 +65,6 @@ export async function GET(req:Request){
     available,
     trackingEvents:trackingTotal,
     daily:[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)),
-    channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,profit:c.revenue-c.cogs-c.fees-c.invested}))
+    channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,salesProfit:c.revenue-c.fees-c.invested,profit:c.revenue-c.cogs-c.fees-c.invested}))
   });
 }
