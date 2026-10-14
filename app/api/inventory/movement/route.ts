@@ -26,6 +26,7 @@ export async function POST(req:Request){
       type,
       reference:body.reference||body.ref,
       note:body.note,
+      createdAt:body.date||body.createdAt,
       idempotencyKey:body.idempotencyKey||`manual:${body.sku}:${type}:${body.reference||body.ref||Date.now()}:${quantity}`
     });
     return NextResponse.json({ok:true,id:movement.id});

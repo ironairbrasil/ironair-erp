@@ -1,7 +1,7 @@
 import { db } from './db';
 import { getTenantId } from './tenant';
 import type { InventoryMovementType } from '@prisma/client';
-export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string}){
+export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string;createdAt?:Date|string}){
  if(!Number.isInteger(input.quantity)||input.quantity===0) throw new Error('quantity must be a non-zero integer');
  const tenantId=input.tenantId||await getTenantId();
  return db.$transaction(async tx=>{
@@ -14,6 +14,6 @@ export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode
   const nextOnHand=bal.onHand+onHandDelta, nextReserved=bal.reserved+reserveDelta;
   if(nextOnHand<0)throw new Error(`Insufficient stock for ${input.sku}`);if(nextReserved<0||nextReserved>nextOnHand)throw new Error(`Invalid reservation for ${input.sku}`);
   await tx.inventoryBalance.update({where:{id:bal.id},data:{onHand:nextOnHand,reserved:nextReserved}});
-  return tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey}})
+  return tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,createdAt:input.createdAt?new Date(input.createdAt):undefined}})
  })
 }

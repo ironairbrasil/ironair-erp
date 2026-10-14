@@ -41,7 +41,7 @@ export async function ingestOrder(input:IngestOrder){
  });
  if(input.attribution) await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...mapAttribution(input.attribution)},update:mapAttribution(input.attribution)});
  // Inventory is deducted exactly once on the first transition into PAID. Refunds do NOT auto-restock: physical returns require an explicit RETURN movement.
- if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') for(const item of prepared.filter(i=>i.variantId)) await moveStock({tenantId,sku:item.sku,warehouseCode:'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
+ if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') for(const item of prepared.filter(i=>i.variantId)) await moveStock({tenantId,sku:item.sku,warehouseCode:'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
  return order;
 }
 function mapAttribution(a:Record<string,any>){return{sessionId:a.sessionId,visitorId:a.visitorId,source:a.utm_source||a.source,medium:a.utm_medium||a.medium,campaign:a.utm_campaign||a.campaign,content:a.utm_content||a.content,term:a.utm_term||a.term,fbclid:a.fbclid,fbp:a._fbp||a.fbp,fbc:a._fbc||a.fbc,gclid:a.gclid,campaignId:a.campaign_id||a.campaignId,adsetId:a.adset_id||a.adsetId,adId:a.ad_id||a.adId,landingPage:a.landingPage,referrer:a.referrer,firstTouch:a.firstTouch,lastTouch:a.lastTouch}}

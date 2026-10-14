@@ -4,6 +4,44 @@ import { ingestOrder } from '@/lib/orders';
 import { moveStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
 
+async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;externalId:string;sku:string;variantId:string;quantity:number;date:Date}){
+  const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId:input.tenantId,code:'CENTRAL'}}});
+  if(!warehouse) throw new Error('Estoque CENTRAL não encontrado');
+  const quantity=-Math.abs(input.quantity || 1);
+  const current=await db.inventoryMovement.findFirst({where:{tenantId:input.tenantId,orderId:input.orderId,type:'SALE'},include:{variant:true,warehouse:true},orderBy:{createdAt:'asc'}});
+  if(!current){
+    await moveStock({
+      tenantId:input.tenantId,
+      sku:input.sku,
+      warehouseCode:'CENTRAL',
+      quantity,
+      type:'SALE',
+      reference:input.externalId,
+      orderId:input.orderId,
+      createdAt:input.date,
+      idempotencyKey:`manual-assign-sale:${input.orderId}`
+    });
+    return;
+  }
+  if(current.variantId===input.variantId){
+    await db.inventoryMovement.update({where:{id:current.id},data:{quantity,reference:input.externalId,createdAt:input.date,warehouseId:warehouse.id}});
+    return;
+  }
+  await db.$transaction(async tx=>{
+    const oldBalance=await tx.inventoryBalance.findUnique({where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:current.variantId,warehouseId:current.warehouseId}}});
+    if(oldBalance) await tx.inventoryBalance.update({where:{id:oldBalance.id},data:{onHand:oldBalance.onHand-current.quantity}});
+    const newBalance=await tx.inventoryBalance.upsert({
+      where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:input.variantId,warehouseId:warehouse.id}},
+      create:{tenantId:input.tenantId,variantId:input.variantId,warehouseId:warehouse.id,onHand:0,reserved:0},
+      update:{}
+    });
+    const nextOnHand=newBalance.onHand+quantity;
+    if(nextOnHand<0) throw new Error(`Estoque insuficiente para ${input.sku}`);
+    await tx.inventoryBalance.update({where:{id:newBalance.id},data:{onHand:nextOnHand}});
+    await tx.inventoryMovement.update({where:{id:current.id},data:{variantId:input.variantId,warehouseId:warehouse.id,quantity,reference:input.externalId,createdAt:input.date,idempotencyKey:`manual-assign-sale:${input.orderId}`}});
+  });
+}
+
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
   const rows=await db.order.findMany({where:{tenantId},take:100,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:true,attribution:true,customer:true}});
@@ -48,7 +86,7 @@ export async function PATCH(req:Request){
     const b=await req.json();
     const id=String(b.id||'');
     if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
-    const existing=await db.order.findFirst({where:{id,tenantId},select:{id:true,customerId:true}});
+    const existing=await db.order.findFirst({where:{id,tenantId},select:{id:true,customerId:true,externalId:true,paidAt:true,createdAt:true}});
     if(!existing) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
     await db.order.update({
       where:{id},
@@ -78,6 +116,15 @@ export async function PATCH(req:Request){
             name:variant.name,
             unitCost:variant.unitCost
           }
+        });
+        await reconcileOrderSaleMovement({
+          tenantId,
+          orderId:existing.id,
+          externalId:existing.externalId,
+          sku:variant.sku,
+          variantId:variant.id,
+          quantity:item.quantity,
+          date:existing.paidAt||existing.createdAt
         });
       }
     }
