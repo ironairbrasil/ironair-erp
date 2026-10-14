@@ -47,6 +47,7 @@ export async function GET(req:Request){
   }
   const media=spend.reduce((sum,s)=>sum+Number(s.spend),0);
   const expenseTotal=expenses.reduce((sum,e)=>sum+Number(e.amount),0);
+  const salesProfit=revenue-fees;
   const profit=revenue-cogs-fees-media-expenseTotal;
   const available=inventory.reduce((sum,b)=>sum+Math.max(0,b.onHand-b.reserved-b.variant.safetyStock),0);
   const trackingTotal=tracking.reduce((sum,t)=>sum+t._count._all,0);
@@ -57,6 +58,7 @@ export async function GET(req:Request){
     cogs,
     fees,
     media,
+    salesProfit,
     profit,
     expenses:expenseTotal,
     margin:revenue?profit/revenue:0,
