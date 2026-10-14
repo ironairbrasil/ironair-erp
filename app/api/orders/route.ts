@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { ingestOrder } from '@/lib/orders';
 import { moveStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
+import { auditLog, mergeManualOverrides } from '@/lib/audit';
 
 async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;externalId:string;sku:string;variantId:string;quantity:number;date:Date}){
   const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId:input.tenantId,code:'CENTRAL'}}});
@@ -86,13 +87,17 @@ export async function PATCH(req:Request){
     const b=await req.json();
     const id=String(b.id||'');
     if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
-    const existing=await db.order.findFirst({where:{id,tenantId},select:{id:true,customerId:true,externalId:true,paidAt:true,createdAt:true}});
+    const existing=await db.order.findFirst({where:{id,tenantId},include:{items:{orderBy:{id:'asc'}},customer:true}});
     if(!existing) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
+    const editedFields=['feeAmount','shippingAmount'];
+    if(Object.prototype.hasOwnProperty.call(b,'customer')) editedFields.push('customer');
+    if(Object.prototype.hasOwnProperty.call(b,'itemSku')) editedFields.push('itemSku');
     await db.order.update({
       where:{id},
       data:{
         feeAmount:Number(b.feeAmount||b.fee||0),
-        shippingAmount:Number(b.shippingAmount||b.freight||0)
+        shippingAmount:Number(b.shippingAmount||b.freight||0),
+        manualOverrides:mergeManualOverrides(existing.manualOverrides,editedFields) as any
       }
     });
     if(existing.customerId && Object.prototype.hasOwnProperty.call(b,'customer')){
@@ -114,7 +119,8 @@ export async function PATCH(req:Request){
             variantId:variant.id,
             sku:variant.sku,
             name:variant.name,
-            unitCost:variant.unitCost
+            unitCost:variant.unitCost,
+            manualOverrides:mergeManualOverrides(item.manualOverrides,['variantId','sku','name','unitCost']) as any
           }
         });
         await reconcileOrderSaleMovement({
@@ -128,6 +134,16 @@ export async function PATCH(req:Request){
         });
       }
     }
+    const updated=await db.order.findFirst({where:{id,tenantId},include:{items:{orderBy:{id:'asc'}},customer:true}});
+    await auditLog({
+      tenantId,
+      entityType:'Order',
+      entityId:id,
+      action:'update_manual_order',
+      before:{feeAmount:existing.feeAmount,shippingAmount:existing.shippingAmount,customer:existing.customer?.name,items:existing.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId}))},
+      after:{feeAmount:updated?.feeAmount,shippingAmount:updated?.shippingAmount,customer:updated?.customer?.name,items:updated?.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId}))},
+      metadata:{fields:editedFields,externalId:existing.externalId}
+    });
     return NextResponse.json({ok:true});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});

@@ -27,19 +27,24 @@ function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
  }
  return data;
 }
+function overrideFields(value:unknown){
+ const fields=value&&typeof value==='object'&&!Array.isArray(value)&&(value as any).fields;
+ return new Set(Array.isArray(fields)?fields.map(String):[]);
+}
 export async function ingestOrder(input:IngestOrder){
  const tenantId=input.tenantId||await getTenantId();
  const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:{orderBy:{id:'asc'}},movements:{where:{tenantId,type:'SALE'},select:{id:true,idempotencyKey:true}}}});
  const hasManualSaleMovement=!!existing?.movements?.some(m=>String(m.idempotencyKey||'').startsWith('manual-assign-sale')||String(m.idempotencyKey||'').startsWith('manual:'));
+ const orderOverrides=overrideFields(existing?.manualOverrides);
  let customerId=existing?.customerId||undefined;
- if(input.customer){const key=input.customer.externalId?`${input.channel}:${input.customer.externalId}`:undefined;const data=cleanCustomerUpdate(input.customer);if(key){const current=await db.customer.findUnique({where:{tenantId_sourceKey:{tenantId,sourceKey:key}}});if(current){const update=Object.fromEntries(Object.entries(data).filter(([k,v])=>v&&!(current as any)[k]));const customer=Object.keys(update).length?await db.customer.update({where:{id:current.id},data:update}):current;customerId=customer.id}else{const customer=await db.customer.create({data:{...data,tenantId,sourceKey:key}});customerId=customer.id}}else if(!existing?.customerId){const customer=await db.customer.create({data:{...data,tenantId}});customerId=customer.id}}
+ if(input.customer){const key=input.customer.externalId?`${input.channel}:${input.customer.externalId}`:undefined;const data=cleanCustomerUpdate(input.customer);if(key){const current=await db.customer.findUnique({where:{tenantId_sourceKey:{tenantId,sourceKey:key}}});if(current){const customerOverrides=overrideFields(current.manualOverrides);const update=Object.fromEntries(Object.entries(data).filter(([k,v])=>v&&!(current as any)[k]&&!customerOverrides.has(k)));const customer=Object.keys(update).length?await db.customer.update({where:{id:current.id},data:update}):current;customerId=customer.id}else{const customer=await db.customer.create({data:{...data,tenantId,sourceKey:key}});customerId=customer.id}}else if(!existing?.customerId){const customer=await db.customer.create({data:{...data,tenantId}});customerId=customer.id}}
  const prepared=await Promise.all(input.items.map(async (i,index)=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});const previous=existing?.items[index];if(hasManualSaleMovement&&previous)return{tenantId,variantId:previous.variantId,sku:previous.sku,name:previous.name,quantity:previous.quantity,unitPrice:Number(previous.unitPrice||i.unitPrice),unitCost:Number(previous.unitCost||0)};if(!v&&previous?.variantId)return{tenantId,variantId:previous.variantId,sku:previous.sku,name:previous.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:Number(previous.unitCost||0)};return{tenantId,variantId:v?.id,sku:v?.sku||i.sku,name:v?.name||i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
  const order=await db.$transaction(async tx=>{
    const existingFee=Number(existing?.feeAmount||0);
    const existingFreight=Number(existing?.shippingAmount||0);
    const existingTax=Number(existing?.taxAmount||0);
    const forceFinancialRefresh=input.status==='REFUNDED'||input.status==='CHARGEBACK';
-   const base={status:input.status,grossAmount:input.grossAmount,discountAmount:input.discountAmount||0,shippingAmount:existing&&existingFreight&&!forceFinancialRefresh?existingFreight:input.shippingAmount||0,feeAmount:existing&&existingFee&&!forceFinancialRefresh?existingFee:input.feeAmount||0,taxAmount:existing&&existingTax&&!forceFinancialRefresh?existingTax:input.taxAmount||0,paymentMethod:input.paymentMethod,paidAt:input.paidAt?new Date(input.paidAt):undefined,customerId};
+   const base={status:input.status,grossAmount:input.grossAmount,discountAmount:input.discountAmount||0,shippingAmount:existing&&orderOverrides.has('shippingAmount')&&!forceFinancialRefresh?existingFreight:input.shippingAmount||0,feeAmount:existing&&orderOverrides.has('feeAmount')&&!forceFinancialRefresh?existingFee:input.feeAmount||0,taxAmount:existing&&orderOverrides.has('taxAmount')&&!forceFinancialRefresh?existingTax:input.taxAmount||0,paymentMethod:input.paymentMethod,paidAt:input.paidAt?new Date(input.paidAt):undefined,customerId,sourceSnapshot:input as any};
    if(!existing)return tx.order.create({data:{tenantId,externalId:input.externalId,channel:input.channel,currency:input.currency||'BRL',...base,items:{create:prepared}}});
    await tx.orderItem.deleteMany({where:{orderId:existing.id}});
    return tx.order.update({where:{id:existing.id},data:{...base,currency:input.currency||existing.currency,items:{create:prepared}}});

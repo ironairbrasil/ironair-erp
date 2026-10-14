@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
+import { auditLog, mergeManualOverrides } from '@/lib/audit';
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
@@ -45,6 +46,7 @@ export async function POST(req:Request){
       ? await db.product.update({where:{id:b.productId},data:{name:productName}})
       : (await db.product.findFirst({where:{tenantId,name:productName}})) || await db.product.create({data:{tenantId,name:productName}});
     const existingSku=String(b._edit||sku);
+    const before=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:existingSku}},include:{product:true}});
     const updateData={
         productId:product.id,
         sku,
@@ -52,7 +54,8 @@ export async function POST(req:Request){
         salePrice:Number(b.price||b.salePrice||0),
         unitCost:Number(b.cost||b.unitCost||0),
         safetyStock:Math.max(0,Math.trunc(Number(b.safety||b.safetyStock||0))),
-        active:b.status==='Pausado'?false:true
+        active:b.status==='Pausado'?false:true,
+        manualOverrides:mergeManualOverrides(before?.manualOverrides,['productId','sku','name','salePrice','unitCost','safetyStock','active']) as any
       };
     const variant=await db.productVariant.upsert({
       where:{tenantId_sku:{tenantId,sku:existingSku}},
@@ -64,7 +67,8 @@ export async function POST(req:Request){
         salePrice:Number(b.price||b.salePrice||0),
         unitCost:Number(b.cost||b.unitCost||0),
         safetyStock:Math.max(0,Math.trunc(Number(b.safety||b.safetyStock||0))),
-        active:b.status==='Pausado'?false:true
+        active:b.status==='Pausado'?false:true,
+        manualOverrides:mergeManualOverrides(null,['productId','sku','name','salePrice','unitCost','safetyStock','active']) as any
       },
       update:updateData
     });
@@ -80,6 +84,15 @@ export async function POST(req:Request){
       }
     }
     await db.orderItem.updateMany({where:{tenantId,sku},data:{variantId:variant.id,unitCost:updateData.unitCost}});
+    await auditLog({
+      tenantId,
+      entityType:'ProductVariant',
+      entityId:variant.id,
+      action:before?'update_manual_product':'create_manual_product',
+      before:before?{product:before.product.name,sku:before.sku,name:before.name,salePrice:before.salePrice,unitCost:before.unitCost,safetyStock:before.safetyStock,active:before.active}:null,
+      after:{product:productName,sku,name:updateData.name,salePrice:updateData.salePrice,unitCost:updateData.unitCost,safetyStock:updateData.safetyStock,active:updateData.active,quantity:b.quantity??b.physical},
+      metadata:{previousSku:existingSku}
+    });
     return NextResponse.json({ok:true,id:variant.id});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});

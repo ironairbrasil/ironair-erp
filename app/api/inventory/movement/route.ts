@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { moveStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
+import { auditLog } from '@/lib/audit';
 
 const typeMap:Record<string,any>={
   'Entrada manual':'PURCHASE',
@@ -28,6 +29,14 @@ export async function POST(req:Request){
       note:body.note,
       createdAt:body.date||body.createdAt,
       idempotencyKey:body.idempotencyKey||`manual:${body.sku}:${type}:${body.reference||body.ref||Date.now()}:${quantity}`
+    });
+    await auditLog({
+      tenantId,
+      entityType:'InventoryMovement',
+      entityId:movement.id,
+      action:'create_manual_movement',
+      after:{sku:body.sku,type,quantity,reference:body.reference||body.ref,date:body.date||body.createdAt},
+      metadata:{warehouseCode:body.warehouseCode||body.from||'CENTRAL'}
     });
     return NextResponse.json({ok:true,id:movement.id});
   }catch(e:any){

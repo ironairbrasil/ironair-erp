@@ -14,6 +14,6 @@ export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode
   const nextOnHand=bal.onHand+onHandDelta, nextReserved=bal.reserved+reserveDelta;
   if(nextOnHand<0)throw new Error(`Insufficient stock for ${input.sku}`);if(nextReserved<0||nextReserved>nextOnHand)throw new Error(`Invalid reservation for ${input.sku}`);
   await tx.inventoryBalance.update({where:{id:bal.id},data:{onHand:nextOnHand,reserved:nextReserved}});
-  return tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,createdAt:input.createdAt?new Date(input.createdAt):undefined}})
+  return tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,source:String(input.idempotencyKey||'').startsWith('manual')?'MANUAL':'SYNC',createdAt:input.createdAt?new Date(input.createdAt):undefined}})
  })
 }
