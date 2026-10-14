@@ -14,7 +14,6 @@ export async function GET(req: Request){
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', getMercadoLivreRedirectUri(req));
-  url.searchParams.set('scope', process.env.MERCADO_LIVRE_SCOPES || 'offline_access read write');
   url.searchParams.set('state', state);
   return NextResponse.redirect(url);
 }
