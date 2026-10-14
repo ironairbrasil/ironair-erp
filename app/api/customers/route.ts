@@ -6,7 +6,7 @@ export async function GET(req:Request){
   try{
     const tenantId=await getTenantId(req);
     const rows=await db.customer.findMany({
-      where:{tenantId},
+      where:{tenantId,orders:{some:{}}},
       take:250,
       orderBy:{createdAt:'desc'},
       include:{orders:{select:{id:true,status:true,grossAmount:true,createdAt:true,paidAt:true,channel:true},orderBy:[{paidAt:'desc'},{createdAt:'desc'}]}}

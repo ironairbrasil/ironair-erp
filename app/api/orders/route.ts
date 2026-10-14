@@ -48,14 +48,39 @@ export async function PATCH(req:Request){
     const b=await req.json();
     const id=String(b.id||'');
     if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
-    const order=await db.order.updateMany({
-      where:{id,tenantId},
+    const existing=await db.order.findFirst({where:{id,tenantId},select:{id:true,customerId:true}});
+    if(!existing) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
+    await db.order.update({
+      where:{id},
       data:{
         feeAmount:Number(b.feeAmount||b.fee||0),
         shippingAmount:Number(b.shippingAmount||b.freight||0)
       }
     });
-    if(!order.count) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
+    if(existing.customerId && Object.prototype.hasOwnProperty.call(b,'customer')){
+      const name=String(b.customer||'').trim();
+      if(name) await db.customer.updateMany({where:{id:existing.customerId,tenantId},data:{name}});
+    }
+    if(Object.prototype.hasOwnProperty.call(b,'itemSku')){
+      const sku=String(b.itemSku||'').trim();
+      if(sku){
+        const variant=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});
+        if(!variant) return NextResponse.json({ok:false,error:'Produto/voltagem não encontrado'},{status:404});
+        const item=String(b.orderItemId||'')
+          ? await db.orderItem.findFirst({where:{id:String(b.orderItemId),tenantId,orderId:id}})
+          : await db.orderItem.findFirst({where:{tenantId,orderId:id},orderBy:{id:'asc'}});
+        if(!item) return NextResponse.json({ok:false,error:'Item do pedido não encontrado'},{status:404});
+        await db.orderItem.update({
+          where:{id:item.id},
+          data:{
+            variantId:variant.id,
+            sku:variant.sku,
+            name:variant.name,
+            unitCost:variant.unitCost
+          }
+        });
+      }
+    }
     return NextResponse.json({ok:true});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});

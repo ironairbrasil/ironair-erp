@@ -29,10 +29,10 @@ function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
 }
 export async function ingestOrder(input:IngestOrder){
  const tenantId=input.tenantId||await getTenantId();
- const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:true}});
+ const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:{orderBy:{id:'asc'}}}});
  let customerId=existing?.customerId||undefined;
  if(input.customer){const key=input.customer.externalId?`${input.channel}:${input.customer.externalId}`:undefined;const data=cleanCustomerUpdate(input.customer);const customer=key?await db.customer.upsert({where:{tenantId_sourceKey:{tenantId,sourceKey:key}},create:{...data,tenantId,sourceKey:key},update:data}):await db.customer.create({data:{...data,tenantId}});customerId=customer.id}
- const prepared=await Promise.all(input.items.map(async i=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});return{tenantId,variantId:v?.id,sku:v?.sku||i.sku,name:i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
+ const prepared=await Promise.all(input.items.map(async (i,index)=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});const previous=existing?.items[index];if(!v&&previous?.variantId)return{tenantId,variantId:previous.variantId,sku:previous.sku,name:previous.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:Number(previous.unitCost||0)};return{tenantId,variantId:v?.id,sku:v?.sku||i.sku,name:v?.name||i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
  const order=await db.$transaction(async tx=>{
    const base={status:input.status,grossAmount:input.grossAmount,discountAmount:input.discountAmount||0,shippingAmount:input.shippingAmount||0,feeAmount:input.feeAmount||0,taxAmount:input.taxAmount||0,paymentMethod:input.paymentMethod,paidAt:input.paidAt?new Date(input.paidAt):undefined,customerId};
    if(!existing)return tx.order.create({data:{tenantId,externalId:input.externalId,channel:input.channel,currency:input.currency||'BRL',...base,items:{create:prepared}}});

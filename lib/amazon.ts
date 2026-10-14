@@ -363,7 +363,7 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     tenantId,
     externalId: orderId,
     channel: 'AMAZON',
-    status: mapAmazonStatus(order),
+    status: financials.refunded ? 'REFUNDED' : mapAmazonStatus(order),
     currency: order?.OrderTotal?.CurrencyCode || 'BRL',
     grossAmount: amount,
     shippingAmount: v2026Money.shippingAmount || financials.shippingAmount,
@@ -389,6 +389,8 @@ async function amazonOrderFinancials(orderId: string, tenantId: string){
     const events = payloadOf(response)?.FinancialEvents || {};
     let feeAmount = 0;
     let shippingAmount = 0;
+    let refundAmount = 0;
+    let refunded = false;
     const visitFee = (fee: any) => {
       const type = String(fee?.FeeType || '').toLowerCase();
       const amount = Math.abs(moneyAmount(fee?.FeeAmount));
@@ -401,17 +403,27 @@ async function amazonOrderFinancials(orderId: string, tenantId: string){
       const amount = Math.abs(moneyAmount(charge?.ChargeAmount));
       if(amount && (type.includes('shipping') || type.includes('freight') || type.includes('delivery'))) shippingAmount += amount;
     };
+    const visitRefundCharge = (charge: any) => {
+      const amount = Math.abs(moneyAmount(charge?.ChargeAmount));
+      if(amount) refundAmount += amount;
+    };
     const arrays = Object.values(events).flatMap((value: any) => Array.isArray(value) ? value : []);
     for(const event of arrays){
+      if((event.ShipmentItemAdjustmentList || []).length || (event.RefundItemList || []).length) refunded = true;
       for(const fee of event.FeeList || []) visitFee(fee);
       for(const item of [...(event.ShipmentItemList || []), ...(event.ShipmentItemAdjustmentList || [])]){
         for(const fee of item.ItemFeeList || []) visitFee(fee);
         for(const charge of item.ItemChargeList || []) visitCharge(charge);
+        for(const charge of item.ItemChargeAdjustmentList || []) visitRefundCharge(charge);
+      }
+      for(const item of event.RefundItemList || []){
+        for(const fee of item.ItemFeeList || []) visitFee(fee);
+        for(const charge of item.ItemChargeList || []) visitRefundCharge(charge);
       }
     }
-    return { feeAmount, shippingAmount };
+    return { feeAmount, shippingAmount, refundAmount, refunded: refunded || refundAmount > 0 };
   }catch{
-    return { feeAmount: 0, shippingAmount: 0 };
+    return { feeAmount: 0, shippingAmount: 0, refundAmount: 0, refunded: false };
   }
 }
 
