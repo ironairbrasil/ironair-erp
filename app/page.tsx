@@ -1,130 +1,2559 @@
-'use client';
-import { useEffect,useMemo,useRef,useState } from 'react';
-import { BarChart3, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon } from 'lucide-react';
-import { alerts, campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from '@/lib/mock';
-const menu=[['Visão Geral',LayoutDashboard],['Performance',BarChart3],['Vendas',ShoppingCart],['Clientes',Users],['Produtos',PackageCheck],['Estoque',Boxes],['Campanhas',Megaphone],['Criativos',Tag],['Jornada',ArrowUpRight],['Financeiro',CircleDollarSign],['Integrações',PlugZap],['Configurações',Settings]] as const;
-const money=(n:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n);
-const apiJson=async(url:string,init?:RequestInit)=>{const r=await fetch(url,{...init,headers:{'content-type':'application/json',...(init?.headers||{})},cache:'no-store'});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||'Falha na operação');return j};
-type ModalKind='movement'|'sale'|'customer'|'product'|'campaign'|'creative'|'expense'|'integration'|'integrationDetail'|'settings'|'saleDetail'|null;
-type Integration={name:string;status:'Conectado'|'Preparado';cat:string;desc:string;logo:string;accent:string;webhook:string;fields:string[]};
-const integrationsSeed:Integration[]=[
- {name:'Meta Ads',status:'Conectado',cat:'Marketing',desc:'Pixel, CAPI, campanhas, conjuntos e anúncios',logo:'∞',accent:'#1877F2',webhook:'/api/webhooks/meta',fields:['META_PIXEL_ID','META_ACCESS_TOKEN','META_AD_ACCOUNT_ID']},
- {name:'Google Ads',status:'Preparado',cat:'Marketing',desc:'Campanhas, custo, cliques e ROAS',logo:'G',accent:'#4285F4',webhook:'/api/webhooks/google-ads',fields:['GOOGLE_ADS_CUSTOMER_ID','GOOGLE_ADS_DEVELOPER_TOKEN']},
- {name:'TikTok Ads',status:'Preparado',cat:'Marketing',desc:'Campanhas, criativos e atribuição',logo:'♪',accent:'#25F4EE',webhook:'/api/webhooks/tiktok',fields:['TIKTOK_ADVERTISER_ID','TIKTOK_ACCESS_TOKEN']},
- {name:'Shopify',status:'Conectado',cat:'E-commerce',desc:'Pedidos, produtos, clientes e estoque',logo:'S',accent:'#95BF47',webhook:'/api/webhooks/shopify',fields:['SHOPIFY_STORE_DOMAIN','SHOPIFY_ADMIN_ACCESS_TOKEN','SHOPIFY_WEBHOOK_SECRET']},
- {name:'Mercado Livre',status:'Preparado',cat:'Marketplace',desc:'Pedidos, anúncios, taxas e Full',logo:'ML',accent:'#FFE600',webhook:'/api/webhooks/mercadolivre',fields:['MERCADO_LIVRE_CLIENT_ID','MERCADO_LIVRE_CLIENT_SECRET']},
- {name:'Amazon',status:'Preparado',cat:'Marketplace',desc:'Seller Central, pedidos e FBA',logo:'a',accent:'#FF9900',webhook:'/api/webhooks/amazon',fields:['AMAZON_SPAPI_APP_ID','AMAZON_SPAPI_CLIENT_ID','AMAZON_SPAPI_CLIENT_SECRET','AMAZON_SPAPI_REFRESH_TOKEN','AMAZON_SPAPI_MARKETPLACE_ID']},
- {name:'Kiwify',status:'Preparado',cat:'Parcerias',desc:'Vendas e produtos digitais',logo:'K',accent:'#6D5DFB',webhook:'/api/webhooks/kiwify',fields:['KIWIFY_WEBHOOK_TOKEN']},
-];
-export default function Home(){
- const [view,setView]=useState('Visão Geral'); const [period,setPeriod]=useState('Hoje'); const [q,setQ]=useState(''); const [modal,setModal]=useState<ModalKind>(null); const [selected,setSelected]=useState<any>(null); const [toast,setToast]=useState(''); const [loading,setLoading]=useState(false); const [theme,setTheme]=useState<'dark'|'light'>('dark');
- const [range,setRange]=useState(()=>({from:startOfYearISO(),to:todayISO()})); const [draftRange,setDraftRange]=useState(()=>({from:startOfYearISO(),to:todayISO()})); const [calendarOpen,setCalendarOpen]=useState(false);
- const dashboardCache=useRef(new Map<string,any>());
- const [orderRows,setOrderRows]=useState<any[]>([]); const [inventoryRows,setInventoryRows]=useState<any[]>([]); const [integrationsRefreshKey,setIntegrationsRefreshKey]=useState(0);
- const [sales,setSales]=useState<any[]>([]); const [customers,setCustomers]=useState<any[]>([]); const [movements,setMovements]=useState<any[]>([]); const [products,setProducts]=useState<any[]>([]); const [campaigns,setCampaigns]=useState<any[]>([]); const [channelRows,setChannelRows]=useState<any[]>([]); const [dashboard,setDashboard]=useState<any>(null); const [creatives,setCreatives]=useState<any[]>([{name:'Pablo • sabe passar roupa?',platform:'Meta',campaign:'IA Outubro',spend:'R$ 1.420',sales:18,roas:'6,8x',status:'Ativo'},{name:'Comparativo ferro × Iron Air',platform:'Meta',campaign:'Remarketing',spend:'R$ 880',sales:9,roas:'5,1x',status:'Ativo'}]);
- const filtered=useMemo(()=>sales.filter(s=>Object.values(s).join(' ').toLowerCase().includes(q.toLowerCase())),[q,sales]);
- const title=view==='Visão Geral'?'Dashboard Geral':view;
- const notify=(m:string)=>{setToast(m);setTimeout(()=>setToast(''),m.length>90?8000:3000)};
- const api=apiJson;
- const dashboardKey=(p=period,r=range)=>p==='Personalizado'?`custom:${r.from}:${r.to}`:p;
- const applyDashboard=(dash:any)=>{setDashboard(dash);setChannelRows(formatChannels(dash.channels||[]))};
- const loadDashboardFromApi=async(p=period,r=range)=>{const pr=periodRange(p,r);const dash=await api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}`);dashboardCache.current.set(dashboardKey(p,r),dash);applyDashboard(dash);return dash};
- const buildAndCacheDashboards=(orders:any[],balances:any[])=>{dashboardCache.current.clear();for(const p of ['Hoje','7 dias','30 dias','Este mês','Tempo todo'])dashboardCache.current.set(p,buildDashboard(orders,balances,p,range));dashboardCache.current.set(dashboardKey('Personalizado',range),buildDashboard(orders,balances,'Personalizado',range));applyDashboard(dashboardCache.current.get(dashboardKey())||dashboardCache.current.get('Hoje'))};
- const loadData=async()=>{const retry=async(url:string,fallback:any)=>api(url).catch(()=>new Promise(r=>setTimeout(r,350)).then(()=>api(url).catch(()=>fallback)));setLoading(true);try{const orders=await retry('/api/orders',[]);setOrderRows(orders||[]);setSales(formatOrders(orders));const inventory=await retry('/api/inventory',{balances:[],movements:[]});setInventoryRows(inventory.balances||[]);setProducts(formatInventory(inventory.balances||[],inventory.movements||[]));setMovements(formatMovements(inventory.movements||[]));buildAndCacheDashboards(orders||[],inventory.balances||[]);await loadDashboardFromApi(period,range).catch(()=>null);const customerRows=await retry('/api/customers',[]);setCustomers(customerRows||[]);const campaignRows=await retry('/api/campaigns',[]);setCampaigns(formatCampaigns(campaignRows))}catch(e:any){if(view!=='Integrações')notify(`Banco indisponível: ${e.message}`)}finally{setLoading(false)}};
- const refreshAll=async()=>{if(loading)return;setLoading(true);const sync=async(label:string,url:string,body:any)=>{try{const result:any=await Promise.race([api(url,{method:'POST',body:JSON.stringify(body)}),new Promise((_,reject)=>setTimeout(()=>reject(new Error('tempo limite excedido')),90000))]);return{label,ok:true,orders:Number(result?.orders||0)}}catch(e:any){return{label,ok:false,orders:0,error:e?.message||'falha desconhecida'}}};try{const results=await Promise.all([sync('Shopify','/api/integrations/shopify/sync',{products:true,orders:true,days:7}),sync('Mercado Livre','/api/integrations/mercadolivre/sync',{days:7}),sync('Amazon','/api/integrations/amazon/sync',{days:7})]);dashboardCache.current.clear();await loadData();const failures=results.filter(r=>!r.ok);const successes=results.filter(r=>r.ok).map(r=>`${r.label}: ${r.orders}`).join(' | ');if(failures.length)notify(`Atualização parcial. ${successes}. Falhou: ${failures.map(r=>`${r.label} (${r.error})`).join(' | ')}`);else notify(`Atualizado com sucesso. Pedidos recebidos: ${successes}`)}catch(e:any){notify(e.message||'Erro ao atualizar')}finally{setLoading(false)}};
- const choosePeriod=(p:string)=>{setCalendarOpen(false);setPeriod(p);const cached=dashboardCache.current.get(dashboardKey(p,range));if(cached)applyDashboard(cached);loadDashboardFromApi(p,range).catch(()=>{if(!cached&&(orderRows.length||inventoryRows.length)){const dash=buildDashboard(orderRows,inventoryRows,p,range);dashboardCache.current.set(dashboardKey(p,range),dash);applyDashboard(dash)}})};
- const remove=async(url:string)=>{try{await apiJson(url,{method:'DELETE'});await loadData();notify('Excluído do banco')}catch(e:any){notify(e.message||'Erro ao excluir')}};
- const removeMany=async(url:string,ids:string[])=>{try{await apiJson(url,{method:'DELETE',body:JSON.stringify({ids})});await loadData();notify(`${ids.length} pedidos excluídos`)}catch(e:any){notify(e.message||'Erro ao excluir')}};
- useEffect(()=>{loadData()},[]);
- useEffect(()=>{const timer=window.setInterval(()=>{if(document.visibilityState==='visible')refreshAll()},5*60*1000);return()=>window.clearInterval(timer)},[]);
- useEffect(()=>{loadDashboardFromApi(period,range).catch(()=>{if(!orderRows.length&&!inventoryRows.length)return;const dash=buildDashboard(orderRows,inventoryRows,period,range);dashboardCache.current.set(dashboardKey(period,range),dash);applyDashboard(dash)})},[range.from,range.to]);
- const open=(kind:ModalKind,data?:any)=>{setSelected(data||null);setModal(kind)};
- const exportFile=(name:string,rows:any[],format:'csv'|'xml'='csv')=>{if(!rows.length){notify('Selecione pelo menos um pedido');return}const clean=rows.map(({raw,...rest}:any)=>rest);const keys=Object.keys(clean[0]||{});const escapeXml=(value:any)=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&apos;");const tag=(key:string)=>key.replace(/[^A-Za-z0-9_-]/g,'_')||'campo';let body:string;let type:string;if(format==='xml'){body=['<?xml version="1.0" encoding="UTF-8"?>','<pedidos>',...clean.map(row=>['  <pedido>',...keys.map(k=>`    <${tag(k)}>${escapeXml(row[k])}</${tag(k)}>`),'  </pedido>'].join('\n')),'</pedidos>'].join('\n');type='application/xml'}else{body=[keys.join(','),...clean.map(r=>keys.map(k=>`"${String(r[k]??'').replaceAll('"','""')}"`).join(','))].join('\n');type='text/csv'}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([body],{type}));a.download=`${name}.${format}`;a.click();URL.revokeObjectURL(a.href);notify(`${format.toUpperCase()} exportado`)};
- const exportCsv=(name:string,rows:any[])=>exportFile(name,rows,'csv');
- return <main className={`shell theme-${theme}`}><aside className="sidebar"><div className="brand"><span className="brandmark">IA</span><div><b>Iron Air Hub</b><small>ERP + Tracking</small></div></div><nav>{menu.map(([label,Icon])=><button onClick={()=>setView(label)} className={view===label?'active':''} key={label}><Icon size={18}/><span>{label}</span></button>)}</nav><div className="sidefoot"><WalletCards size={18}/><div><b>{loading?'Sincronizando':'Operação online'}</b><small>Dados via API local</small></div></div></aside>
- <section className="content"><header className="topbar"><div><h1>{title}</h1></div><button className="themeToggle" onClick={()=>setTheme(theme==='dark'?'light':'dark')} title="Alternar tema" aria-label="Alternar tema"><Sun size={16} className={theme==='light'?'active':''}/><Moon size={16} className={theme==='dark'?'active':''}/></button></header>
- {view==='Visão Geral'&&<><div className="filters"><button className="refreshBtn" onClick={refreshAll} title="Atualizar Shopify, Mercado Livre, Amazon e banco" aria-label="Atualizar"><RefreshCw size={16}/></button><button onClick={()=>choosePeriod('Hoje')} className={period==='Hoje'?'selected':''}>Hoje</button>{['7 dias','30 dias','Este mês','Tempo todo'].map(x=><button onClick={()=>choosePeriod(x)} className={period===x?'selected':''} key={x}>{x}</button>)}<div className="customDate"><button onClick={()=>{setDraftRange(range);setPeriod('Personalizado');setCalendarOpen(v=>!v)}} className={period==='Personalizado'?'selected':''}>Personalizado</button>{calendarOpen&&<div className="datePopover"><label><span>De</span><input type="date" value={draftRange.from} onChange={e=>setDraftRange(r=>({...r,from:e.target.value}))}/></label><label><span>Até</span><input type="date" value={draftRange.to} onChange={e=>setDraftRange(r=>({...r,to:e.target.value}))}/></label><button className="primary" onClick={()=>{setRange(draftRange);setCalendarOpen(false);setPeriod('Personalizado')}}>Aplicar</button></div>}</div></div><section className="kpiGrid">{dashboardKpis(dashboard).map(k=><article className="card kpi" key={k.label}><span>{k.label}</span><strong>{k.value}</strong><small>{k.delta}</small></article>)}</section><section className="grid2"><article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period==='Personalizado'?`${range.from} → ${range.to}`:period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily||[]} period={period} range={range}/></article><article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{alerts.length}</span></div><div className="alerts">{alerts.map((a,i)=><div className="alert" key={a}><span>{i+1}</span><p>{a}</p></div>)}</div></article></section><ChannelTable rows={channelRows} onExport={()=>exportCsv('performance-canais',channelRows)}/><Inventory products={products} onEdit={(p:any)=>open('product',p)}/></>}
-{view==='Vendas'&&<Sales q={q} setQ={setQ} rows={filtered} onNew={()=>open('sale')} onOpen={(s:any)=>open('saleDetail',s)} onDelete={(s:any)=>remove(`/api/orders?id=${encodeURIComponent(s.raw.id)}`)} onDeleteMany={(rows:any[])=>removeMany('/api/orders',rows.map(s=>s.raw.id))} onExport={(rows:any[],format:'csv'|'xml')=>exportFile('vendas',rows,format)}/>} {view==='Clientes'&&<Customers rows={customers} onNew={()=>open('customer')} onEdit={(c:any)=>open('customer',c)} onBackfill={async()=>{try{const r=await apiJson('/api/customers/backfill-locations',{method:'POST',body:'{}'});await loadData();notify(`Cidade/UF atualizados: ${r.updated||0}`)}catch(e:any){notify(e.message||'Reconecte o Mercado Livre para buscar cidade/UF')}}} onDelete={(c:any)=>remove(`/api/customers?id=${encodeURIComponent(c.id)}`)}/>} {view==='Estoque'&&<><Inventory products={products} onEdit={(p:any)=>open('product',p)}/><Movements movements={movements} onNew={()=>open('movement')}/></>} {view==='Produtos'&&<Products products={products} onNew={()=>open('product')} onEdit={(p:any)=>open('product',p)} onDelete={(p:any)=>remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)}/>} {view==='Campanhas'&&<Campaigns campaigns={campaigns} onNew={()=>open('campaign')} onDelete={(c:any)=>remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)}/>} {view==='Performance'&&<><Campaigns campaigns={campaigns} onNew={()=>open('campaign')} onDelete={(c:any)=>remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)}/><ChannelTable rows={channelRows} onExport={()=>exportCsv('performance-canais',channelRows)}/></>} {view==='Jornada'&&<Journey/>} {view==='Financeiro'&&<Finance data={dashboard} onNew={()=>open('expense')}/>} {view==='Integrações'&&<Integrations refreshKey={integrationsRefreshKey} onNew={()=>open('integration')} onOpen={(i:Integration)=>open('integrationDetail',i)} onDelete={(i:Integration)=>remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)}/>} {view==='Criativos'&&<Creatives rows={creatives} onNew={()=>open('creative')}/>} {view==='Configurações'&&<SettingsView onEdit={()=>open('settings')}/>}</section>
- {modal&&<Modal kind={modal} data={selected} close={()=>setModal(null)} notify={notify} products={products} integrations={integrationsSeed} onSave={async(kind:any,data:any)=>{try{if(kind==='movement')await apiJson('/api/inventory/movement',{method:'POST',body:JSON.stringify({...data,quantity:Number(data.qty||data.quantity||1),warehouseCode:warehouseCode(data.from)||'CENTRAL',reference:data.ref,date:data.date})});else if(kind==='sale')await apiJson('/api/orders',{method:'POST',body:JSON.stringify({...data,sku:products.find((p:any)=>p.product===data.product)?.sku||products[0]?.sku,quantity:1})});else if(kind==='saleDetail')await apiJson('/api/orders',{method:'PATCH',body:JSON.stringify({id:data.raw?.id,customer:data.customer,feeAmount:Number(data.feeAmount??data.fee??0),shippingAmount:Number(data.shippingAmount??data.freight??0),orderItemId:data.orderItemId,itemSku:data.itemSku})});else if(kind==='customer')await apiJson('/api/customers',{method:data.id?'PATCH':'POST',body:JSON.stringify(data)});else if(kind==='product')await apiJson('/api/products',{method:'POST',body:JSON.stringify(data)});else if(kind==='integration'){await apiJson('/api/integrations',{method:'POST',body:JSON.stringify(data)});setIntegrationsRefreshKey(v=>v+1)}else if(kind==='campaign')await apiJson('/api/campaigns',{method:'POST',body:JSON.stringify(data)});else if(kind==='expense')await apiJson('/api/expenses',{method:'POST',body:JSON.stringify(data)});else if(kind==='creative')setCreatives(v=>[...v,{name:data.name||'Novo criativo',platform:data.platform||'Meta',campaign:data.campaign||'Sem campanha',spend:'R$ 0',sales:0,roas:'0x',status:'Rascunho'}]);setModal(null);await loadData();notify('Salvo e persistido')}catch(e:any){notify(e.message||'Erro ao salvar')}}}/>}
- {toast&&<div className="toast"><CheckCircle2 size={17}/>{toast}</div>}</main>
-}
-function warehouseCode(label?:string){return ({Central:'CENTRAL','Amazon FBA':'AMAZON_FBA','Mercado Livre Full':'ML_FULL',Shopee:'SHOPEE'} as any)[label||'']||label}
-function periodDays(period:string){if(period==='Hoje')return 1;if(period==='7 dias')return 7;if(period==='30 dias')return 30;if(period==='Este mês')return Math.max(1,new Date().getDate());return 365}
-function localISODate(d=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}
-function todayISO(){return localISODate()}
-function startOfYearISO(){const d=new Date();return `${localISODate(d).slice(0,4)}-01-01`}
-function dateKey(value:any){return value?new Date(value).toLocaleDateString('en-CA',{timeZone:'America/Sao_Paulo'}):''}
-function periodRange(period:string,range:{from:string;to:string}){
- const today=todayISO(); const d=new Date();
- if(period==='Tempo todo')return{from:'2000-01-01',to:today};
- if(period==='Personalizado')return range;
- if(period==='Este mês')return{from:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`,to:today};
- const days=periodDays(period); const fromDate=new Date();fromDate.setDate(fromDate.getDate()-(days-1));const from=localISODate(fromDate);
- return{from,to:today};
-}
-function paginationNumbers(current:number,total:number){
- if(total<=7)return Array.from({length:total},(_,i)=>i+1);
- const pages=new Set([1,total,current,current-1,current+1]);
- if(current<=3){pages.add(2);pages.add(3);pages.add(4)}
- if(current>=total-2){pages.add(total-1);pages.add(total-2);pages.add(total-3)}
- const sorted=[...pages].filter(n=>n>=1&&n<=total).sort((a,b)=>a-b);
- return sorted.flatMap((n,i)=>i&&n-sorted[i-1]>1?['…',n]:[n]);
-}
-function buildDashboard(orders:any[]=[],balances:any[]=[],period='Hoje',range={from:startOfYearISO(),to:todayISO()}){
- const r=periodRange(period,range); const daily=new Map<string,any>(); const channels=new Map<string,any>(); let revenue=0,cogs=0,fees=0,ordersCount=0;
- for(const o of orders){if(o.status!=='PAID')continue;const key=dateKey(o.paidAt||o.createdAt);if(!key||key<r.from||key>r.to)continue;const orderRevenue=Number(o.grossAmount||0)-Number(o.discountAmount||0);const orderFees=Number(o.feeAmount||0)+Number(o.shippingAmount||0)+Number(o.taxAmount||0);const orderCogs=(o.items||[]).reduce((sum:number,i:any)=>sum+Number(i.unitCost||0)*Number(i.quantity||0),0);revenue+=orderRevenue;cogs+=orderCogs;fees+=orderFees;ordersCount++;const salesProfit=orderRevenue-orderFees;const generalProfit=salesProfit-orderCogs;const d=daily.get(key)||{date:key,revenue:0,profit:0,salesProfit:0,orders:0};d.revenue+=orderRevenue;d.salesProfit+=salesProfit;d.profit+=generalProfit;d.orders++;daily.set(key,d);const c=channels.get(o.channel)||{name:o.channel,invested:0,sales:0,revenue:0,cogs:0,fees:0};c.sales++;c.revenue+=orderRevenue;c.cogs+=orderCogs;c.fees+=orderFees;channels.set(o.channel,c)}
- const salesProfit=revenue-fees; const profit=salesProfit-cogs; const available=(balances||[]).reduce((sum:number,b:any)=>sum+Math.max(0,Number(b.onHand||0)-Number(b.reserved||0)-Number(b.variant?.safetyStock||0)),0);
- return{periodDays:periodDays(period),revenue,orders:ordersCount,cogs,fees,media:0,salesProfit,profit,expenses:0,margin:revenue?profit/revenue:0,salesMargin:revenue?salesProfit/revenue:0,roas:null,ticket:ordersCount?revenue/ordersCount:0,available,trackingEvents:0,daily:[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)),channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,salesProfit:c.revenue-c.fees-c.invested,profit:c.revenue-c.cogs-c.fees-c.invested}))}
-}
-function fmtDate(value:any){return value?new Date(value).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}
-function dashboardKpis(d:any){return[{label:'Faturamento',value:money(d?.revenue||0),delta:`${d?.orders||0} pedidos pagos`},{label:'Pedidos pagos',value:String(d?.orders||0),delta:'Fonte: banco'},{label:'Lucro vendas',value:money(d?.salesProfit||0),delta:'Faturamento − taxa − frete'},{label:'Lucro geral',value:money(d?.profit||0),delta:`${(((d?.margin||0)*100)||0).toFixed(1)}% após custo`},{label:'Taxas + frete',value:money(d?.fees||0),delta:'Plataforma / logística'},{label:'Custo dos produtos',value:money(d?.cogs||0),delta:'Custo do estoque vendido'},{label:'Ticket médio',value:money(d?.ticket||0),delta:'Receita / pedidos'},{label:'Estoque disponível',value:`${d?.available||0} un.`,delta:'Ledger materializado'}]}
-function chartBars(rows:any[]=[]){if(!rows.length)return Array.from({length:14},()=>({revenue:2,profit:2}));const max=Math.max(...rows.map(r=>Math.max(Number(r.revenue||0),Number(r.profit||0))),1);return rows.slice(-20).map(r=>({revenue:Math.max(2,(Number(r.revenue||0)/max)*100),profit:Math.max(2,(Number(r.profit||0)/max)*100)}))}
-function addDaysISO(day:string,days:number){const d=new Date(`${day}T12:00:00.000-03:00`);d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)}
-function compactDay(day:string){const [,m,d]=day.split('-');return `${d}/${m}`}
-function salesTimeline(rows:any[]=[],period:string,range:{from:string;to:string}){const r=periodRange(period,range);const source=new Map(rows.map(row=>[row.date,row]));const totalDays=Math.max(1,Math.round((new Date(`${r.to}T12:00:00.000-03:00`).getTime()-new Date(`${r.from}T12:00:00.000-03:00`).getTime())/864e5)+1);const maxPoints=period==='Tempo todo'?24:period==='30 dias'?30:totalDays;const step=Math.max(1,Math.ceil(totalDays/maxPoints));const points=[];for(let i=0;i<totalDays;i+=step){let revenue=0,orders=0,last=r.from;for(let j=0;j<step&&i+j<totalDays;j++){const day=addDaysISO(r.from,i+j);const row=source.get(day);revenue+=Number(row?.revenue||0);orders+=Number(row?.orders||0);last=day}points.push({date:last,revenue,orders})}if(!points.length)points.push({date:r.to,revenue:0,orders:0});return points}
-function SalesTimeline({rows,period,range}:any){const points=salesTimeline(rows,period,range);const max=Math.max(...points.map((p:any)=>Number(p.revenue||0)),1);const w=640,h=210,pad=22;const xy=(p:any,i:number)=>{const x=points.length===1?w/2:pad+(i/(points.length-1))*(w-pad*2);const y=h-pad-(Number(p.revenue||0)/max)*(h-pad*2);return{x,y}};const line=points.map((p:any,i:number)=>{const {x,y}=xy(p,i);return`${i?'L':'M'} ${x.toFixed(1)} ${y.toFixed(1)}`}).join(' ');const area=`${line} L ${w-pad} ${h-pad} L ${pad} ${h-pad} Z`;const totalOrders=points.reduce((sum:number,p:any)=>sum+Number(p.orders||0),0);return <div className="lineChart"><div className="chartTopMetric"><span>{totalOrders} vendas</span><b>{money(points.reduce((sum:number,p:any)=>sum+Number(p.revenue||0),0))}</b></div><svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Vendas no período"><defs><linearGradient id="salesArea" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent2)" stopOpacity=".28"/><stop offset="100%" stopColor="var(--accent2)" stopOpacity="0"/></linearGradient></defs><path className="lineArea" d={area}/><path className="linePath" d={line}/>{points.map((p:any,i:number)=>{const {x,y}=xy(p,i);return <circle key={`${p.date}-${i}`} className="linePoint" cx={x} cy={y} r={p.revenue?4:3}><title>{compactDay(p.date)} · {p.orders} vendas · {money(p.revenue)}</title></circle>})}</svg><div className="lineAxis"><span>{compactDay(points[0].date)}</span><span>{period==='Hoje'?'Hoje':compactDay(points[Math.floor(points.length/2)]?.date||points[0].date)}</span><span>{period==='Tempo todo'?'Hoje':compactDay(points[points.length-1].date)}</span></div></div>}
-function formatOrders(rows:any[]){return (rows||[]).map(o=>{const items=o.items||[];const firstItem=items[0];const cogs=items.reduce((s:number,i:any)=>s+Number(i.unitCost||0)*Number(i.quantity||0),0);const fee=Number(o.feeAmount||0);const freight=Number(o.shippingAmount||0);const revenue=Number(o.grossAmount||0)-Number(o.discountAmount||0);return{raw:o,id:o.externalId,date:fmtDate(o.paidAt||o.createdAt),customer:o.customer?.name||'Cliente',product:items.map((i:any)=>`${i.name}${i.sku?` (${i.sku})`:''}`).join(', ')||'—',itemSku:firstItem?.sku||'',orderItemId:firstItem?.id||'',source:o.channel,campaign:o.attribution?.campaign||o.attribution?.source||'—',value:money(Number(o.grossAmount||0)),fee,freight,cogs,profit:revenue-fee-freight-Number(o.taxAmount||0),status:o.status,tracking:o.attribution?.fbclid||o.attribution?.gclid?'Atribuído':'Sem clique'}})}
-function formatInventory(rows:any[],movements:any[]=[]){const bySku=new Map<string,any>();const fba=new Map<string,any>();const sold=new Map<string,any>();for(const m of movements||[]){if(m.warehouseCode==='AMAZON_FBA'&&Number(m.quantity)>0&&!fba.has(m.sku))fba.set(m.sku,{date:fmtDate(m.createdAt),qty:m.quantity});if(m.type==='SALE'&&Number(m.quantity)<0){const bucket=sold.get(m.sku)||{shopify:0,ml:0,amazon:0,shopee:0,manual:0};const qty=Math.abs(Number(m.quantity||0));const ch=String(m.orderChannel||'').toUpperCase();if(ch==='SHOPIFY')bucket.shopify+=qty;else if(ch==='MERCADO_LIVRE')bucket.ml+=qty;else if(ch==='AMAZON')bucket.amazon+=qty;else if(ch==='SHOPEE')bucket.shopee+=qty;else bucket.manual+=qty;sold.set(m.sku,bucket)}}for(const r of rows||[]){const sku=r.variant?.sku||r.sku;const s=sold.get(sku)||{};const item=bySku.get(sku)||{product:r.variant?.product?.name||r.variant?.name||'Produto',name:r.variant?.name,sku,physical:0,reserved:0,committed:0,safety:r.variant?.safetyStock||0,cost:Number(r.variant?.unitCost||0),price:Number(r.variant?.salePrice||0),unitCost:Number(r.variant?.unitCost||0),salePrice:Number(r.variant?.salePrice||0),available:0,shopify:s.shopify||0,ml:s.ml||0,amazon:s.amazon||0,shopee:s.shopee||0,manual:s.manual||0,fbaDate:'—',fbaQty:0,status:'Saudável',productId:r.variant?.productId};item.physical+=r.onHand;item.reserved+=r.reserved;item.available+=Math.max(0,Number(r.onHand||0)-Number(r.reserved||0));const f=fba.get(sku);if(f){item.fbaDate=f.date;item.fbaQty=f.qty}item.status=item.available<=item.safety?'Pouco':'Saudável';bySku.set(sku,item)}return [...bySku.values()]}
-function formatMovements(rows:any[]){return (rows||[]).map(m=>({date:fmtDate(m.createdAt),sku:m.sku,type:m.type,qty:m.quantity,ref:m.reference||m.note||m.warehouseCode,balance:'—'}))}
-function formatCampaigns(rows:any[]){return rows.map(c=>({campaignId:c.campaignId,name:c.campaignName,platform:c.platform,spend:money(c.spend||0),sales:c.sales||0,revenue:money(c.revenue||0),cpa:c.cpa?money(c.cpa):'—',roas:c.roas?`${c.roas.toFixed(2)}x`:'—',profit:'—'}))}
-function formatChannels(rows:any[]){return (rows||[]).map(c=>({name:c.name,invested:money(c.invested||0),sales:c.sales||0,revenue:money(c.revenue||0),cpa:c.cpa?money(c.cpa):'—',roas:c.roas?`${c.roas.toFixed(2)}x`:'—',profit:money(c.salesProfit||0)}))}
-function ChannelTable({rows,onExport}:{rows:any[];onExport:()=>void}){return <article className="card tableCard"><div className="sectionHead"><div><h2>Performance por canal</h2><p>Receita e lucro de venda consolidado</p></div><button className="ghost clickable" onClick={onExport}>Exportar CSV</button></div><div className="tableWrap"><table><thead><tr><th>Canal</th><th>Investido</th><th>Vendas</th><th>Receita</th><th>CPA</th><th>ROAS</th><th>Lucro vendas</th></tr></thead><tbody>{rows.map(c=><tr key={c.name}><td><b>{c.name}</b></td><td>{c.invested}</td><td>{c.sales}</td><td>{c.revenue}</td><td>{c.cpa}</td><td>{c.roas}</td><td className="positive">{c.profit}</td></tr>)}</tbody></table></div></article>}
-function Inventory({products,onEdit}:any){const physical=products.reduce((s:number,p:any)=>s+Number(p.physical||0),0);const available=products.reduce((s:number,p:any)=>s+Number(p.available||0),0);const reserved=products.reduce((s:number,p:any)=>s+Number(p.reserved||0),0);return <article className="card tableCard"><div className="sectionHead"><div><h2>Estoque central</h2><p>Saldo físico e vendidos por plataforma</p></div><div className="inventorySummary"><span><b>{physical}</b> físico</span><span><b>{available}</b> disponível</span><span><b>{reserved}</b> reservado</span></div></div><div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div><div className="tableWrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Custo</th><th>Preço</th><th>Físico</th><th>Disponível</th><th>Vend. Shopify</th><th>Vend. ML</th><th>Vend. Amazon</th><th>Vend. Shopee</th><th>Envio FBA</th><th>Status</th><th></th></tr></thead><tbody>{products.map((i:any)=><tr key={i.sku}><td><b>{i.product}</b></td><td>{i.sku}</td><td>{money(i.cost||0)}</td><td>{money(i.price||0)}</td><td>{i.physical}</td><td><b>{i.available}</b></td><td>{i.shopify}</td><td>{i.ml}</td><td>{i.amazon}</td><td>{i.shopee}</td><td>{i.fbaQty?`${i.fbaQty} · ${i.fbaDate}`:'—'}</td><td><span className={`status ${i.status==='Saudável'?'ok':'warn'}`}>{i.status}</span></td><td><button className="mini" onClick={()=>onEdit(i)}><Pencil size={14}/></button></td></tr>)}</tbody></table></div></article>}
-function Products({products,onNew,onEdit,onDelete}:any){return <article className="card tableCard"><div className="sectionHead"><div><h2>Catálogo de produtos</h2><p>SKUs, variantes, custo e disponibilidade</p></div><button className="primary" onClick={onNew}><Plus size={14}/>Novo produto</button></div><div className="productGrid">{products.map((p:any)=><div className="productCard" key={p.sku}><div className="productVisual"><PackageCheck/></div><div><h3>{p.product}</h3><p>{p.sku}</p><div className="productMeta"><span>Físico <b>{p.physical}</b></span><span>Disponível <b>{p.available}</b></span></div></div><div className="cardActions"><button className="mini" onClick={()=>onEdit(p)}><Pencil size={15}/></button><button className="mini danger" onClick={()=>onDelete(p)}><Trash2 size={15}/></button></div></div>)}</div></article>}
-function Customers({rows,onNew,onEdit,onDelete,onBackfill}:any){return <article className="card tableCard"><div className="sectionHead"><div><h2>Clientes</h2><p>Clientes persistidos no banco e vinculados aos pedidos</p></div><div className="rowActions"><button className="primary" onClick={onNew}><Plus size={14}/>Novo cliente</button></div></div><div className="tableWrap"><table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Pedidos</th><th>Receita</th><th>Último canal</th><th></th></tr></thead><tbody>{rows.map((c:any)=><tr key={c.id} className="clickrow" onClick={() => onEdit(c)}><td><b>{c.name||'Cliente sem nome'}</b></td><td>{c.city||'—'}</td><td>{c.state||'—'}</td><td>{c.orders}</td><td>{money(c.revenue||0)}</td><td>{c.lastChannel||'—'}</td><td><div className="rowActions"><button className="mini" onClick={e=>{e.stopPropagation();onEdit(c)}}><Pencil size={15}/></button><button className="mini danger" onClick={e=>{e.stopPropagation();onDelete(c)}}><Trash2 size={15}/></button></div></td></tr>)}</tbody></table></div></article>}
-function Sales({q,setQ,rows,onNew,onOpen,onDelete,onDeleteMany,onExport}:any){const [status,setStatus]=useState('Todos');const [source,setSource]=useState('Todas');const [from,setFrom]=useState('');const [to,setTo]=useState('');const [page,setPage]=useState(1);const [pageSize,setPageSize]=useState(25);const [selected,setSelected]=useState<Set<string>>(new Set());const [exportOpen,setExportOpen]=useState(false);const statusClass=(status:string)=>status==='CANCELLED'?'danger':status==='PAID'?'ok':'warn';const keyOf=(s:any)=>String(s.raw?.id||s.id);const sources=useMemo(()=>['Todas',...Array.from(new Set(rows.map((s:any)=>s.source).filter(Boolean)))],[rows]);const filtered=useMemo(()=>rows.filter((s:any)=>{const key=s.raw?.paidAt||s.raw?.createdAt;const day=key?dateKey(key):'';return (status==='Todos'||s.status===status)&&(source==='Todas'||s.source===source)&&(!from||day>=from)&&(!to||day<=to)}),[rows,status,source,from,to]);const totalPages=Math.max(1,Math.ceil(filtered.length/pageSize));const safePage=Math.min(page,totalPages);const pageRows=filtered.slice((safePage-1)*pageSize,safePage*pageSize);const allPageSelected=pageRows.length>0&&pageRows.every((s:any)=>selected.has(keyOf(s)));const pageNumbers=paginationNumbers(safePage,totalPages);useEffect(()=>{setPage(1);setSelected(new Set());setExportOpen(false)},[q,status,source,from,to,pageSize]);const selectedRows=filtered.filter((s:any)=>selected.has(keyOf(s)));const exportRows=selectedRows.map(({raw,...rest}:any)=>rest);const toggleOne=(id:string)=>setSelected(prev=>{const next=new Set(prev);next.has(id)?next.delete(id):next.add(id);return next});const togglePage=()=>setSelected(prev=>{const next=new Set(prev);if(allPageSelected)pageRows.forEach((s:any)=>next.delete(keyOf(s)));else pageRows.forEach((s:any)=>next.add(keyOf(s)));return next});const deleteSelected=async()=>{await onDeleteMany(selectedRows);setSelected(new Set())};return <article className="card tableCard"><div className="sectionHead"><div><h2>Pedidos consolidados</h2><p>{filtered.length} pedidos filtrados · {selected.size} selecionados</p></div><div className="rowActions"><button className="ghost clickable" disabled={!selected.size} onClick={deleteSelected}><Trash2 size={14}/>Excluir selecionados</button><div className="exportMenu"><button className="ghost clickable" disabled={!selected.size} onClick={()=>setExportOpen(v=>!v)}><Download size={14}/> Exportar</button>{exportOpen&&!!selected.size&&<div className="exportOptions"><button onClick={()=>{onExport(exportRows,"csv");setExportOpen(false)}}>CSV</button><button onClick={()=>{onExport(exportRows,"xml");setExportOpen(false)}}>XML</button></div>}</div><button className="primary" onClick={onNew}><Plus size={14}/>Venda manual</button></div></div><div className="search"><Search size={16}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar pedido, cliente, campanha ou canal..."/></div><div className="salesFilters"><label><Filter size={14}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>Todos</option><option>PAID</option><option>CANCELLED</option><option>PENDING</option><option>REFUNDED</option><option>CHARGEBACK</option></select></label><label><span>Origem</span><select value={source} onChange={e=>setSource(e.target.value)}>{sources.map((x:any)=><option key={x}>{x}</option>)}</select></label><label><span>De</span><input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label><span>Até</span><input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><label><span>Linhas</span><select value={pageSize} onChange={e=>setPageSize(Number(e.target.value))}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label><button className="ghost clickable" onClick={()=>{setStatus('Todos');setSource('Todas');setFrom('');setTo('');setQ('')}}>Limpar</button></div><div className="tableWrap"><table><thead><tr><th className="checkCol"><input type="checkbox" checked={allPageSelected} onChange={togglePage} aria-label="Selecionar página"/></th><th>Pedido</th><th>Data</th><th>Cliente</th><th>Origem</th><th>Valor</th><th>Taxa</th><th>Frete</th><th>Lucro vendas</th><th>Status</th><th></th></tr></thead><tbody>{pageRows.map((s:any)=><tr key={keyOf(s)} className="clickrow" onClick={()=>onOpen(s)}><td className="checkCol" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected.has(keyOf(s))} onChange={()=>toggleOne(keyOf(s))} aria-label={`Selecionar ${s.id}`}/></td><td><b>{s.id}</b></td><td>{s.date}</td><td>{s.customer}</td><td>{s.source}</td><td>{s.value}</td><td>{money(s.fee||0)}</td><td>{money(s.freight||0)}</td><td className={s.profit>=0?'positive':'negative'}>{money(s.profit||0)}</td><td><span className={`status ${statusClass(s.status)}`}>{s.status}</span></td><td><div className="rowActions"><button className="mini" onClick={e=>{e.stopPropagation();onOpen(s)}}><Pencil size={14}/></button><button className="mini danger" onClick={e=>{e.stopPropagation();onDelete(s)}}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table></div><div className="pagination"><span>Página {safePage} de {totalPages}</span><div><button className="ghost clickable pageArrow" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>‹</button>{pageNumbers.map((n:any,i:number)=>n==='…'?<span className="pageDots" key={`${n}-${i}`}>…</span>:<button key={n} className={`ghost clickable pageNumber ${safePage===n?'selected':''}`} onClick={()=>setPage(n)}>{n}</button>)}<button className="ghost clickable pageArrow" disabled={safePage>=totalPages} onClick={()=>setPage(safePage+1)}>›</button></div></div></article>}
-function Campaigns({campaigns,onNew,onDelete}:any){return <article className="card tableCard"><div className="sectionHead"><div><h2>Campanhas</h2><p>Visão estilo UTMify: mídia → venda → lucro</p></div><div className="rowActions"><span className="pill">Meta + Google</span><button className="primary" onClick={onNew}><Plus size={14}/>Nova campanha</button></div></div><div className="tableWrap"><table><thead><tr><th>Campanha</th><th>Plataforma</th><th>Investimento</th><th>Vendas</th><th>Receita</th><th>CPA</th><th>ROAS</th><th>Lucro</th><th></th></tr></thead><tbody>{campaigns.map((c:any)=><tr key={c.campaignId||c.name}><td><b>{c.name}</b></td><td>{c.platform}</td><td>{c.spend}</td><td>{c.sales}</td><td>{c.revenue}</td><td>{c.cpa}</td><td>{c.roas}</td><td className="positive">{c.profit}</td><td><button className="mini danger" onClick={()=>onDelete(c)}><Trash2 size={14}/></button></td></tr>)}</tbody></table></div></article>}
-function Creatives({rows,onNew}:any){return <article className="card tableCard"><div className="sectionHead"><div><h2>Criativos</h2><p>Compare anúncios por venda, ROAS e campanha</p></div><button className="primary" onClick={onNew}><Plus size={14}/>Novo criativo</button></div><div className="creativeGrid">{rows.map((r:any)=><div className="creativeCard" key={r.name}><div className="creativeThumb"><Tag/></div><span className="status ok">{r.status}</span><h3>{r.name}</h3><p>{r.platform} • {r.campaign}</p><div className="creativeStats"><span>Gasto<b>{r.spend}</b></span><span>Vendas<b>{r.sales}</b></span><span>ROAS<b>{r.roas}</b></span></div></div>)}</div></article>}
-function Movements({movements,onNew}:any){return <article className="card tableCard"><div className="sectionHead"><div><h2>Ledger de estoque</h2><p>Registro cronológico com data, SKU, quantidade e referência</p></div><button className="primary" onClick={onNew}><Plus size={14}/>Nova movimentação</button></div><div className="tableWrap"><table><thead><tr><th>Data</th><th>SKU</th><th>Movimento</th><th>Quantidade</th><th>Referência</th><th>Saldo</th></tr></thead><tbody>{movements.map((m:any,i:number)=><tr key={i}><td><b>{m.date}</b></td><td>{m.sku}</td><td>{m.type}</td><td className={m.qty<0?'negative':'positive'}>{m.qty>0?'+':''}{m.qty}</td><td>{m.ref}</td><td><b>{m.balance}</b></td></tr>)}</tbody></table></div></article>}
-function Journey(){return <section className="journey"><div className="funnel">{[['Visitas','8.412'],['ViewContent','6.980'],['Checkout','742'],['Pagamento criado','128'],['Purchase','94']].map(([a,b],i)=><div className="funnelStep" key={a}><span>{a}</span><b>{b}</b>{i<4&&<ArrowUpRight size={16}/>}</div>)}</div><article className="card pad"><h2>Última jornada atribuída</h2><div className="timeline"><p><MousePointerClick/> Meta Ads • fbclid capturado</p><p>UTM: facebook / paid_social / IA Outubro</p><p>Checkout iniciado • Iron Air 127V</p><p>Asaas CONFIRMED • R$ 1.349,10</p><p className="positive">Purchase CAPI + Pixel deduplicado</p></div></article></section>}
-function Finance({data,onNew}:any){return <><section className="kpiGrid">{[['Receita',data?.revenue||0],['CMV',data?.cogs||0],['Mídia',data?.media||0],['Despesas',data?.expenses||0]].map(([a,b]:any)=><article className="card kpi" key={a}><span>{a}</span><strong>{money(b)}</strong></article>)}</section><article className="card pad"><div className="sectionHead"><div><h2>Resultado estimado</h2><p>DRE operacional simplificada</p></div><button className="primary" onClick={onNew}><Plus size={14}/>Lançar despesa</button></div><div className="bigProfit">{money(data?.profit||0)} <small>lucro operacional estimado</small></div><div className="formula">Receita − CMV − mídia − taxas − frete − despesas = lucro. Impostos podem ser adicionados por regra fiscal.</div></article></>}
-function Integrations({refreshKey,onNew,onOpen,onDelete}:any){const [rows,setRows]=useState<any[]>([]);useEffect(()=>{fetch('/api/integrations',{cache:'no-store'}).then(r=>r.ok?r.json():[]).then(r=>setRows(Array.isArray(r)?r:[])).catch(()=>setRows([]))},[refreshKey]);const visible:Integration[]=rows.map((row:any)=>{const seed=integrationsSeed.find(i=>i.name===row.provider)||{name:row.provider,status:'Preparado' as const,cat:'Integração',desc:'Integração criada manualmente',logo:String(row.provider||'?').slice(0,2).toUpperCase(),accent:'#7cf8bb',webhook:'',fields:row.fields||[]};return {...seed,status:row.status==='CONNECTED'?'Conectado':'Preparado'}});return <><div className="sectionTools"><div><h2>Ecossistema de integrações</h2><p>Conecte canais, pagamentos, mídia e logística.</p></div><button className="primary" onClick={onNew}><Plus size={15}/>Criar nova integração</button></div><div className="integrationGrid">{visible.map(i=>{const status=i.status;return <article className="card integration integrationClickable" key={i.name} onClick={()=>onOpen({...i,status})}><PlatformLogo i={i}/><div className="integrationInfo"><b>{i.name}</b><small>{i.desc}</small><em>{i.cat}</em></div><div className="integrationActions"><span className={status==='Conectado'?'status ok':'status warn'}>{status}</span><button className="mini danger" onClick={async e=>{e.stopPropagation();setRows(v=>(v||[]).filter((r:any)=>r.provider!==i.name));await onDelete(i)}}><Trash2 size={14}/></button></div></article>})}</div></>}
-const integrationLogoSrc:Record<string,string>={
- 'Meta Ads':'/integration-logos/meta-ads.webp',
- 'Google Ads':'/integration-logos/google-ads.webp',
- 'TikTok Ads':'/integration-logos/tiktok-ads.webp',
- 'Shopify':'/integration-logos/shopify.webp',
- 'Mercado Livre':'/integration-logos/mercado-livre.webp',
- 'Amazon':'/integration-logos/amazon.webp',
- 'Kiwify':'/integration-logos/kiwify.webp',
+"use client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon } from "lucide-react";
+import { alerts, campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
+const menu = [
+  ["Visão Geral", LayoutDashboard],
+  ["Performance", BarChart3],
+  ["Vendas", ShoppingCart],
+  ["Clientes", Users],
+  ["Produtos", PackageCheck],
+  ["Estoque", Boxes],
+  ["Campanhas", Megaphone],
+  ["Criativos", Tag],
+  ["Jornada", ArrowUpRight],
+  ["Financeiro", CircleDollarSign],
+  ["Integrações", PlugZap],
+  ["Configurações", Settings],
+] as const;
+const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
+const apiJson = async (url: string, init?: RequestInit) => {
+  const r = await fetch(url, {
+    ...init,
+    headers: { "content-type": "application/json", ...(init?.headers || {}) },
+    cache: "no-store",
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error(j.error || "Falha na operação");
+  return j;
 };
-function PlatformLogo({i}:{i:Integration}){const src=integrationLogoSrc[i.name];return <span className={`platformLogo brand-${i.name.toLowerCase().replaceAll(' ','-')}`} title={i.name}>{src?<img src={src} alt={`Logo ${i.name}`}/>:i.logo}</span>}
-function SettingsView({onEdit}:any){return <div className="settingsGrid"><article className="card pad"><h2>Empresa</h2><p className="muted">Dados gerais usados em relatórios e documentos.</p><div className="settingRows"><span>Nome<b>Iron Air Brasil</b></span><span>Moeda<b>BRL</b></span><span>Fuso<b>America/Sao_Paulo</b></span></div><button className="ghost clickable" onClick={onEdit}><Pencil size={14}/> Editar</button></article><article className="card pad"><h2>Tracking</h2><p className="muted">Janela e modelo de atribuição.</p><div className="settingRows"><span>Janela<b>7 dias</b></span><span>Modelo<b>Último clique pago</b></span><span>First-party<b>Ativo</b></span></div><button className="ghost clickable" onClick={onEdit}><Pencil size={14}/> Editar</button></article></div>}
-function Modal({kind,data,close,notify,products,integrations,onSave}:any){const [f,setF]=useState<any>(data?{...data,_edit:data.sku}:{});const [saving,setSaving]=useState(false);const set=(k:string,v:any)=>setF((x:any)=>({...x,[k]:v}));const title:any={movement:'Nova movimentação',sale:'Venda manual',customer:'Novo cliente',product:data?'Editar produto':'Novo produto',campaign:'Nova campanha',creative:'Novo criativo',expense:'Lançar despesa',integration:'Adicionar integração',integrationDetail:data?.name||'Integração',settings:'Configurações',saleDetail:`Pedido ${data?.id||''}`};
- const save=async()=>{if(saving)return;setSaving(true);try{await onSave(kind,f)}finally{setSaving(false)}};
- return <div className="modalBack" onMouseDown={e=>{if(e.currentTarget===e.target)close()}}><div className={`modal ${kind==='integration'?'modalWide':''}`}><div className="modalHead"><div><h2>{title[kind]}</h2><p>{kind==='integrationDetail'?'Configure credenciais, webhook e sincronização.':'Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão.'}</p></div><button className="close" onClick={close}><X/></button></div><div className="modalBody">
- {kind==='movement'&&<FormGrid><Select label="Tipo" value={f.type} onChange={(v:any)=>set('type',v)} options={['Entrada manual','Saída manual','Transferência','Avaria','Devolução','Ajuste de inventário']}/><Select label="SKU" value={f.sku} onChange={(v:any)=>set('sku',v)} options={products.map((p:any)=>p.sku)}/><Input label="Quantidade" type="number" value={f.qty} onChange={(v:any)=>set('qty',v)}/><Input label="Data" type="date" value={f.date} onChange={(v:any)=>set('date',v)}/><Input label="Referência / motivo" value={f.ref} onChange={(v:any)=>set('ref',v)}/><Select label="Origem" value={f.from} onChange={(v:any)=>set('from',v)} options={['Central','Amazon FBA','Mercado Livre Full','Shopee']}/><Select label="Destino" value={f.to} onChange={(v:any)=>set('to',v)} options={['Central','Amazon FBA','Mercado Livre Full','Shopee']}/></FormGrid>}
- {kind==='sale'&&<FormGrid><Input label="Cliente" value={f.customer} onChange={(v:any)=>set('customer',v)}/><Select label="Produto" value={f.product} onChange={(v:any)=>set('product',v)} options={products.map((p:any)=>p.product)}/><Input label="Valor" type="number" value={f.value} onChange={(v:any)=>set('value',v)}/><Select label="Origem" value={f.source} onChange={(v:any)=>set('source',v)} options={['Manual','Shopify','Mercado Livre','Amazon','Shopee']}/><Input label="E-mail" value={f.email} onChange={(v:any)=>set('email',v)}/><Input label="Observação" value={f.note} onChange={(v:any)=>set('note',v)}/></FormGrid>}
- {kind==='customer'&&<FormGrid><Input label="Nome" value={f.name} onChange={(v:any)=>set('name',v)}/><Input label="ID externo" value={f.externalId} onChange={(v:any)=>set('externalId',v)}/><Input label="Cidade" value={f.city} onChange={(v:any)=>set('city',v)}/><Input label="UF" value={f.state} onChange={(v:any)=>set('state',v)}/><Input label="CEP" value={f.zip} onChange={(v:any)=>set('zip',v)}/></FormGrid>}
- {kind==='product'&&<FormGrid><Input label="Nome do produto" value={f.product} onChange={(v:any)=>set('product',v)}/><Input label="SKU" value={f.sku} onChange={(v:any)=>set('sku',v)}/><Input label="Quantidade" type="number" value={f.physical} onChange={(v:any)=>set('physical',v)}/><Input label="Estoque de segurança" type="number" value={f.safety} onChange={(v:any)=>set('safety',v)}/><Input label="Custo unitário" type="number" value={f.cost} onChange={(v:any)=>set('cost',v)}/><Input label="Preço de venda" type="number" value={f.price} onChange={(v:any)=>set('price',v)}/></FormGrid>}
- {kind==='campaign'&&<FormGrid><Input label="Nome" value={f.name} onChange={(v:any)=>set('name',v)}/><Select label="Plataforma" value={f.platform} onChange={(v:any)=>set('platform',v)} options={['Meta','Google Ads','TikTok Ads']}/><Input label="Campaign ID" value={f.campaignId} onChange={(v:any)=>set('campaignId',v)}/><Input label="Orçamento diário" type="number" value={f.budget} onChange={(v:any)=>set('budget',v)}/><Input label="UTM campaign" value={f.utm} onChange={(v:any)=>set('utm',v)}/><Select label="Status" value={f.status} onChange={(v:any)=>set('status',v)} options={['Ativa','Pausada','Rascunho']}/></FormGrid>}
- {kind==='creative'&&<FormGrid><Input label="Nome do criativo" value={f.name} onChange={(v:any)=>set('name',v)}/><Select label="Plataforma" value={f.platform} onChange={(v:any)=>set('platform',v)} options={['Meta','Google Ads','TikTok Ads']}/><Input label="Campanha" value={f.campaign} onChange={(v:any)=>set('campaign',v)}/><Input label="Ad ID" value={f.adId} onChange={(v:any)=>set('adId',v)}/><Input label="URL do criativo" value={f.url} onChange={(v:any)=>set('url',v)}/><Select label="Formato" value={f.format} onChange={(v:any)=>set('format',v)} options={['Vídeo','Imagem','Carrossel']}/></FormGrid>}
- {kind==='expense'&&<FormGrid><Select label="Categoria" value={f.category} onChange={(v:any)=>set('category',v)} options={['Frete','Mídia','Taxa','Imposto','Software','Operacional','Outro']}/><Input label="Descrição" value={f.desc} onChange={(v:any)=>set('desc',v)}/><Input label="Valor" type="number" value={f.value} onChange={(v:any)=>set('value',v)}/><Input label="Data" type="date" value={f.date} onChange={(v:any)=>set('date',v)}/></FormGrid>}
- {kind==='integration'&&<div className="integrationPicker">{integrations.map((i:Integration)=><button key={i.name} onClick={()=>{setF(i);}} className={f.name===i.name?'picked':''}><PlatformLogo i={i}/><span><b>{i.name}</b><small>{i.desc}</small></span><em>{i.cat}</em></button>)}</div>}
- {kind==='integrationDetail'&&<IntegrationDetail i={data} notify={notify}/>} {kind==='saleDetail'&&<SaleDetail s={f} set={set} products={products}/>} {kind==='settings'&&<FormGrid><Input label="Nome da empresa" value={f.company||'Iron Air Brasil'} onChange={(v:any)=>set('company',v)}/><Select label="Moeda" value={f.currency||'BRL'} onChange={(v:any)=>set('currency',v)} options={['BRL','USD','EUR']}/><Select label="Janela de atribuição" value={f.window||'7 dias'} onChange={(v:any)=>set('window',v)} options={['1 dia','7 dias','14 dias','30 dias']}/><Select label="Modelo" value={f.model||'Último clique pago'} onChange={(v:any)=>set('model',v)} options={['Último clique pago','First touch']}/></FormGrid>}
- </div>{kind!=='integrationDetail'&&<div className="modalFoot"><button className="ghost clickable" onClick={close} disabled={saving}>Cancelar</button><button className="primary" onClick={save} disabled={saving}><Save size={15}/>{saving?'Salvando...':kind==='integration'?'Adicionar':'Salvar'}</button></div>}</div></div>}
-function IntegrationDetail({i,notify}:{i:Integration;notify:(x:string)=>void}){const [tab,setTab]=useState('Configuração');const [show,setShow]=useState(false);const [shop,setShop]=useState('');const [status,setStatus]=useState<any>(null);const statusPath=i.name==='Shopify'?'/api/integrations/shopify/status':i.name==='Mercado Livre'?'/api/integrations/mercadolivre/status':i.name==='Amazon'?'/api/integrations/amazon/status':null;const reloadStatus=()=>statusPath&&fetch(statusPath,{cache:'no-store'}).then(r=>r.json()).then(setStatus).catch(()=>null);useEffect(()=>{reloadStatus()},[statusPath]);const sync=async(body:any)=>{const r=await apiJson('/api/integrations/shopify/sync',{method:'POST',body:JSON.stringify(body)});notify(`Sincronizado: ${r.products||0} produtos, ${r.orders||0} pedidos`);reloadStatus()};if(i.name==='Shopify'){const connected=status?.status==='CONNECTED';return <div><div className="integrationHero"><PlatformLogo i={i}/><div><h3>Shopify</h3><p>OAuth por tenant com modo DEV/manual preservado</p></div><span className={connected?'status ok':'status warn'}>{connected?'Conectado':'Preparado'}</span></div><div className="tabs">{['Configuração','Webhooks','Sincronização'].map(t=><button className={tab===t?'selected':''} onClick={()=>setTab(t)} key={t}>{t}</button>)}</div>{tab==='Configuração'&&<div className="credentials"><div className="detailGrid"><div className="detailBox"><span>Loja conectada</span><b>{status?.shopDomain||'Nenhuma'}</b></div><div className="detailBox"><span>Modo</span><b>{status?.mode==='OAUTH'?'OAuth':'DEV/manual'}</b></div><div className="detailBox"><span>Última sync</span><b>{status?.lastSyncAt?fmtDate(status.lastSyncAt):'Nunca'}</b></div><div className="detailBox"><span>Status</span><b>{connected?'Ativa':'Aguardando'}</b></div></div><p className="muted">Tokens e secrets ficam somente no servidor. O modo DEV/manual continua aceitando os webhooks já cadastrados da Iron Air.</p><label><span>Loja Shopify</span><input className="fullInput" value={shop} onChange={e=>setShop(e.target.value)} placeholder="sua-loja.myshopify.com"/></label><div className="syncOptions"><button onClick={()=>shop?location.href=`/api/integrations/shopify/connect?shop=${encodeURIComponent(shop)}`:notify('Informe a loja Shopify')}><Link2/>Conectar Shopify</button><button onClick={async()=>{await apiJson('/api/integrations/shopify/disconnect',{method:'POST',body:'{}'});setStatus({...status,status:'DISCONNECTED'});notify('Shopify desconectado')}}><Trash2/>Desconectar</button></div></div>}{tab==='Webhooks'&&<div className="webhookBox"><label>Endpoint</label><div className="copyField"><code>{location.origin}/api/webhooks/shopify</code><button onClick={()=>{navigator.clipboard?.writeText(`${location.origin}/api/webhooks/shopify`);notify('Webhook copiado')}}><Copy size={15}/></button></div><div className="eventChecks">{(status?.webhooks?.length?status.webhooks:[{topic:'orders/create',status:'PENDING'},{topic:'orders/paid',status:'PENDING'},{topic:'orders/updated',status:'PENDING'},{topic:'orders/cancelled',status:'PENDING'},{topic:'refunds/create',status:'PENDING'}]).map((w:any)=><label key={w.topic}><input type="checkbox" checked readOnly/>{w.topic} · {w.status}</label>)}</div></div>}{tab==='Sincronização'&&<div className="syncPanel"><h3>Sincronização manual</h3><p className="muted">Busca dados recentes da loja conectada ou do modo DEV/manual.</p><div className="syncOptions"><button onClick={()=>sync({products:false,orders:true,days:90})}><RefreshCw/>Pedidos</button><button onClick={()=>sync({products:true,orders:false})}><PackageCheck/>Produtos</button><button onClick={()=>sync({products:true,orders:true,days:90})}><CircleDollarSign/>Sincronizar agora</button></div></div>}</div>}if(i.name==='Mercado Livre'){const connected=status?.status==='CONNECTED';const mlName=status?.user?.nickname||status?.externalAccountId||'Nenhuma';const syncMl=async()=>{await apiJson('/api/integrations/refresh',{method:'POST',body:JSON.stringify({provider:'Mercado Livre'})}).catch(()=>null);const r=await apiJson('/api/integrations/mercadolivre/sync',{method:'POST',body:JSON.stringify({days:365})});notify(`Mercado Livre: ${r.orders||0} pedidos sincronizados`);reloadStatus()};return <div><div className="integrationHero"><PlatformLogo i={i}/><div><h3>Mercado Livre</h3><p>OAuth por tenant com tokens server-side</p></div><span className={connected?'status ok':'status warn'}>{connected?'Conectado':'Preparado'}</span></div><div className="tabs">{['Configuração','Webhooks','Sincronização'].map(t=><button className={tab===t?'selected':''} onClick={()=>setTab(t)} key={t}>{t}</button>)}</div>{tab==='Configuração'&&<div className="credentials"><div className="detailGrid"><div className="detailBox"><span>Conta conectada</span><b>{mlName}</b></div><div className="detailBox"><span>Modo</span><b>OAuth</b></div><div className="detailBox"><span>Última sync</span><b>{status?.lastSyncAt?fmtDate(status.lastSyncAt):'Nunca'}</b></div><div className="detailBox"><span>Status</span><b>{connected?'Ativa':'Aguardando'}</b></div><div className="detailBox"><span>Refresh token</span><b>{status?.refreshTokenAvailable?'Ativo':'Ausente'}</b></div><div className="detailBox"><span>Expira em</span><b>{status?.expiresAt?fmtDate(status.expiresAt):'—'}</b></div></div><p className="muted">Tokens ficam criptografados no servidor. Se o refresh token estiver ausente, reconecte o Mercado Livre uma vez para ativar a renovação automática.</p><div className="syncOptions"><button onClick={()=>location.href='/api/integrations/mercadolivre/connect'}><Link2/>Conectar Mercado Livre</button><button onClick={async()=>{await apiJson('/api/integrations/mercadolivre/disconnect',{method:'POST',body:'{}'});setStatus({...status,status:'DISCONNECTED'});notify('Mercado Livre desconectado')}}><Trash2/>Desconectar</button></div></div>}{tab==='Webhooks'&&<div className="webhookBox"><label>Endpoint</label><div className="copyField"><code>{location.origin}/api/webhooks/mercadolivre</code><button onClick={()=>{navigator.clipboard?.writeText(`${location.origin}/api/webhooks/mercadolivre`);notify('Webhook copiado')}}><Copy size={15}/></button></div><div className="eventChecks">{(status?.webhooks?.length?status.webhooks:[{topic:'notifications',status:'PENDING'},{topic:'orders',status:'PENDING'}]).map((w:any)=><label key={w.topic}><input type="checkbox" checked readOnly/>{w.topic} · {w.status}</label>)}</div></div>}{tab==='Sincronização'&&<div className="syncPanel"><h3>Sincronização manual</h3><p className="muted">Busca pedidos recentes da conta conectada e atualiza vendas/dashboard.</p><div className="syncOptions"><button onClick={syncMl}><RefreshCw/>Sincronizar pedidos</button></div></div>}</div>}if(i.name==='Amazon'){const connected=status?.status==='CONNECTED';const syncAmazon=async()=>{await apiJson('/api/integrations/refresh',{method:'POST',body:JSON.stringify({provider:'Amazon'})}).catch(()=>null);const r=await apiJson('/api/integrations/amazon/sync',{method:'POST',body:JSON.stringify({days:365})});notify(`Amazon: ${r.orders||0} pedidos sincronizados`);reloadStatus()};return <div><div className="integrationHero"><PlatformLogo i={i}/><div><h3>Amazon</h3><p>SP-API com refresh token criptografado por tenant</p></div><span className={connected?'status ok':'status warn'}>{connected?'Conectado':'Preparado'}</span></div><div className="tabs">{['Configuração','Webhooks','Sincronização'].map(t=><button className={tab===t?'selected':''} onClick={()=>setTab(t)} key={t}>{t}</button>)}</div>{tab==='Configuração'&&<div className="credentials"><div className="detailGrid"><div className="detailBox"><span>Marketplace</span><b>{status?.marketplaceId||'Brasil'}</b></div><div className="detailBox"><span>Modo</span><b>SP-API</b></div><div className="detailBox"><span>Última sync</span><b>{status?.lastSyncAt?fmtDate(status.lastSyncAt):'Nunca'}</b></div><div className="detailBox"><span>Status</span><b>{connected?'Ativa':'Aguardando'}</b></div><div className="detailBox"><span>Refresh token</span><b>{status?.refreshTokenAvailable?'Ativo':'Ausente'}</b></div></div><p className="muted">O refresh token da Amazon fica criptografado no servidor. A sincronização usa LWA e SP-API no marketplace Brasil.</p><div className="syncOptions"><button onClick={async()=>{await apiJson('/api/integrations/amazon/connect',{method:'POST',body:'{}'});notify('Amazon conectada');reloadStatus()}}><Link2/>Conectar Amazon</button><button onClick={async()=>{await apiJson('/api/integrations/amazon/disconnect',{method:'POST',body:'{}'});setStatus({...status,status:'DISCONNECTED'});notify('Amazon desconectada')}}><Trash2/>Desconectar</button></div></div>}{tab==='Webhooks'&&<div className="webhookBox"><label>Notificações</label><div className="copyField"><code>Amazon SP-API Notifications via Seller Central</code><button onClick={()=>notify('Configure notificações no Seller Central quando liberado')}><Copy size={15}/></button></div></div>}{tab==='Sincronização'&&<div className="syncPanel"><h3>Sincronização manual</h3><p className="muted">Renova o token e busca pedidos recentes da conta Amazon autorizada.</p><div className="syncOptions"><button onClick={syncAmazon}><RefreshCw/>Sincronizar pedidos</button></div></div>}</div>}return <div><div className="integrationHero"><PlatformLogo i={i}/><div><h3>{i.name}</h3><p>{i.desc}</p></div><span className={i.status==='Conectado'?'status ok':'status warn'}>{i.status}</span></div><div className="tabs">{['Configuração','Webhooks','Sincronização'].map(t=><button className={tab===t?'selected':''} onClick={()=>setTab(t)} key={t}>{t}</button>)}</div>{tab==='Configuração'&&<div className="credentials"><p className="muted">Integração preparada por tenant. Credenciais finais ficam somente no servidor/OAuth.</p>{i.fields.map(x=><label key={x}><span>{x}</span><div className="secretInput"><input type={show?'text':'password'} defaultValue="••••••••••••••••"/><button onClick={()=>setShow(!show)}>{show?'Ocultar':'Mostrar'}</button></div></label>)}<button className="primary" onClick={()=>notify('Fluxo preparado para conexão por tenant')}><Link2 size={14}/>Testar conexão</button></div>}{tab==='Webhooks'&&<div className="webhookBox"><label>URL do webhook</label><div className="copyField"><code>https://seu-dominio.com{i.webhook}</code><button onClick={()=>{navigator.clipboard?.writeText(`https://seu-dominio.com${i.webhook}`);notify('Webhook copiado')}}><Copy size={15}/></button></div></div>}{tab==='Sincronização'&&<div className="syncPanel"><h3>Sincronização manual</h3><p className="muted">Cada empresa terá sua própria conexão e fila de sincronização.</p><div className="syncOptions"><button onClick={()=>notify('Sincronização preparada por tenant')}><RefreshCw/>Sincronizar</button></div></div>}</div>}
-function SaleDetail({s,set,products}:any){const fee=Number(s.feeAmount??s.fee??0),freight=Number(s.shippingAmount??s.freight??0),gross=Number(s.raw?.grossAmount||0),discount=Number(s.raw?.discountAmount||0),rawItem=s.raw?.items?.[0]||{},originalSku=rawItem.sku||s.itemSku||'';const assignable=products.filter((p:any)=>String(p.sku||'').match(/(127|220)/i));const selectedSku=String(s.itemSku??(assignable.some((p:any)=>p.sku===originalSku)?originalSku:''));const selectedProduct=products.find((p:any)=>p.sku===selectedSku);const qty=Number(rawItem.quantity||1);const cogs=selectedProduct?Number(selectedProduct.unitCost??selectedProduct.cost??0)*qty:Number(s.cogs||0);const profit=gross-discount-cogs-fee-freight;return <div className="detailGrid"><label className="field"><span>Cliente</span><input value={s.customer||''} onChange={e=>set('customer',e.target.value)}/></label><label className="field"><span>Produto / voltagem</span><select value={selectedSku} onChange={e=>set('itemSku',e.target.value)}><option value="">Sem atribuir{originalSku?` (${originalSku})`:''}</option>{assignable.map((p:any)=><option key={p.sku} value={p.sku}>{p.sku} · {p.product}</option>)}</select></label><div className="detailBox"><span>Valor</span><b>{s.value}</b></div><div className="detailBox"><span>Custo dos produtos</span><b>{money(cogs)}</b></div><div className="detailBox"><span>Lucro geral</span><b>{money(profit)}</b></div><div className="detailBox"><span>SKU atual</span><b>{originalSku||'—'}</b></div><label className="field"><span>Taxa da plataforma</span><input type="number" value={fee} onChange={e=>set('feeAmount',e.target.value)}/></label><label className="field"><span>Custo do frete</span><input type="number" value={freight} onChange={e=>set('shippingAmount',e.target.value)}/></label><div className="detailWide"><h3>{s.source}</h3><p>{s.product}</p></div></div>}
-function FormGrid({children}:{children:any}){return <div className="formGrid">{children}</div>}
-function Input({label,value,onChange,type='text'}:any){return <label className="field"><span>{label}</span><input type={type} value={value??''} onChange={e=>onChange(e.target.value)} placeholder={label}/></label>}
-function Select({label,value,onChange,options}:any){return <label className="field"><span>{label}</span><select value={value??''} onChange={e=>onChange(e.target.value)}><option value="">Selecione...</option>{options.map((x:string)=><option key={x}>{x}</option>)}</select></label>}
+type ModalKind = "movement" | "sale" | "customer" | "product" | "campaign" | "creative" | "expense" | "integration" | "integrationDetail" | "settings" | "saleDetail" | null;
+type Integration = {
+  name: string;
+  status: "Conectado" | "Preparado";
+  cat: string;
+  desc: string;
+  logo: string;
+  accent: string;
+  webhook: string;
+  fields: string[];
+};
+const integrationsSeed: Integration[] = [
+  {
+    name: "Meta Ads",
+    status: "Conectado",
+    cat: "Marketing",
+    desc: "Pixel, CAPI, campanhas, conjuntos e anúncios",
+    logo: "∞",
+    accent: "#1877F2",
+    webhook: "/api/webhooks/meta",
+    fields: ["META_PIXEL_ID", "META_ACCESS_TOKEN", "META_AD_ACCOUNT_ID"],
+  },
+  {
+    name: "Google Ads",
+    status: "Preparado",
+    cat: "Marketing",
+    desc: "Campanhas, custo, cliques e ROAS",
+    logo: "G",
+    accent: "#4285F4",
+    webhook: "/api/webhooks/google-ads",
+    fields: ["GOOGLE_ADS_CUSTOMER_ID", "GOOGLE_ADS_DEVELOPER_TOKEN"],
+  },
+  {
+    name: "TikTok Ads",
+    status: "Preparado",
+    cat: "Marketing",
+    desc: "Campanhas, criativos e atribuição",
+    logo: "♪",
+    accent: "#25F4EE",
+    webhook: "/api/webhooks/tiktok",
+    fields: ["TIKTOK_ADVERTISER_ID", "TIKTOK_ACCESS_TOKEN"],
+  },
+  {
+    name: "Shopify",
+    status: "Conectado",
+    cat: "E-commerce",
+    desc: "Pedidos, produtos, clientes e estoque",
+    logo: "S",
+    accent: "#95BF47",
+    webhook: "/api/webhooks/shopify",
+    fields: ["SHOPIFY_STORE_DOMAIN", "SHOPIFY_ADMIN_ACCESS_TOKEN", "SHOPIFY_WEBHOOK_SECRET"],
+  },
+  {
+    name: "Mercado Livre",
+    status: "Preparado",
+    cat: "Marketplace",
+    desc: "Pedidos, anúncios, taxas e Full",
+    logo: "ML",
+    accent: "#FFE600",
+    webhook: "/api/webhooks/mercadolivre",
+    fields: ["MERCADO_LIVRE_CLIENT_ID", "MERCADO_LIVRE_CLIENT_SECRET"],
+  },
+  {
+    name: "Amazon",
+    status: "Preparado",
+    cat: "Marketplace",
+    desc: "Seller Central, pedidos e FBA",
+    logo: "a",
+    accent: "#FF9900",
+    webhook: "/api/webhooks/amazon",
+    fields: ["AMAZON_SPAPI_APP_ID", "AMAZON_SPAPI_CLIENT_ID", "AMAZON_SPAPI_CLIENT_SECRET", "AMAZON_SPAPI_REFRESH_TOKEN", "AMAZON_SPAPI_MARKETPLACE_ID"],
+  },
+  {
+    name: "Kiwify",
+    status: "Preparado",
+    cat: "Parcerias",
+    desc: "Vendas e produtos digitais",
+    logo: "K",
+    accent: "#6D5DFB",
+    webhook: "/api/webhooks/kiwify",
+    fields: ["KIWIFY_WEBHOOK_TOKEN"],
+  },
+];
+export default function Home() {
+  const [view, setView] = useState("Visão Geral");
+  const [period, setPeriod] = useState("Hoje");
+  const [q, setQ] = useState("");
+  const [modal, setModal] = useState<ModalKind>(null);
+  const [selected, setSelected] = useState<any>(null);
+  const [toast, setToast] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [range, setRange] = useState(() => ({
+    from: startOfYearISO(),
+    to: todayISO(),
+  }));
+  const [draftRange, setDraftRange] = useState(() => ({
+    from: startOfYearISO(),
+    to: todayISO(),
+  }));
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const dashboardCache = useRef(new Map<string, any>());
+  const syncingRef = useRef(false);
+  const rangeEffectReady = useRef(false);
+  const [orderRows, setOrderRows] = useState<any[]>([]);
+  const [inventoryRows, setInventoryRows] = useState<any[]>([]);
+  const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
+  const [sales, setSales] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [movements, setMovements] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [channelRows, setChannelRows] = useState<any[]>([]);
+  const [dashboard, setDashboard] = useState<any>(null);
+  const [creatives, setCreatives] = useState<any[]>([
+    {
+      name: "Pablo • sabe passar roupa?",
+      platform: "Meta",
+      campaign: "IA Outubro",
+      spend: "R$ 1.420",
+      sales: 18,
+      roas: "6,8x",
+      status: "Ativo",
+    },
+    {
+      name: "Comparativo ferro × Iron Air",
+      platform: "Meta",
+      campaign: "Remarketing",
+      spend: "R$ 880",
+      sales: 9,
+      roas: "5,1x",
+      status: "Ativo",
+    },
+  ]);
+  const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
+  const title = view === "Visão Geral" ? "Dashboard Geral" : view;
+  const notify = (m: string) => {
+    setToast(m);
+    setTimeout(() => setToast(""), m.length > 90 ? 8000 : 3000);
+  };
+  const api = apiJson;
+  const dashboardKey = (p = period, r = range) => (p === "Personalizado" ? `custom:${r.from}:${r.to}` : p);
+  const applyDashboard = (dash: any) => {
+    setDashboard(dash);
+    setChannelRows(formatChannels(dash.channels || []));
+  };
+  const loadDashboardFromApi = async (p = period, r = range) => {
+    const pr = periodRange(p, r);
+    const dash = await api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}`);
+    dashboardCache.current.set(dashboardKey(p, r), dash);
+    applyDashboard(dash);
+    return dash;
+  };
+  const buildAndCacheDashboards = (orders: any[], balances: any[]) => {
+    dashboardCache.current.clear();
+    for (const p of ["Hoje", "7 dias", "30 dias", "Este mês", "Tempo todo"]) dashboardCache.current.set(p, buildDashboard(orders, balances, p, range));
+    dashboardCache.current.set(dashboardKey("Personalizado", range), buildDashboard(orders, balances, "Personalizado", range));
+    applyDashboard(dashboardCache.current.get(dashboardKey()) || dashboardCache.current.get("Hoje"));
+  };
+  const loadData = async (showLoading = true) => {
+    const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
+    if (showLoading) setLoading(true);
+    try {
+      const [orders, inventory, customerRows, campaignRows] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns", [])]);
+      setOrderRows(orders || []);
+      setSales(formatOrders(orders));
+      setInventoryRows(inventory.balances || []);
+      setProducts(formatInventory(inventory.balances || [], inventory.movements || []));
+      setMovements(formatMovements(inventory.movements || []));
+      setCustomers(customerRows || []);
+      setCampaigns(formatCampaigns(campaignRows));
+      buildAndCacheDashboards(orders || [], inventory.balances || []);
+      await loadDashboardFromApi(period, range).catch(() => null);
+    } catch (e: any) {
+      if (view !== "Integrações" && showLoading) notify(`Banco indisponível: ${e.message}`);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  };
+  const refreshAll = async (manual = true) => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (manual) setLoading(true);
+    const sync = async (label: string, url: string, body: any) => {
+      try {
+        const result: any = await Promise.race([api(url, { method: "POST", body: JSON.stringify(body) }), new Promise((_, reject) => setTimeout(() => reject(new Error("tempo limite excedido")), 90000))]);
+        return { label, ok: true, orders: Number(result?.orders || 0) };
+      } catch (e: any) {
+        return {
+          label,
+          ok: false,
+          orders: 0,
+          error: e?.message || "falha desconhecida",
+        };
+      }
+    };
+    try {
+      const results = await Promise.all([
+        sync("Shopify", "/api/integrations/shopify/sync", {
+          products: true,
+          orders: true,
+          days: 7,
+        }),
+        sync("Mercado Livre", "/api/integrations/mercadolivre/sync", {
+          days: 7,
+        }),
+        sync("Amazon", "/api/integrations/amazon/sync", { days: 7 }),
+      ]);
+      dashboardCache.current.clear();
+      await loadData(false);
+      if (manual) {
+        const failures = results.filter((r) => !r.ok);
+        const successes = results
+          .filter((r) => r.ok)
+          .map((r) => `${r.label}: ${r.orders}`)
+          .join(" | ");
+        if (failures.length) notify(`Atualização parcial. ${successes}. Falhou: ${failures.map((r) => `${r.label} (${r.error})`).join(" | ")}`);
+        else notify(`Atualizado com sucesso. Pedidos recebidos: ${successes}`);
+      }
+    } catch (e: any) {
+      if (manual) notify(e.message || "Erro ao atualizar");
+    } finally {
+      syncingRef.current = false;
+      if (manual) setLoading(false);
+    }
+  };
+  const choosePeriod = (p: string) => {
+    setCalendarOpen(false);
+    setPeriod(p);
+    const cached = dashboardCache.current.get(dashboardKey(p, range));
+    if (cached) applyDashboard(cached);
+    loadDashboardFromApi(p, range).catch(() => {
+      if (!cached && (orderRows.length || inventoryRows.length)) {
+        const dash = buildDashboard(orderRows, inventoryRows, p, range);
+        dashboardCache.current.set(dashboardKey(p, range), dash);
+        applyDashboard(dash);
+      }
+    });
+  };
+  const remove = async (url: string) => {
+    try {
+      await apiJson(url, { method: "DELETE" });
+      await loadData();
+      notify("Excluído do banco");
+    } catch (e: any) {
+      notify(e.message || "Erro ao excluir");
+    }
+  };
+  const removeMany = async (url: string, ids: string[]) => {
+    try {
+      await apiJson(url, { method: "DELETE", body: JSON.stringify({ ids }) });
+      await loadData();
+      notify(`${ids.length} pedidos excluídos`);
+    } catch (e: any) {
+      notify(e.message || "Erro ao excluir");
+    }
+  };
+  useEffect(() => {
+    loadData();
+  }, []);
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => {
+        if (document.visibilityState === "visible") refreshAll(false);
+      },
+      5 * 60 * 1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!rangeEffectReady.current) {
+      rangeEffectReady.current = true;
+      return;
+    }
+    loadDashboardFromApi(period, range).catch(() => {
+      if (!orderRows.length && !inventoryRows.length) return;
+      const dash = buildDashboard(orderRows, inventoryRows, period, range);
+      dashboardCache.current.set(dashboardKey(period, range), dash);
+      applyDashboard(dash);
+    });
+  }, [range.from, range.to]);
+  const open = (kind: ModalKind, data?: any) => {
+    setSelected(data || null);
+    setModal(kind);
+  };
+  const exportFile = (name: string, rows: any[], format: "csv" | "xml" = "csv") => {
+    if (!rows.length) {
+      notify("Selecione pelo menos um pedido");
+      return;
+    }
+    const clean = rows.map(({ raw, ...rest }: any) => rest);
+    const keys = Object.keys(clean[0] || {});
+    const escapeXml = (value: any) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&apos;");
+    const tag = (key: string) => key.replace(/[^A-Za-z0-9_-]/g, "_") || "campo";
+    let body: string;
+    let type: string;
+    if (format === "xml") {
+      body = ['<?xml version="1.0" encoding="UTF-8"?>', "<pedidos>", ...clean.map((row) => ["  <pedido>", ...keys.map((k) => `    <${tag(k)}>${escapeXml(row[k])}</${tag(k)}>`), "  </pedido>"].join("\n")), "</pedidos>"].join("\n");
+      type = "application/xml";
+    } else {
+      body = [keys.join(","), ...clean.map((r) => keys.map((k) => `"${String(r[k] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
+      type = "text/csv";
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([body], { type }));
+    a.download = `${name}.${format}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    notify(`${format.toUpperCase()} exportado`);
+  };
+  const exportCsv = (name: string, rows: any[]) => exportFile(name, rows, "csv");
+  return (
+    <main className={`shell theme-${theme}`}>
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brandmark">IA</span>
+          <div>
+            <b>Iron Air Hub</b>
+            <small>ERP + Tracking</small>
+          </div>
+        </div>
+        <nav>
+          {menu.map(([label, Icon]) => (
+            <button onClick={() => setView(label)} className={view === label ? "active" : ""} key={label}>
+              <Icon size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidefoot">
+          <WalletCards size={18} />
+          <div>
+            <b>{loading ? "Sincronizando" : "Operação online"}</b>
+            <small>Dados via API local</small>
+          </div>
+        </div>
+      </aside>
+      <section className="content">
+        <header className="topbar">
+          <div>
+            <h1>{title}</h1>
+          </div>
+          <button className="themeToggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Alternar tema" aria-label="Alternar tema">
+            <Sun size={16} className={theme === "light" ? "active" : ""} />
+            <Moon size={16} className={theme === "dark" ? "active" : ""} />
+          </button>
+        </header>
+        {view === "Visão Geral" && (
+          <>
+            <div className="filters">
+              <button className="refreshBtn" onClick={() => refreshAll(true)} title="Atualizar Shopify, Mercado Livre, Amazon e banco" aria-label="Atualizar">
+                <RefreshCw size={16} />
+              </button>
+              <button onClick={() => choosePeriod("Hoje")} className={period === "Hoje" ? "selected" : ""}>
+                Hoje
+              </button>
+              {["7 dias", "30 dias", "Este mês", "Tempo todo"].map((x) => (
+                <button onClick={() => choosePeriod(x)} className={period === x ? "selected" : ""} key={x}>
+                  {x}
+                </button>
+              ))}
+              <div className="customDate">
+                <button
+                  onClick={() => {
+                    setDraftRange(range);
+                    setPeriod("Personalizado");
+                    setCalendarOpen((v) => !v);
+                  }}
+                  className={period === "Personalizado" ? "selected" : ""}
+                >
+                  Personalizado
+                </button>
+                {calendarOpen && (
+                  <div className="datePopover">
+                    <label>
+                      <span>De</span>
+                      <input type="date" value={draftRange.from} onChange={(e) => setDraftRange((r) => ({ ...r, from: e.target.value }))} />
+                    </label>
+                    <label>
+                      <span>Até</span>
+                      <input type="date" value={draftRange.to} onChange={(e) => setDraftRange((r) => ({ ...r, to: e.target.value }))} />
+                    </label>
+                    <button
+                      className="primary"
+                      onClick={() => {
+                        setRange(draftRange);
+                        setCalendarOpen(false);
+                        setPeriod("Personalizado");
+                      }}
+                    >
+                      Aplicar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <section className="kpiGrid">
+              {dashboardKpis(dashboard).map((k) => (
+                <article className="card kpi" key={k.label}>
+                  <span>{k.label}</span>
+                  <strong>{k.value}</strong>
+                  <small>{k.delta}</small>
+                </article>
+              ))}
+            </section>
+            <section className="grid2">
+              <article className="card chartCard">
+                <div className="sectionHead">
+                  <div>
+                    <h2>Vendas no tempo</h2>
+                    <p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p>
+                  </div>
+                  <span className="pill">Banco</span>
+                </div>
+                <SalesTimeline rows={dashboard?.daily || []} period={period} range={range} />
+              </article>
+              <article className="card pad">
+                <div className="sectionHead">
+                  <div>
+                    <h2>Alertas da operação</h2>
+                    <p>Estoque, tracking e conciliação</p>
+                  </div>
+                  <span className="badge">{alerts.length}</span>
+                </div>
+                <div className="alerts">
+                  {alerts.map((a, i) => (
+                    <div className="alert" key={a}>
+                      <span>{i + 1}</span>
+                      <p>{a}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </section>
+            <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} />
+            <Inventory products={products} onEdit={(p: any) => open("product", p)} />
+          </>
+        )}
+        {view === "Vendas" && (
+          <Sales
+            q={q}
+            setQ={setQ}
+            rows={filtered}
+            onNew={() => open("sale")}
+            onOpen={(s: any) => open("saleDetail", s)}
+            onDelete={(s: any) => remove(`/api/orders?id=${encodeURIComponent(s.raw.id)}`)}
+            onDeleteMany={(rows: any[]) =>
+              removeMany(
+                "/api/orders",
+                rows.map((s) => s.raw.id),
+              )
+            }
+            onExport={(rows: any[], format: "csv" | "xml") => exportFile("vendas", rows, format)}
+          />
+        )}{" "}
+        {view === "Clientes" && (
+          <Customers
+            rows={customers}
+            onNew={() => open("customer")}
+            onEdit={(c: any) => open("customer", c)}
+            onBackfill={async () => {
+              try {
+                const r = await apiJson("/api/customers/backfill-locations", {
+                  method: "POST",
+                  body: "{}",
+                });
+                await loadData();
+                notify(`Cidade/UF atualizados: ${r.updated || 0}`);
+              } catch (e: any) {
+                notify(e.message || "Reconecte o Mercado Livre para buscar cidade/UF");
+              }
+            }}
+            onDelete={(c: any) => remove(`/api/customers?id=${encodeURIComponent(c.id)}`)}
+          />
+        )}{" "}
+        {view === "Estoque" && (
+          <>
+            <Inventory products={products} onEdit={(p: any) => open("product", p)} />
+            <Movements movements={movements} onNew={() => open("movement")} />
+          </>
+        )}{" "}
+        {view === "Produtos" && <Products products={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />}{" "}
+        {view === "Performance" && (
+          <>
+            <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />
+            <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} />
+          </>
+        )}{" "}
+        {view === "Jornada" && <Journey />} {view === "Financeiro" && <Finance data={dashboard} onNew={() => open("expense")} />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={creatives} onNew={() => open("creative")} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
+      </section>
+      {modal && (
+        <Modal
+          kind={modal}
+          data={selected}
+          close={() => setModal(null)}
+          notify={notify}
+          products={products}
+          integrations={integrationsSeed}
+          onSave={async (kind: any, data: any) => {
+            try {
+              if (kind === "movement")
+                await apiJson("/api/inventory/movement", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    ...data,
+                    quantity: Number(data.qty || data.quantity || 1),
+                    warehouseCode: warehouseCode(data.from) || "CENTRAL",
+                    reference: data.ref,
+                    date: data.date,
+                  }),
+                });
+              else if (kind === "sale")
+                await apiJson("/api/orders", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    ...data,
+                    sku: products.find((p: any) => p.product === data.product)?.sku || products[0]?.sku,
+                    quantity: 1,
+                  }),
+                });
+              else if (kind === "saleDetail")
+                await apiJson("/api/orders", {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    id: data.raw?.id,
+                    customer: data.customer,
+                    feeAmount: Number(data.feeAmount ?? data.fee ?? 0),
+                    shippingAmount: Number(data.shippingAmount ?? data.freight ?? 0),
+                    orderItemId: data.orderItemId,
+                    itemSku: data.itemSku,
+                  }),
+                });
+              else if (kind === "customer")
+                await apiJson("/api/customers", {
+                  method: data.id ? "PATCH" : "POST",
+                  body: JSON.stringify(data),
+                });
+              else if (kind === "product")
+                await apiJson("/api/products", {
+                  method: "POST",
+                  body: JSON.stringify(data),
+                });
+              else if (kind === "integration") {
+                await apiJson("/api/integrations", {
+                  method: "POST",
+                  body: JSON.stringify(data),
+                });
+                setIntegrationsRefreshKey((v) => v + 1);
+              } else if (kind === "campaign")
+                await apiJson("/api/campaigns", {
+                  method: "POST",
+                  body: JSON.stringify(data),
+                });
+              else if (kind === "expense")
+                await apiJson("/api/expenses", {
+                  method: "POST",
+                  body: JSON.stringify(data),
+                });
+              else if (kind === "creative")
+                setCreatives((v) => [
+                  ...v,
+                  {
+                    name: data.name || "Novo criativo",
+                    platform: data.platform || "Meta",
+                    campaign: data.campaign || "Sem campanha",
+                    spend: "R$ 0",
+                    sales: 0,
+                    roas: "0x",
+                    status: "Rascunho",
+                  },
+                ]);
+              setModal(null);
+              await loadData();
+              notify("Salvo e persistido");
+            } catch (e: any) {
+              notify(e.message || "Erro ao salvar");
+            }
+          }}
+        />
+      )}
+      {toast && (
+        <div className="toast">
+          <CheckCircle2 size={17} />
+          {toast}
+        </div>
+      )}
+    </main>
+  );
+}
+function warehouseCode(label?: string) {
+  return (
+    (
+      {
+        Central: "CENTRAL",
+        "Amazon FBA": "AMAZON_FBA",
+        "Mercado Livre Full": "ML_FULL",
+        Shopee: "SHOPEE",
+      } as any
+    )[label || ""] || label
+  );
+}
+function periodDays(period: string) {
+  if (period === "Hoje") return 1;
+  if (period === "7 dias") return 7;
+  if (period === "30 dias") return 30;
+  if (period === "Este mês") return Math.max(1, new Date().getDate());
+  return 365;
+}
+function localISODate(d = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+function todayISO() {
+  return localISODate();
+}
+function startOfYearISO() {
+  const d = new Date();
+  return `${localISODate(d).slice(0, 4)}-01-01`;
+}
+function dateKey(value: any) {
+  return value
+    ? new Date(value).toLocaleDateString("en-CA", {
+        timeZone: "America/Sao_Paulo",
+      })
+    : "";
+}
+function periodRange(period: string, range: { from: string; to: string }) {
+  const today = todayISO();
+  const d = new Date();
+  if (period === "Tempo todo") return { from: "2000-01-01", to: today };
+  if (period === "Personalizado") return range;
+  if (period === "Este mês")
+    return {
+      from: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`,
+      to: today,
+    };
+  const days = periodDays(period);
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - (days - 1));
+  const from = localISODate(fromDate);
+  return { from, to: today };
+}
+function paginationNumbers(current: number, total: number) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set([1, total, current, current - 1, current + 1]);
+  if (current <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+  if (current >= total - 2) {
+    pages.add(total - 1);
+    pages.add(total - 2);
+    pages.add(total - 3);
+  }
+  const sorted = [...pages].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
+  return sorted.flatMap((n, i) => (i && n - sorted[i - 1] > 1 ? ["…", n] : [n]));
+}
+function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje", range = { from: startOfYearISO(), to: todayISO() }) {
+  const r = periodRange(period, range);
+  const daily = new Map<string, any>();
+  const channels = new Map<string, any>();
+  let revenue = 0,
+    cogs = 0,
+    fees = 0,
+    ordersCount = 0;
+  for (const o of orders) {
+    if (o.status !== "PAID") continue;
+    const key = dateKey(o.paidAt || o.createdAt);
+    if (!key || key < r.from || key > r.to) continue;
+    const orderRevenue = Number(o.grossAmount || 0) - Number(o.discountAmount || 0);
+    const orderFees = Number(o.feeAmount || 0) + Number(o.shippingAmount || 0) + Number(o.taxAmount || 0);
+    const orderCogs = (o.items || []).reduce((sum: number, i: any) => sum + Number(i.unitCost || 0) * Number(i.quantity || 0), 0);
+    revenue += orderRevenue;
+    cogs += orderCogs;
+    fees += orderFees;
+    ordersCount++;
+    const salesProfit = orderRevenue - orderFees;
+    const generalProfit = salesProfit - orderCogs;
+    const d = daily.get(key) || {
+      date: key,
+      revenue: 0,
+      profit: 0,
+      salesProfit: 0,
+      orders: 0,
+    };
+    d.revenue += orderRevenue;
+    d.salesProfit += salesProfit;
+    d.profit += generalProfit;
+    d.orders++;
+    daily.set(key, d);
+    const c = channels.get(o.channel) || {
+      name: o.channel,
+      invested: 0,
+      sales: 0,
+      revenue: 0,
+      cogs: 0,
+      fees: 0,
+    };
+    c.sales++;
+    c.revenue += orderRevenue;
+    c.cogs += orderCogs;
+    c.fees += orderFees;
+    channels.set(o.channel, c);
+  }
+  const salesProfit = revenue - fees;
+  const profit = salesProfit - cogs;
+  const available = (balances || []).reduce((sum: number, b: any) => sum + Math.max(0, Number(b.onHand || 0) - Number(b.reserved || 0) - Number(b.variant?.safetyStock || 0)), 0);
+  return {
+    periodDays: periodDays(period),
+    revenue,
+    orders: ordersCount,
+    cogs,
+    fees,
+    media: 0,
+    salesProfit,
+    profit,
+    expenses: 0,
+    margin: revenue ? profit / revenue : 0,
+    salesMargin: revenue ? salesProfit / revenue : 0,
+    roas: null,
+    ticket: ordersCount ? revenue / ordersCount : 0,
+    available,
+    trackingEvents: 0,
+    daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    channels: [...channels.values()].map((c) => ({
+      name: c.name,
+      invested: c.invested,
+      sales: c.sales,
+      revenue: c.revenue,
+      cpa: c.sales ? c.invested / c.sales : null,
+      roas: c.invested ? c.revenue / c.invested : null,
+      salesProfit: c.revenue - c.fees - c.invested,
+      profit: c.revenue - c.cogs - c.fees - c.invested,
+    })),
+  };
+}
+function fmtDate(value: any) {
+  return value
+    ? new Date(value).toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "—";
+}
+function dashboardKpis(d: any) {
+  return [
+    {
+      label: "Faturamento",
+      value: money(d?.revenue || 0),
+      delta: `${d?.orders || 0} pedidos pagos`,
+    },
+    {
+      label: "Pedidos pagos",
+      value: String(d?.orders || 0),
+      delta: "Fonte: banco",
+    },
+    {
+      label: "Lucro vendas",
+      value: money(d?.salesProfit || 0),
+      delta: "Faturamento − taxa − frete",
+    },
+    {
+      label: "Lucro geral",
+      value: money(d?.profit || 0),
+      delta: `${((d?.margin || 0) * 100 || 0).toFixed(1)}% após custo`,
+    },
+    {
+      label: "Taxas + frete",
+      value: money(d?.fees || 0),
+      delta: "Plataforma / logística",
+    },
+    {
+      label: "Custo dos produtos",
+      value: money(d?.cogs || 0),
+      delta: "Custo do estoque vendido",
+    },
+    {
+      label: "Ticket médio",
+      value: money(d?.ticket || 0),
+      delta: "Receita / pedidos",
+    },
+    {
+      label: "Estoque disponível",
+      value: `${d?.available || 0} un.`,
+      delta: "Ledger materializado",
+    },
+  ];
+}
+function chartBars(rows: any[] = []) {
+  if (!rows.length) return Array.from({ length: 14 }, () => ({ revenue: 2, profit: 2 }));
+  const max = Math.max(...rows.map((r) => Math.max(Number(r.revenue || 0), Number(r.profit || 0))), 1);
+  return rows.slice(-20).map((r) => ({
+    revenue: Math.max(2, (Number(r.revenue || 0) / max) * 100),
+    profit: Math.max(2, (Number(r.profit || 0) / max) * 100),
+  }));
+}
+function addDaysISO(day: string, days: number) {
+  const d = new Date(`${day}T12:00:00.000-03:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function compactDay(day: string) {
+  const [, m, d] = day.split("-");
+  return `${d}/${m}`;
+}
+function salesTimeline(rows: any[] = [], period: string, range: { from: string; to: string }) {
+  const r = periodRange(period, range);
+  const source = new Map(rows.map((row) => [row.date, row]));
+  const totalDays = Math.max(1, Math.round((new Date(`${r.to}T12:00:00.000-03:00`).getTime() - new Date(`${r.from}T12:00:00.000-03:00`).getTime()) / 864e5) + 1);
+  const maxPoints = period === "Tempo todo" ? 24 : period === "30 dias" ? 30 : totalDays;
+  const step = Math.max(1, Math.ceil(totalDays / maxPoints));
+  const points = [];
+  for (let i = 0; i < totalDays; i += step) {
+    let revenue = 0,
+      orders = 0,
+      last = r.from;
+    for (let j = 0; j < step && i + j < totalDays; j++) {
+      const day = addDaysISO(r.from, i + j);
+      const row = source.get(day);
+      revenue += Number(row?.revenue || 0);
+      orders += Number(row?.orders || 0);
+      last = day;
+    }
+    points.push({ date: last, revenue, orders });
+  }
+  if (!points.length) points.push({ date: r.to, revenue: 0, orders: 0 });
+  return points;
+}
+function SalesTimeline({ rows, period, range }: any) {
+  const points = salesTimeline(rows, period, range);
+  const max = Math.max(...points.map((p: any) => Number(p.revenue || 0)), 1);
+  const w = 640,
+    h = 210,
+    pad = 22;
+  const xy = (p: any, i: number) => {
+    const x = points.length === 1 ? w / 2 : pad + (i / (points.length - 1)) * (w - pad * 2);
+    const y = h - pad - (Number(p.revenue || 0) / max) * (h - pad * 2);
+    return { x, y };
+  };
+  const line = points
+    .map((p: any, i: number) => {
+      const { x, y } = xy(p, i);
+      return `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const area = `${line} L ${w - pad} ${h - pad} L ${pad} ${h - pad} Z`;
+  const totalOrders = points.reduce((sum: number, p: any) => sum + Number(p.orders || 0), 0);
+  return (
+    <div className="lineChart">
+      <div className="chartTopMetric">
+        <span>{totalOrders} vendas</span>
+        <b>{money(points.reduce((sum: number, p: any) => sum + Number(p.revenue || 0), 0))}</b>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Vendas no período">
+        <defs>
+          <linearGradient id="salesArea" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent2)" stopOpacity=".28" />
+            <stop offset="100%" stopColor="var(--accent2)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path className="lineArea" d={area} />
+        <path className="linePath" d={line} />
+        {points.map((p: any, i: number) => {
+          const { x, y } = xy(p, i);
+          return (
+            <circle key={`${p.date}-${i}`} className="linePoint" cx={x} cy={y} r={p.revenue ? 4 : 3}>
+              <title>
+                {compactDay(p.date)} · {p.orders} vendas · {money(p.revenue)}
+              </title>
+            </circle>
+          );
+        })}
+      </svg>
+      <div className="lineAxis">
+        <span>{compactDay(points[0].date)}</span>
+        <span>{period === "Hoje" ? "Hoje" : compactDay(points[Math.floor(points.length / 2)]?.date || points[0].date)}</span>
+        <span>{period === "Tempo todo" ? "Hoje" : compactDay(points[points.length - 1].date)}</span>
+      </div>
+    </div>
+  );
+}
+function formatOrders(rows: any[]) {
+  return (rows || []).map((o) => {
+    const items = o.items || [];
+    const firstItem = items[0];
+    const cogs = items.reduce((s: number, i: any) => s + Number(i.unitCost || 0) * Number(i.quantity || 0), 0);
+    const fee = Number(o.feeAmount || 0);
+    const freight = Number(o.shippingAmount || 0);
+    const revenue = Number(o.grossAmount || 0) - Number(o.discountAmount || 0);
+    return {
+      raw: o,
+      id: o.externalId,
+      date: fmtDate(o.paidAt || o.createdAt),
+      customer: o.customer?.name || "Cliente",
+      product: items.map((i: any) => `${i.name}${i.sku ? ` (${i.sku})` : ""}`).join(", ") || "—",
+      itemSku: firstItem?.sku || "",
+      orderItemId: firstItem?.id || "",
+      source: o.channel,
+      campaign: o.attribution?.campaign || o.attribution?.source || "—",
+      value: money(Number(o.grossAmount || 0)),
+      fee,
+      freight,
+      cogs,
+      profit: revenue - fee - freight - Number(o.taxAmount || 0),
+      status: o.status,
+      tracking: o.attribution?.fbclid || o.attribution?.gclid ? "Atribuído" : "Sem clique",
+    };
+  });
+}
+function formatInventory(rows: any[], movements: any[] = []) {
+  const bySku = new Map<string, any>();
+  const fba = new Map<string, any>();
+  const sold = new Map<string, any>();
+  for (const m of movements || []) {
+    if (m.warehouseCode === "AMAZON_FBA" && Number(m.quantity) > 0 && !fba.has(m.sku)) fba.set(m.sku, { date: fmtDate(m.createdAt), qty: m.quantity });
+    if (m.type === "SALE" && Number(m.quantity) < 0) {
+      const bucket = sold.get(m.sku) || {
+        shopify: 0,
+        ml: 0,
+        amazon: 0,
+        shopee: 0,
+        manual: 0,
+      };
+      const qty = Math.abs(Number(m.quantity || 0));
+      const ch = String(m.orderChannel || "").toUpperCase();
+      if (ch === "SHOPIFY") bucket.shopify += qty;
+      else if (ch === "MERCADO_LIVRE") bucket.ml += qty;
+      else if (ch === "AMAZON") bucket.amazon += qty;
+      else if (ch === "SHOPEE") bucket.shopee += qty;
+      else bucket.manual += qty;
+      sold.set(m.sku, bucket);
+    }
+  }
+  for (const r of rows || []) {
+    const sku = r.variant?.sku || r.sku;
+    const s = sold.get(sku) || {};
+    const item = bySku.get(sku) || {
+      product: r.variant?.product?.name || r.variant?.name || "Produto",
+      name: r.variant?.name,
+      sku,
+      physical: 0,
+      reserved: 0,
+      committed: 0,
+      safety: r.variant?.safetyStock || 0,
+      cost: Number(r.variant?.unitCost || 0),
+      price: Number(r.variant?.salePrice || 0),
+      unitCost: Number(r.variant?.unitCost || 0),
+      salePrice: Number(r.variant?.salePrice || 0),
+      available: 0,
+      shopify: s.shopify || 0,
+      ml: s.ml || 0,
+      amazon: s.amazon || 0,
+      shopee: s.shopee || 0,
+      manual: s.manual || 0,
+      fbaDate: "—",
+      fbaQty: 0,
+      status: "Saudável",
+      productId: r.variant?.productId,
+    };
+    item.physical += r.onHand;
+    item.reserved += r.reserved;
+    item.available += Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0));
+    const f = fba.get(sku);
+    if (f) {
+      item.fbaDate = f.date;
+      item.fbaQty = f.qty;
+    }
+    item.status = item.available <= item.safety ? "Pouco" : "Saudável";
+    bySku.set(sku, item);
+  }
+  return [...bySku.values()];
+}
+function formatMovements(rows: any[]) {
+  return (rows || []).map((m) => ({
+    date: fmtDate(m.createdAt),
+    sku: m.sku,
+    type: m.type,
+    qty: m.quantity,
+    ref: m.reference || m.note || m.warehouseCode,
+    balance: "—",
+  }));
+}
+function formatCampaigns(rows: any[]) {
+  return rows.map((c) => ({
+    campaignId: c.campaignId,
+    name: c.campaignName,
+    platform: c.platform,
+    spend: money(c.spend || 0),
+    sales: c.sales || 0,
+    revenue: money(c.revenue || 0),
+    cpa: c.cpa ? money(c.cpa) : "—",
+    roas: c.roas ? `${c.roas.toFixed(2)}x` : "—",
+    profit: "—",
+  }));
+}
+function formatChannels(rows: any[]) {
+  return (rows || []).map((c) => ({
+    name: c.name,
+    invested: money(c.invested || 0),
+    sales: c.sales || 0,
+    revenue: money(c.revenue || 0),
+    cpa: c.cpa ? money(c.cpa) : "—",
+    roas: c.roas ? `${c.roas.toFixed(2)}x` : "—",
+    profit: money(c.salesProfit || 0),
+  }));
+}
+function ChannelTable({ rows, onExport }: { rows: any[]; onExport: () => void }) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Performance por canal</h2>
+          <p>Receita e lucro de venda consolidado</p>
+        </div>
+        <button className="ghost clickable" onClick={onExport}>
+          Exportar CSV
+        </button>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Canal</th>
+              <th>Investido</th>
+              <th>Vendas</th>
+              <th>Receita</th>
+              <th>CPA</th>
+              <th>ROAS</th>
+              <th>Lucro vendas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c) => (
+              <tr key={c.name}>
+                <td>
+                  <b>{c.name}</b>
+                </td>
+                <td>{c.invested}</td>
+                <td>{c.sales}</td>
+                <td>{c.revenue}</td>
+                <td>{c.cpa}</td>
+                <td>{c.roas}</td>
+                <td className="positive">{c.profit}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+function Inventory({ products, onEdit }: any) {
+  const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
+  const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
+  const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Estoque central</h2>
+          <p>Saldo físico e vendidos por plataforma</p>
+        </div>
+        <div className="inventorySummary">
+          <span>
+            <b>{physical}</b> físico
+          </span>
+          <span>
+            <b>{available}</b> disponível
+          </span>
+          <span>
+            <b>{reserved}</b> reservado
+          </span>
+        </div>
+      </div>
+      <div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Produto</th>
+              <th>SKU</th>
+              <th>Custo</th>
+              <th>Preço</th>
+              <th>Físico</th>
+              <th>Disponível</th>
+              <th>Vend. Shopify</th>
+              <th>Vend. ML</th>
+              <th>Vend. Amazon</th>
+              <th>Vend. Shopee</th>
+              <th>Envio FBA</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((i: any) => (
+              <tr key={i.sku}>
+                <td>
+                  <b>{i.product}</b>
+                </td>
+                <td>{i.sku}</td>
+                <td>{money(i.cost || 0)}</td>
+                <td>{money(i.price || 0)}</td>
+                <td>{i.physical}</td>
+                <td>
+                  <b>{i.available}</b>
+                </td>
+                <td>{i.shopify}</td>
+                <td>{i.ml}</td>
+                <td>{i.amazon}</td>
+                <td>{i.shopee}</td>
+                <td>{i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
+                <td>
+                  <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
+                </td>
+                <td>
+                  <button className="mini" onClick={() => onEdit(i)}>
+                    <Pencil size={14} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+function Products({ products, onNew, onEdit, onDelete }: any) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Catálogo de produtos</h2>
+          <p>SKUs, variantes, custo e disponibilidade</p>
+        </div>
+        <button className="primary" onClick={onNew}>
+          <Plus size={14} />
+          Novo produto
+        </button>
+      </div>
+      <div className="productGrid">
+        {products.map((p: any) => (
+          <div className="productCard" key={p.sku}>
+            <div className="productVisual">
+              <PackageCheck />
+            </div>
+            <div>
+              <h3>{p.product}</h3>
+              <p>{p.sku}</p>
+              <div className="productMeta">
+                <span>
+                  Físico <b>{p.physical}</b>
+                </span>
+                <span>
+                  Disponível <b>{p.available}</b>
+                </span>
+              </div>
+            </div>
+            <div className="cardActions">
+              <button className="mini" onClick={() => onEdit(p)}>
+                <Pencil size={15} />
+              </button>
+              <button className="mini danger" onClick={() => onDelete(p)}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+function Customers({ rows, onNew, onEdit, onDelete, onBackfill }: any) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Clientes</h2>
+          <p>Clientes persistidos no banco e vinculados aos pedidos</p>
+        </div>
+        <div className="rowActions">
+          <button className="primary" onClick={onNew}>
+            <Plus size={14} />
+            Novo cliente
+          </button>
+        </div>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Cidade</th>
+              <th>UF</th>
+              <th>Pedidos</th>
+              <th>Receita</th>
+              <th>Último canal</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c: any) => (
+              <tr key={c.id} className="clickrow" onClick={() => onEdit(c)}>
+                <td>
+                  <b>{c.name || "Cliente sem nome"}</b>
+                </td>
+                <td>{c.city || "—"}</td>
+                <td>{c.state || "—"}</td>
+                <td>{c.orders}</td>
+                <td>{money(c.revenue || 0)}</td>
+                <td>{c.lastChannel || "—"}</td>
+                <td>
+                  <div className="rowActions">
+                    <button
+                      className="mini"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEdit(c);
+                      }}
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      className="mini danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(c);
+                      }}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport }: any) {
+  const [status, setStatus] = useState("Todos");
+  const [source, setSource] = useState("Todas");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exportOpen, setExportOpen] = useState(false);
+  const statusClass = (status: string) => (status === "CANCELLED" ? "danger" : status === "PAID" ? "ok" : "warn");
+  const keyOf = (s: any) => String(s.raw?.id || s.id);
+  const sources = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((s: any) => s.source).filter(Boolean)))], [rows]);
+  const filtered = useMemo(
+    () =>
+      rows.filter((s: any) => {
+        const key = s.raw?.paidAt || s.raw?.createdAt;
+        const day = key ? dateKey(key) : "";
+        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!from || day >= from) && (!to || day <= to);
+      }),
+    [rows, status, source, from, to],
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const allPageSelected = pageRows.length > 0 && pageRows.every((s: any) => selected.has(keyOf(s)));
+  const pageNumbers = paginationNumbers(safePage, totalPages);
+  useEffect(() => {
+    setPage(1);
+    setSelected(new Set());
+    setExportOpen(false);
+  }, [q, status, source, from, to, pageSize]);
+  const selectedRows = filtered.filter((s: any) => selected.has(keyOf(s)));
+  const exportRows = selectedRows.map(({ raw, ...rest }: any) => rest);
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const togglePage = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageRows.forEach((s: any) => next.delete(keyOf(s)));
+      else pageRows.forEach((s: any) => next.add(keyOf(s)));
+      return next;
+    });
+  const deleteSelected = async () => {
+    await onDeleteMany(selectedRows);
+    setSelected(new Set());
+  };
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Pedidos consolidados</h2>
+          <p>
+            {filtered.length} pedidos filtrados · {selected.size} selecionados
+          </p>
+        </div>
+        <div className="rowActions">
+          <button className="ghost clickable" disabled={!selected.size} onClick={deleteSelected}>
+            <Trash2 size={14} />
+            Excluir selecionados
+          </button>
+          <div className="exportMenu">
+            <button className="ghost clickable" disabled={!selected.size} onClick={() => setExportOpen((v) => !v)}>
+              <Download size={14} /> Exportar
+            </button>
+            {exportOpen && !!selected.size && (
+              <div className="exportOptions">
+                <button
+                  onClick={() => {
+                    onExport(exportRows, "csv");
+                    setExportOpen(false);
+                  }}
+                >
+                  CSV
+                </button>
+                <button
+                  onClick={() => {
+                    onExport(exportRows, "xml");
+                    setExportOpen(false);
+                  }}
+                >
+                  XML
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="primary" onClick={onNew}>
+            <Plus size={14} />
+            Venda manual
+          </button>
+        </div>
+      </div>
+      <div className="search">
+        <Search size={16} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar pedido, cliente, campanha ou canal..." />
+      </div>
+      <div className="salesFilters">
+        <label>
+          <Filter size={14} />
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option>Todos</option>
+            <option>PAID</option>
+            <option>CANCELLED</option>
+            <option>PENDING</option>
+            <option>REFUNDED</option>
+            <option>CHARGEBACK</option>
+          </select>
+        </label>
+        <label>
+          <span>Origem</span>
+          <select value={source} onChange={(e) => setSource(e.target.value)}>
+            {sources.map((x: any) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>De</span>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label>
+          <span>Até</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </label>
+        <label>
+          <span>Linhas</span>
+          <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+        <button
+          className="ghost clickable"
+          onClick={() => {
+            setStatus("Todos");
+            setSource("Todas");
+            setFrom("");
+            setTo("");
+            setQ("");
+          }}
+        >
+          Limpar
+        </button>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th className="checkCol">
+                <input type="checkbox" checked={allPageSelected} onChange={togglePage} aria-label="Selecionar página" />
+              </th>
+              <th>Pedido</th>
+              <th>Data</th>
+              <th>Cliente</th>
+              <th>Origem</th>
+              <th>Valor</th>
+              <th>Taxa</th>
+              <th>Frete</th>
+              <th>Lucro vendas</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((s: any) => (
+              <tr key={keyOf(s)} className="clickrow" onClick={() => onOpen(s)}>
+                <td className="checkCol" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={selected.has(keyOf(s))} onChange={() => toggleOne(keyOf(s))} aria-label={`Selecionar ${s.id}`} />
+                </td>
+                <td>
+                  <b>{s.id}</b>
+                </td>
+                <td>{s.date}</td>
+                <td>{s.customer}</td>
+                <td>{s.source}</td>
+                <td>{s.value}</td>
+                <td>{money(s.fee || 0)}</td>
+                <td>{money(s.freight || 0)}</td>
+                <td className={s.profit >= 0 ? "positive" : "negative"}>{money(s.profit || 0)}</td>
+                <td>
+                  <span className={`status ${statusClass(s.status)}`}>{s.status}</span>
+                </td>
+                <td>
+                  <div className="rowActions">
+                    <button
+                      className="mini"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(s);
+                      }}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      className="mini danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(s);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="pagination">
+        <span>
+          Página {safePage} de {totalPages}
+        </span>
+        <div>
+          <button className="ghost clickable pageArrow" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>
+            ‹
+          </button>
+          {pageNumbers.map((n: any, i: number) =>
+            n === "…" ? (
+              <span className="pageDots" key={`${n}-${i}`}>
+                …
+              </span>
+            ) : (
+              <button key={n} className={`ghost clickable pageNumber ${safePage === n ? "selected" : ""}`} onClick={() => setPage(n)}>
+                {n}
+              </button>
+            ),
+          )}
+          <button className="ghost clickable pageArrow" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>
+            ›
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+function Campaigns({ campaigns, onNew, onDelete }: any) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Campanhas</h2>
+          <p>Visão estilo UTMify: mídia → venda → lucro</p>
+        </div>
+        <div className="rowActions">
+          <span className="pill">Meta + Google</span>
+          <button className="primary" onClick={onNew}>
+            <Plus size={14} />
+            Nova campanha
+          </button>
+        </div>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Campanha</th>
+              <th>Plataforma</th>
+              <th>Investimento</th>
+              <th>Vendas</th>
+              <th>Receita</th>
+              <th>CPA</th>
+              <th>ROAS</th>
+              <th>Lucro</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {campaigns.map((c: any) => (
+              <tr key={c.campaignId || c.name}>
+                <td>
+                  <b>{c.name}</b>
+                </td>
+                <td>{c.platform}</td>
+                <td>{c.spend}</td>
+                <td>{c.sales}</td>
+                <td>{c.revenue}</td>
+                <td>{c.cpa}</td>
+                <td>{c.roas}</td>
+                <td className="positive">{c.profit}</td>
+                <td>
+                  <button className="mini danger" onClick={() => onDelete(c)}>
+                    <Trash2 size={14} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+function Creatives({ rows, onNew }: any) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Criativos</h2>
+          <p>Compare anúncios por venda, ROAS e campanha</p>
+        </div>
+        <button className="primary" onClick={onNew}>
+          <Plus size={14} />
+          Novo criativo
+        </button>
+      </div>
+      <div className="creativeGrid">
+        {rows.map((r: any) => (
+          <div className="creativeCard" key={r.name}>
+            <div className="creativeThumb">
+              <Tag />
+            </div>
+            <span className="status ok">{r.status}</span>
+            <h3>{r.name}</h3>
+            <p>
+              {r.platform} • {r.campaign}
+            </p>
+            <div className="creativeStats">
+              <span>
+                Gasto<b>{r.spend}</b>
+              </span>
+              <span>
+                Vendas<b>{r.sales}</b>
+              </span>
+              <span>
+                ROAS<b>{r.roas}</b>
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+function Movements({ movements, onNew }: any) {
+  return (
+    <article className="card tableCard">
+      <div className="sectionHead">
+        <div>
+          <h2>Ledger de estoque</h2>
+          <p>Registro cronológico com data, SKU, quantidade e referência</p>
+        </div>
+        <button className="primary" onClick={onNew}>
+          <Plus size={14} />
+          Nova movimentação
+        </button>
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>SKU</th>
+              <th>Movimento</th>
+              <th>Quantidade</th>
+              <th>Referência</th>
+              <th>Saldo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {movements.map((m: any, i: number) => (
+              <tr key={i}>
+                <td>
+                  <b>{m.date}</b>
+                </td>
+                <td>{m.sku}</td>
+                <td>{m.type}</td>
+                <td className={m.qty < 0 ? "negative" : "positive"}>
+                  {m.qty > 0 ? "+" : ""}
+                  {m.qty}
+                </td>
+                <td>{m.ref}</td>
+                <td>
+                  <b>{m.balance}</b>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+function Journey() {
+  return (
+    <section className="journey">
+      <div className="funnel">
+        {[
+          ["Visitas", "8.412"],
+          ["ViewContent", "6.980"],
+          ["Checkout", "742"],
+          ["Pagamento criado", "128"],
+          ["Purchase", "94"],
+        ].map(([a, b], i) => (
+          <div className="funnelStep" key={a}>
+            <span>{a}</span>
+            <b>{b}</b>
+            {i < 4 && <ArrowUpRight size={16} />}
+          </div>
+        ))}
+      </div>
+      <article className="card pad">
+        <h2>Última jornada atribuída</h2>
+        <div className="timeline">
+          <p>
+            <MousePointerClick /> Meta Ads • fbclid capturado
+          </p>
+          <p>UTM: facebook / paid_social / IA Outubro</p>
+          <p>Checkout iniciado • Iron Air 127V</p>
+          <p>Asaas CONFIRMED • R$ 1.349,10</p>
+          <p className="positive">Purchase CAPI + Pixel deduplicado</p>
+        </div>
+      </article>
+    </section>
+  );
+}
+function Finance({ data, onNew }: any) {
+  return (
+    <>
+      <section className="kpiGrid">
+        {[
+          ["Receita", data?.revenue || 0],
+          ["CMV", data?.cogs || 0],
+          ["Mídia", data?.media || 0],
+          ["Despesas", data?.expenses || 0],
+        ].map(([a, b]: any) => (
+          <article className="card kpi" key={a}>
+            <span>{a}</span>
+            <strong>{money(b)}</strong>
+          </article>
+        ))}
+      </section>
+      <article className="card pad">
+        <div className="sectionHead">
+          <div>
+            <h2>Resultado estimado</h2>
+            <p>DRE operacional simplificada</p>
+          </div>
+          <button className="primary" onClick={onNew}>
+            <Plus size={14} />
+            Lançar despesa
+          </button>
+        </div>
+        <div className="bigProfit">
+          {money(data?.profit || 0)} <small>lucro operacional estimado</small>
+        </div>
+        <div className="formula">Receita − CMV − mídia − taxas − frete − despesas = lucro. Impostos podem ser adicionados por regra fiscal.</div>
+      </article>
+    </>
+  );
+}
+function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
+  const [rows, setRows] = useState<any[]>([]);
+  useEffect(() => {
+    fetch("/api/integrations", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((r) => setRows(Array.isArray(r) ? r : []))
+      .catch(() => setRows([]));
+  }, [refreshKey]);
+  const visible: Integration[] = rows.map((row: any) => {
+    const seed = integrationsSeed.find((i) => i.name === row.provider) || {
+      name: row.provider,
+      status: "Preparado" as const,
+      cat: "Integração",
+      desc: "Integração criada manualmente",
+      logo: String(row.provider || "?")
+        .slice(0, 2)
+        .toUpperCase(),
+      accent: "#7cf8bb",
+      webhook: "",
+      fields: row.fields || [],
+    };
+    return {
+      ...seed,
+      status: row.status === "CONNECTED" ? "Conectado" : "Preparado",
+    };
+  });
+  return (
+    <>
+      <div className="sectionTools">
+        <div>
+          <h2>Ecossistema de integrações</h2>
+          <p>Conecte canais, pagamentos, mídia e logística.</p>
+        </div>
+        <button className="primary" onClick={onNew}>
+          <Plus size={15} />
+          Criar nova integração
+        </button>
+      </div>
+      <div className="integrationGrid">
+        {visible.map((i) => {
+          const status = i.status;
+          return (
+            <article className="card integration integrationClickable" key={i.name} onClick={() => onOpen({ ...i, status })}>
+              <PlatformLogo i={i} />
+              <div className="integrationInfo">
+                <b>{i.name}</b>
+                <small>{i.desc}</small>
+                <em>{i.cat}</em>
+              </div>
+              <div className="integrationActions">
+                <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
+                <button
+                  className="mini danger"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setRows((v) => (v || []).filter((r: any) => r.provider !== i.name));
+                    await onDelete(i);
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+const integrationLogoSrc: Record<string, string> = {
+  "Meta Ads": "/integration-logos/meta-ads.webp",
+  "Google Ads": "/integration-logos/google-ads.webp",
+  "TikTok Ads": "/integration-logos/tiktok-ads.webp",
+  Shopify: "/integration-logos/shopify.webp",
+  "Mercado Livre": "/integration-logos/mercado-livre.webp",
+  Amazon: "/integration-logos/amazon.webp",
+  Kiwify: "/integration-logos/kiwify.webp",
+};
+function PlatformLogo({ i }: { i: Integration }) {
+  const src = integrationLogoSrc[i.name];
+  return (
+    <span className={`platformLogo brand-${i.name.toLowerCase().replaceAll(" ", "-")}`} title={i.name}>
+      {src ? <img src={src} alt={`Logo ${i.name}`} /> : i.logo}
+    </span>
+  );
+}
+function SettingsView({ onEdit }: any) {
+  return (
+    <div className="settingsGrid">
+      <article className="card pad">
+        <h2>Empresa</h2>
+        <p className="muted">Dados gerais usados em relatórios e documentos.</p>
+        <div className="settingRows">
+          <span>
+            Nome<b>Iron Air Brasil</b>
+          </span>
+          <span>
+            Moeda<b>BRL</b>
+          </span>
+          <span>
+            Fuso<b>America/Sao_Paulo</b>
+          </span>
+        </div>
+        <button className="ghost clickable" onClick={onEdit}>
+          <Pencil size={14} /> Editar
+        </button>
+      </article>
+      <article className="card pad">
+        <h2>Tracking</h2>
+        <p className="muted">Janela e modelo de atribuição.</p>
+        <div className="settingRows">
+          <span>
+            Janela<b>7 dias</b>
+          </span>
+          <span>
+            Modelo<b>Último clique pago</b>
+          </span>
+          <span>
+            First-party<b>Ativo</b>
+          </span>
+        </div>
+        <button className="ghost clickable" onClick={onEdit}>
+          <Pencil size={14} /> Editar
+        </button>
+      </article>
+    </div>
+  );
+}
+function Modal({ kind, data, close, notify, products, integrations, onSave }: any) {
+  const [f, setF] = useState<any>(data ? { ...data, _edit: data.sku } : {});
+  const [saving, setSaving] = useState(false);
+  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const title: any = {
+    movement: "Nova movimentação",
+    sale: "Venda manual",
+    customer: "Novo cliente",
+    product: data ? "Editar produto" : "Novo produto",
+    campaign: "Nova campanha",
+    creative: "Novo criativo",
+    expense: "Lançar despesa",
+    integration: "Adicionar integração",
+    integrationDetail: data?.name || "Integração",
+    settings: "Configurações",
+    saleDetail: `Pedido ${data?.id || ""}`,
+  };
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave(kind, f);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div
+      className="modalBack"
+      onMouseDown={(e) => {
+        if (e.currentTarget === e.target) close();
+      }}
+    >
+      <div className={`modal ${kind === "integration" ? "modalWide" : ""}`}>
+        <div className="modalHead">
+          <div>
+            <h2>{title[kind]}</h2>
+            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
+          </div>
+          <button className="close" onClick={close}>
+            <X />
+          </button>
+        </div>
+        <div className="modalBody">
+          {kind === "movement" && (
+            <FormGrid>
+              <Select label="Tipo" value={f.type} onChange={(v: any) => set("type", v)} options={["Entrada manual", "Saída manual", "Transferência", "Avaria", "Devolução", "Ajuste de inventário"]} />
+              <Select label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} options={products.map((p: any) => p.sku)} />
+              <Input label="Quantidade" type="number" value={f.qty} onChange={(v: any) => set("qty", v)} />
+              <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
+              <Input label="Referência / motivo" value={f.ref} onChange={(v: any) => set("ref", v)} />
+              <Select label="Origem" value={f.from} onChange={(v: any) => set("from", v)} options={["Central", "Amazon FBA", "Mercado Livre Full", "Shopee"]} />
+              <Select label="Destino" value={f.to} onChange={(v: any) => set("to", v)} options={["Central", "Amazon FBA", "Mercado Livre Full", "Shopee"]} />
+            </FormGrid>
+          )}
+          {kind === "sale" && (
+            <FormGrid>
+              <Input label="Cliente" value={f.customer} onChange={(v: any) => set("customer", v)} />
+              <Select label="Produto" value={f.product} onChange={(v: any) => set("product", v)} options={products.map((p: any) => p.product)} />
+              <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
+              <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={["Manual", "Shopify", "Mercado Livre", "Amazon", "Shopee"]} />
+              <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
+              <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
+            </FormGrid>
+          )}
+          {kind === "customer" && (
+            <FormGrid>
+              <Input label="Nome" value={f.name} onChange={(v: any) => set("name", v)} />
+              <Input label="ID externo" value={f.externalId} onChange={(v: any) => set("externalId", v)} />
+              <Input label="Cidade" value={f.city} onChange={(v: any) => set("city", v)} />
+              <Input label="UF" value={f.state} onChange={(v: any) => set("state", v)} />
+              <Input label="CEP" value={f.zip} onChange={(v: any) => set("zip", v)} />
+            </FormGrid>
+          )}
+          {kind === "product" && (
+            <FormGrid>
+              <Input label="Nome do produto" value={f.product} onChange={(v: any) => set("product", v)} />
+              <Input label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} />
+              <Input label="Quantidade" type="number" value={f.physical} onChange={(v: any) => set("physical", v)} />
+              <Input label="Estoque de segurança" type="number" value={f.safety} onChange={(v: any) => set("safety", v)} />
+              <Input label="Custo unitário" type="number" value={f.cost} onChange={(v: any) => set("cost", v)} />
+              <Input label="Preço de venda" type="number" value={f.price} onChange={(v: any) => set("price", v)} />
+            </FormGrid>
+          )}
+          {kind === "campaign" && (
+            <FormGrid>
+              <Input label="Nome" value={f.name} onChange={(v: any) => set("name", v)} />
+              <Select label="Plataforma" value={f.platform} onChange={(v: any) => set("platform", v)} options={["Meta", "Google Ads", "TikTok Ads"]} />
+              <Input label="Campaign ID" value={f.campaignId} onChange={(v: any) => set("campaignId", v)} />
+              <Input label="Orçamento diário" type="number" value={f.budget} onChange={(v: any) => set("budget", v)} />
+              <Input label="UTM campaign" value={f.utm} onChange={(v: any) => set("utm", v)} />
+              <Select label="Status" value={f.status} onChange={(v: any) => set("status", v)} options={["Ativa", "Pausada", "Rascunho"]} />
+            </FormGrid>
+          )}
+          {kind === "creative" && (
+            <FormGrid>
+              <Input label="Nome do criativo" value={f.name} onChange={(v: any) => set("name", v)} />
+              <Select label="Plataforma" value={f.platform} onChange={(v: any) => set("platform", v)} options={["Meta", "Google Ads", "TikTok Ads"]} />
+              <Input label="Campanha" value={f.campaign} onChange={(v: any) => set("campaign", v)} />
+              <Input label="Ad ID" value={f.adId} onChange={(v: any) => set("adId", v)} />
+              <Input label="URL do criativo" value={f.url} onChange={(v: any) => set("url", v)} />
+              <Select label="Formato" value={f.format} onChange={(v: any) => set("format", v)} options={["Vídeo", "Imagem", "Carrossel"]} />
+            </FormGrid>
+          )}
+          {kind === "expense" && (
+            <FormGrid>
+              <Select label="Categoria" value={f.category} onChange={(v: any) => set("category", v)} options={["Frete", "Mídia", "Taxa", "Imposto", "Software", "Operacional", "Outro"]} />
+              <Input label="Descrição" value={f.desc} onChange={(v: any) => set("desc", v)} />
+              <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
+              <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
+            </FormGrid>
+          )}
+          {kind === "integration" && (
+            <div className="integrationPicker">
+              {integrations.map((i: Integration) => (
+                <button
+                  key={i.name}
+                  onClick={() => {
+                    setF(i);
+                  }}
+                  className={f.name === i.name ? "picked" : ""}
+                >
+                  <PlatformLogo i={i} />
+                  <span>
+                    <b>{i.name}</b>
+                    <small>{i.desc}</small>
+                  </span>
+                  <em>{i.cat}</em>
+                </button>
+              ))}
+            </div>
+          )}
+          {kind === "integrationDetail" && <IntegrationDetail i={data} notify={notify} />} {kind === "saleDetail" && <SaleDetail s={f} set={set} products={products} />}{" "}
+          {kind === "settings" && (
+            <FormGrid>
+              <Input label="Nome da empresa" value={f.company || "Iron Air Brasil"} onChange={(v: any) => set("company", v)} />
+              <Select label="Moeda" value={f.currency || "BRL"} onChange={(v: any) => set("currency", v)} options={["BRL", "USD", "EUR"]} />
+              <Select label="Janela de atribuição" value={f.window || "7 dias"} onChange={(v: any) => set("window", v)} options={["1 dia", "7 dias", "14 dias", "30 dias"]} />
+              <Select label="Modelo" value={f.model || "Último clique pago"} onChange={(v: any) => set("model", v)} options={["Último clique pago", "First touch"]} />
+            </FormGrid>
+          )}
+        </div>
+        {kind !== "integrationDetail" && (
+          <div className="modalFoot">
+            <button className="ghost clickable" onClick={close} disabled={saving}>
+              Cancelar
+            </button>
+            <button className="primary" onClick={save} disabled={saving}>
+              <Save size={15} />
+              {saving ? "Salvando..." : kind === "integration" ? "Adicionar" : "Salvar"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) => void }) {
+  const [tab, setTab] = useState("Configuração");
+  const [show, setShow] = useState(false);
+  const [shop, setShop] = useState("");
+  const [status, setStatus] = useState<any>(null);
+  const statusPath = i.name === "Shopify" ? "/api/integrations/shopify/status" : i.name === "Mercado Livre" ? "/api/integrations/mercadolivre/status" : i.name === "Amazon" ? "/api/integrations/amazon/status" : null;
+  const reloadStatus = () =>
+    statusPath &&
+    fetch(statusPath, { cache: "no-store" })
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => null);
+  useEffect(() => {
+    reloadStatus();
+  }, [statusPath]);
+  const sync = async (body: any) => {
+    const r = await apiJson("/api/integrations/shopify/sync", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    notify(`Sincronizado: ${r.products || 0} produtos, ${r.orders || 0} pedidos`);
+    reloadStatus();
+  };
+  if (i.name === "Shopify") {
+    const connected = status?.status === "CONNECTED";
+    return (
+      <div>
+        <div className="integrationHero">
+          <PlatformLogo i={i} />
+          <div>
+            <h3>Shopify</h3>
+            <p>OAuth por tenant com modo DEV/manual preservado</p>
+          </div>
+          <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
+        </div>
+        <div className="tabs">
+          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+            <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {tab === "Configuração" && (
+          <div className="credentials">
+            <div className="detailGrid">
+              <div className="detailBox">
+                <span>Loja conectada</span>
+                <b>{status?.shopDomain || "Nenhuma"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Modo</span>
+                <b>{status?.mode === "OAUTH" ? "OAuth" : "DEV/manual"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Última sync</span>
+                <b>{status?.lastSyncAt ? fmtDate(status.lastSyncAt) : "Nunca"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Status</span>
+                <b>{connected ? "Ativa" : "Aguardando"}</b>
+              </div>
+            </div>
+            <p className="muted">Tokens e secrets ficam somente no servidor. O modo DEV/manual continua aceitando os webhooks já cadastrados da Iron Air.</p>
+            <label>
+              <span>Loja Shopify</span>
+              <input className="fullInput" value={shop} onChange={(e) => setShop(e.target.value)} placeholder="sua-loja.myshopify.com" />
+            </label>
+            <div className="syncOptions">
+              <button onClick={() => (shop ? (location.href = `/api/integrations/shopify/connect?shop=${encodeURIComponent(shop)}`) : notify("Informe a loja Shopify"))}>
+                <Link2 />
+                Conectar Shopify
+              </button>
+              <button
+                onClick={async () => {
+                  await apiJson("/api/integrations/shopify/disconnect", {
+                    method: "POST",
+                    body: "{}",
+                  });
+                  setStatus({ ...status, status: "DISCONNECTED" });
+                  notify("Shopify desconectado");
+                }}
+              >
+                <Trash2 />
+                Desconectar
+              </button>
+            </div>
+          </div>
+        )}
+        {tab === "Webhooks" && (
+          <div className="webhookBox">
+            <label>Endpoint</label>
+            <div className="copyField">
+              <code>{location.origin}/api/webhooks/shopify</code>
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(`${location.origin}/api/webhooks/shopify`);
+                  notify("Webhook copiado");
+                }}
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+            <div className="eventChecks">
+              {(status?.webhooks?.length
+                ? status.webhooks
+                : [
+                    { topic: "orders/create", status: "PENDING" },
+                    { topic: "orders/paid", status: "PENDING" },
+                    { topic: "orders/updated", status: "PENDING" },
+                    { topic: "orders/cancelled", status: "PENDING" },
+                    { topic: "refunds/create", status: "PENDING" },
+                  ]
+              ).map((w: any) => (
+                <label key={w.topic}>
+                  <input type="checkbox" checked readOnly />
+                  {w.topic} · {w.status}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        {tab === "Sincronização" && (
+          <div className="syncPanel">
+            <h3>Sincronização manual</h3>
+            <p className="muted">Busca dados recentes da loja conectada ou do modo DEV/manual.</p>
+            <div className="syncOptions">
+              <button onClick={() => sync({ products: false, orders: true, days: 90 })}>
+                <RefreshCw />
+                Pedidos
+              </button>
+              <button onClick={() => sync({ products: true, orders: false })}>
+                <PackageCheck />
+                Produtos
+              </button>
+              <button onClick={() => sync({ products: true, orders: true, days: 90 })}>
+                <CircleDollarSign />
+                Sincronizar agora
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (i.name === "Mercado Livre") {
+    const connected = status?.status === "CONNECTED";
+    const mlName = status?.user?.nickname || status?.externalAccountId || "Nenhuma";
+    const syncMl = async () => {
+      await apiJson("/api/integrations/refresh", {
+        method: "POST",
+        body: JSON.stringify({ provider: "Mercado Livre" }),
+      }).catch(() => null);
+      const r = await apiJson("/api/integrations/mercadolivre/sync", {
+        method: "POST",
+        body: JSON.stringify({ days: 365 }),
+      });
+      notify(`Mercado Livre: ${r.orders || 0} pedidos sincronizados`);
+      reloadStatus();
+    };
+    return (
+      <div>
+        <div className="integrationHero">
+          <PlatformLogo i={i} />
+          <div>
+            <h3>Mercado Livre</h3>
+            <p>OAuth por tenant com tokens server-side</p>
+          </div>
+          <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
+        </div>
+        <div className="tabs">
+          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+            <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {tab === "Configuração" && (
+          <div className="credentials">
+            <div className="detailGrid">
+              <div className="detailBox">
+                <span>Conta conectada</span>
+                <b>{mlName}</b>
+              </div>
+              <div className="detailBox">
+                <span>Modo</span>
+                <b>OAuth</b>
+              </div>
+              <div className="detailBox">
+                <span>Última sync</span>
+                <b>{status?.lastSyncAt ? fmtDate(status.lastSyncAt) : "Nunca"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Status</span>
+                <b>{connected ? "Ativa" : "Aguardando"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Refresh token</span>
+                <b>{status?.refreshTokenAvailable ? "Ativo" : "Ausente"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Expira em</span>
+                <b>{status?.expiresAt ? fmtDate(status.expiresAt) : "—"}</b>
+              </div>
+            </div>
+            <p className="muted">Tokens ficam criptografados no servidor. Se o refresh token estiver ausente, reconecte o Mercado Livre uma vez para ativar a renovação automática.</p>
+            <div className="syncOptions">
+              <button onClick={() => (location.href = "/api/integrations/mercadolivre/connect")}>
+                <Link2 />
+                Conectar Mercado Livre
+              </button>
+              <button
+                onClick={async () => {
+                  await apiJson("/api/integrations/mercadolivre/disconnect", {
+                    method: "POST",
+                    body: "{}",
+                  });
+                  setStatus({ ...status, status: "DISCONNECTED" });
+                  notify("Mercado Livre desconectado");
+                }}
+              >
+                <Trash2 />
+                Desconectar
+              </button>
+            </div>
+          </div>
+        )}
+        {tab === "Webhooks" && (
+          <div className="webhookBox">
+            <label>Endpoint</label>
+            <div className="copyField">
+              <code>{location.origin}/api/webhooks/mercadolivre</code>
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(`${location.origin}/api/webhooks/mercadolivre`);
+                  notify("Webhook copiado");
+                }}
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+            <div className="eventChecks">
+              {(status?.webhooks?.length
+                ? status.webhooks
+                : [
+                    { topic: "notifications", status: "PENDING" },
+                    { topic: "orders", status: "PENDING" },
+                  ]
+              ).map((w: any) => (
+                <label key={w.topic}>
+                  <input type="checkbox" checked readOnly />
+                  {w.topic} · {w.status}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        {tab === "Sincronização" && (
+          <div className="syncPanel">
+            <h3>Sincronização manual</h3>
+            <p className="muted">Busca pedidos recentes da conta conectada e atualiza vendas/dashboard.</p>
+            <div className="syncOptions">
+              <button onClick={syncMl}>
+                <RefreshCw />
+                Sincronizar pedidos
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (i.name === "Amazon") {
+    const connected = status?.status === "CONNECTED";
+    const syncAmazon = async () => {
+      await apiJson("/api/integrations/refresh", {
+        method: "POST",
+        body: JSON.stringify({ provider: "Amazon" }),
+      }).catch(() => null);
+      const r = await apiJson("/api/integrations/amazon/sync", {
+        method: "POST",
+        body: JSON.stringify({ days: 365 }),
+      });
+      notify(`Amazon: ${r.orders || 0} pedidos sincronizados`);
+      reloadStatus();
+    };
+    return (
+      <div>
+        <div className="integrationHero">
+          <PlatformLogo i={i} />
+          <div>
+            <h3>Amazon</h3>
+            <p>SP-API com refresh token criptografado por tenant</p>
+          </div>
+          <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
+        </div>
+        <div className="tabs">
+          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+            <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {tab === "Configuração" && (
+          <div className="credentials">
+            <div className="detailGrid">
+              <div className="detailBox">
+                <span>Marketplace</span>
+                <b>{status?.marketplaceId || "Brasil"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Modo</span>
+                <b>SP-API</b>
+              </div>
+              <div className="detailBox">
+                <span>Última sync</span>
+                <b>{status?.lastSyncAt ? fmtDate(status.lastSyncAt) : "Nunca"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Status</span>
+                <b>{connected ? "Ativa" : "Aguardando"}</b>
+              </div>
+              <div className="detailBox">
+                <span>Refresh token</span>
+                <b>{status?.refreshTokenAvailable ? "Ativo" : "Ausente"}</b>
+              </div>
+            </div>
+            <p className="muted">O refresh token da Amazon fica criptografado no servidor. A sincronização usa LWA e SP-API no marketplace Brasil.</p>
+            <div className="syncOptions">
+              <button
+                onClick={async () => {
+                  await apiJson("/api/integrations/amazon/connect", {
+                    method: "POST",
+                    body: "{}",
+                  });
+                  notify("Amazon conectada");
+                  reloadStatus();
+                }}
+              >
+                <Link2 />
+                Conectar Amazon
+              </button>
+              <button
+                onClick={async () => {
+                  await apiJson("/api/integrations/amazon/disconnect", {
+                    method: "POST",
+                    body: "{}",
+                  });
+                  setStatus({ ...status, status: "DISCONNECTED" });
+                  notify("Amazon desconectada");
+                }}
+              >
+                <Trash2 />
+                Desconectar
+              </button>
+            </div>
+          </div>
+        )}
+        {tab === "Webhooks" && (
+          <div className="webhookBox">
+            <label>Notificações</label>
+            <div className="copyField">
+              <code>Amazon SP-API Notifications via Seller Central</code>
+              <button onClick={() => notify("Configure notificações no Seller Central quando liberado")}>
+                <Copy size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+        {tab === "Sincronização" && (
+          <div className="syncPanel">
+            <h3>Sincronização manual</h3>
+            <p className="muted">Renova o token e busca pedidos recentes da conta Amazon autorizada.</p>
+            <div className="syncOptions">
+              <button onClick={syncAmazon}>
+                <RefreshCw />
+                Sincronizar pedidos
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="integrationHero">
+        <PlatformLogo i={i} />
+        <div>
+          <h3>{i.name}</h3>
+          <p>{i.desc}</p>
+        </div>
+        <span className={i.status === "Conectado" ? "status ok" : "status warn"}>{i.status}</span>
+      </div>
+      <div className="tabs">
+        {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+          <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {tab === "Configuração" && (
+        <div className="credentials">
+          <p className="muted">Integração preparada por tenant. Credenciais finais ficam somente no servidor/OAuth.</p>
+          {i.fields.map((x) => (
+            <label key={x}>
+              <span>{x}</span>
+              <div className="secretInput">
+                <input type={show ? "text" : "password"} defaultValue="••••••••••••••••" />
+                <button onClick={() => setShow(!show)}>{show ? "Ocultar" : "Mostrar"}</button>
+              </div>
+            </label>
+          ))}
+          <button className="primary" onClick={() => notify("Fluxo preparado para conexão por tenant")}>
+            <Link2 size={14} />
+            Testar conexão
+          </button>
+        </div>
+      )}
+      {tab === "Webhooks" && (
+        <div className="webhookBox">
+          <label>URL do webhook</label>
+          <div className="copyField">
+            <code>https://seu-dominio.com{i.webhook}</code>
+            <button
+              onClick={() => {
+                navigator.clipboard?.writeText(`https://seu-dominio.com${i.webhook}`);
+                notify("Webhook copiado");
+              }}
+            >
+              <Copy size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+      {tab === "Sincronização" && (
+        <div className="syncPanel">
+          <h3>Sincronização manual</h3>
+          <p className="muted">Cada empresa terá sua própria conexão e fila de sincronização.</p>
+          <div className="syncOptions">
+            <button onClick={() => notify("Sincronização preparada por tenant")}>
+              <RefreshCw />
+              Sincronizar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function SaleDetail({ s, set, products }: any) {
+  const fee = Number(s.feeAmount ?? s.fee ?? 0),
+    freight = Number(s.shippingAmount ?? s.freight ?? 0),
+    gross = Number(s.raw?.grossAmount || 0),
+    discount = Number(s.raw?.discountAmount || 0),
+    rawItem = s.raw?.items?.[0] || {},
+    originalSku = rawItem.sku || s.itemSku || "";
+  const assignable = products.filter((p: any) => String(p.sku || "").match(/(127|220)/i));
+  const selectedSku = String(s.itemSku ?? (assignable.some((p: any) => p.sku === originalSku) ? originalSku : ""));
+  const selectedProduct = products.find((p: any) => p.sku === selectedSku);
+  const qty = Number(rawItem.quantity || 1);
+  const cogs = selectedProduct ? Number(selectedProduct.unitCost ?? selectedProduct.cost ?? 0) * qty : Number(s.cogs || 0);
+  const profit = gross - discount - cogs - fee - freight;
+  return (
+    <div className="detailGrid">
+      <label className="field">
+        <span>Cliente</span>
+        <input value={s.customer || ""} onChange={(e) => set("customer", e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Produto / voltagem</span>
+        <select value={selectedSku} onChange={(e) => set("itemSku", e.target.value)}>
+          <option value="">Sem atribuir{originalSku ? ` (${originalSku})` : ""}</option>
+          {assignable.map((p: any) => (
+            <option key={p.sku} value={p.sku}>
+              {p.sku} · {p.product}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="detailBox">
+        <span>Valor</span>
+        <b>{s.value}</b>
+      </div>
+      <div className="detailBox">
+        <span>Custo dos produtos</span>
+        <b>{money(cogs)}</b>
+      </div>
+      <div className="detailBox">
+        <span>Lucro geral</span>
+        <b>{money(profit)}</b>
+      </div>
+      <div className="detailBox">
+        <span>SKU atual</span>
+        <b>{originalSku || "—"}</b>
+      </div>
+      <label className="field">
+        <span>Taxa da plataforma</span>
+        <input type="number" value={fee} onChange={(e) => set("feeAmount", e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Custo do frete</span>
+        <input type="number" value={freight} onChange={(e) => set("shippingAmount", e.target.value)} />
+      </label>
+      <div className="detailWide">
+        <h3>{s.source}</h3>
+        <p>{s.product}</p>
+      </div>
+    </div>
+  );
+}
+function FormGrid({ children }: { children: any }) {
+  return <div className="formGrid">{children}</div>;
+}
+function Input({ label, value, onChange, type = "text" }: any) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input type={type} value={value ?? ""} onChange={(e) => onChange(e.target.value)} placeholder={label} />
+    </label>
+  );
+}
+function Select({ label, value, onChange, options }: any) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Selecione...</option>
+        {options.map((x: string) => (
+          <option key={x}>{x}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
