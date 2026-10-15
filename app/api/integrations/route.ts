@@ -69,7 +69,14 @@ export async function POST(req:Request){
     const b=await req.json();
     if(!b.provider&&!b.name) return NextResponse.json({ok:false,error:'provider obrigatório'},{status:400});
     const provider=String(b.provider||b.name);
-    if(provider==='Meta Ads') return NextResponse.json({ok:false,error:'Use a conexão autenticada da Meta'},{status:403});
+    if(provider==='Meta Ads') {
+      const integration=await db.integration.upsert({
+        where:{tenantId_provider:{tenantId,provider}},
+        create:{tenantId,provider,status:'DISCONNECTED',mode:'OAUTH',config:{hidden:false}},
+        update:{config:{hidden:false}}
+      });
+      return NextResponse.json({ok:true,id:integration.id});
+    }
     const mode=provider==='Shopify'||provider==='Mercado Livre'?'OAUTH':'DEV_MANUAL';
     const config={category:b.cat,webhook:b.webhook,fields:b.fields||[],hidden:false};
     const integration=await db.integration.upsert({
@@ -103,7 +110,14 @@ export async function DELETE(req:Request){
     const tenantId=await requireTenantAdmin(req);
     const provider=new URL(req.url).searchParams.get('provider');
     if(!provider) return NextResponse.json({ok:false,error:'provider obrigatório'},{status:400});
-    if(provider==='Meta Ads') return NextResponse.json({ok:false,error:'Use a desconexão autenticada da Meta'},{status:403});
+    if(provider==='Meta Ads') {
+      await db.integration.upsert({
+        where:{tenantId_provider:{tenantId,provider}},
+        create:{tenantId,provider,status:'DISCONNECTED',mode:'OAUTH',config:{hidden:true}},
+        update:{status:'DISCONNECTED',accessTokenEncrypted:null,refreshTokenEncrypted:null,scopes:null,metadata:{},externalAccountId:null,lastError:null,lastSyncAt:null,connectedAt:null,disconnectedAt:new Date(),config:{hidden:true}}
+      });
+      return NextResponse.json({ok:true});
+    }
     await db.integration.upsert({
       where:{tenantId_provider:{tenantId,provider}},
       create:{tenantId,provider,status:'DISCONNECTED',mode:'DEV_MANUAL',config:{hidden:true}},

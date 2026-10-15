@@ -2269,16 +2269,19 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
               </div>
               <div className="integrationActions">
                 <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
-                {i.name !== "Meta Ads" && <button
+                <button
                   className="mini danger"
+                  type="button"
+                  title={`Excluir ${i.name}`}
+                  aria-label={`Excluir ${i.name}`}
                   onClick={async (e) => {
                     e.stopPropagation();
-                    setRows((v) => (v || []).filter((r: any) => r.provider !== i.name));
-                    await onDelete(i);
+                    if (i.name === "Meta Ads" && !window.confirm("Excluir Meta Ads? A conta será desconectada e precisará ser conectada novamente.")) return;
+                    if (await onDelete(i)) setRows((v) => (v || []).filter((r: any) => r.provider !== i.name));
                   }}
                 >
                   <Trash2 size={14} />
-                </button>}
+                </button>
               </div>
             </article>
           );
