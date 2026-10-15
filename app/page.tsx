@@ -376,7 +376,7 @@ export default function Home() {
       "Produtos": ["products", "inventory"],
       "Estoque": ["inventory", "orders", "products", "integrations"],
       "Despesas": ["expenses"],
-      "Campanhas": ["campaigns"],
+      "Campanhas": [],
       "Criativos": ["campaigns"],
       "Financeiro": ["expenses"],
       "Integrações": [],
@@ -2003,10 +2003,19 @@ function AdThumbnail({ url, small = false, platform = "meta" }: { url?: string; 
   useEffect(() => setFailed(false), [url]);
   return <span className={`adThumbnail ${small ? "small" : ""}`}>{url && !failed ? <img src={url} alt="Miniatura do anúncio" loading="lazy" onError={() => setFailed(true)} /> : <img src={`/integration-logos/${platform.toLowerCase().replace(" ads", "")}-ads.webp`} alt="Miniatura indisponível" />}</span>;
 }
-function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager = false }: any) {
+function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: inputAds = [], onNew, onDelete, manager = false }: any) {
   const [selectedPlatform, setSelectedPlatform] = useState("Meta");
   const [level, setLevel] = useState("Campanhas");
   const [search, setSearch] = useState("");
+  const [adPeriod, setAdPeriod] = useState("Mês passado");
+  const [adRange, setAdRange] = useState({ from: "", to: "" });
+  const [draftAdRange, setDraftAdRange] = useState({ from: "", to: "" });
+  const [adCalendarMonth, setAdCalendarMonth] = useState(() => todayISO().slice(0, 7));
+  const [adSelectingEnd, setAdSelectingEnd] = useState(false);
+  const [adPeriodOpen, setAdPeriodOpen] = useState(false);
+  const adPeriodRef = useRef<HTMLDivElement>(null);
+  const [scopedData, setScopedData] = useState<{ campaigns: any[]; adsets: any[]; ads: any[] } | null>(null);
+  const [scopedError, setScopedError] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<string[]>([]);
   const [selectedAdsetKeys, setSelectedAdsetKeys] = useState<string[]>([]);
@@ -2015,12 +2024,39 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
   const [metricsError, setMetricsError] = useState("");
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const selectedDates = adPeriod === "Tempo todo" ? null : periodRange(adPeriod, adRange);
+  const dateQuery = selectedDates ? `&from=${encodeURIComponent(selectedDates.from)}&to=${encodeURIComponent(selectedDates.to)}` : "";
+  const dateKey = `${adPeriod}:${selectedDates?.from || ""}:${selectedDates?.to || ""}`;
+  const campaigns = manager ? scopedData?.campaigns || [] : inputCampaigns;
+  const adsets = manager ? scopedData?.adsets || [] : inputAdsets;
+  const ads = manager ? scopedData?.ads || [] : inputAds;
+  useEffect(() => {
+    if (!adPeriodOpen) return;
+    const dismiss = (event: PointerEvent) => { if (!adPeriodRef.current?.contains(event.target as Node)) setAdPeriodOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setAdPeriodOpen(false); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [adPeriodOpen]);
   useEffect(() => {
     if (!manager) return;
     let active = true;
-    try { setColumnWidths(JSON.parse(localStorage.getItem("ironair-ads-column-widths-v1") || "{}")); } catch { /* ignore invalid saved layout */ }
-    apiJson("/api/campaigns/metrics").then((data) => { if (active) setMetaMetrics(data.metrics); }).catch((error) => { if (active) setMetricsError(error.message || "Métricas Meta indisponíveis"); });
+    setScopedData(null);
+    setScopedError("");
+    setMetaMetrics(null);
+    setMetricsError("");
+    setSelectedIds([]);
+    setSelectedCampaignKeys([]);
+    setSelectedAdsetKeys([]);
+    apiJson(`/api/campaigns?hierarchy=1${dateQuery}`).then((data) => {
+      if (active) setScopedData({ campaigns: formatCampaigns(data.campaigns || [], "campaign"), adsets: formatCampaigns(data.adsets || [], "adset"), ads: formatCampaigns(data.ads || [], "ad") });
+    }).catch((error) => { if (active) setScopedError(error.message || "Falha ao carregar campanhas"); });
+    apiJson(`/api/campaigns/metrics?${dateQuery.slice(1)}`).then((data) => { if (active) setMetaMetrics(data.metrics); }).catch((error) => { if (active) setMetricsError(error.message || "Métricas Meta indisponíveis"); });
     return () => { active = false; };
+  }, [manager, dateKey, inputCampaigns]);
+  useEffect(() => {
+    if (!manager) return;
+    try { setColumnWidths(JSON.parse(localStorage.getItem("ironair-ads-column-widths-v1") || "{}")); } catch { /* ignore invalid saved layout */ }
   }, [manager]);
   useEffect(() => {
     if (!manager || level !== "Anúncios" || selectedPlatform !== "Meta") return;
@@ -2123,8 +2159,13 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
         <div className="adPlatformTabs" role="tablist" aria-label="Plataforma de anúncios">
           {platforms.map((name) => <button key={name} role="tab" aria-selected={selectedPlatform === name} className={selectedPlatform === name ? "active" : ""} onClick={() => { setSelectedPlatform(name); setLevel("Campanhas"); setSearch(""); setSelectedIds([]); setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); }}><span className="adPlatformIcon"><img src={`/integration-logos/${name.toLowerCase()}-ads.webp`} alt="" /></span>{name} Ads<span className="adPlatformCount">{campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(name.toLowerCase())).length}</span></button>)}
         </div>
-        <div className="adManagerMetrics"><div><small>Investimento</small><strong>{money(totalSpend)}</strong></div><div><small>Receita atribuída</small><strong>{money(totalRevenue)}</strong></div><div><small>ROAS</small><strong>{totalSpend ? `${(totalRevenue / totalSpend).toFixed(2)}x` : "—"}</strong></div><div><small>Campanhas</small><strong>{platformRows.length}</strong></div></div>
-        <div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => changeLevel(name)}>{name}{name === "Conjuntos" && selectedCampaignKeys.length > 0 && <span className="adPlatformCount">{selectedCampaignKeys.length}</span>}{name === "Anúncios" && selectedAdsetKeys.length > 0 && <span className="adPlatformCount">{selectedAdsetKeys.length}</span>}</button>)}</div>
+        <div className="adManagerMetrics"><div><small>Investimento</small><strong>{scopedData ? money(totalSpend) : "—"}</strong></div><div><small>Receita atribuída</small><strong>{scopedData ? money(totalRevenue) : "—"}</strong></div><div><small>ROAS</small><strong>{scopedData && totalSpend ? `${(totalRevenue / totalSpend).toFixed(2)}x` : "—"}</strong></div><div><small>Campanhas</small><strong>{scopedData ? platformRows.length : "—"}</strong></div></div>
+        <div className="adLevelBar"><div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => changeLevel(name)}>{name}{name === "Conjuntos" && selectedCampaignKeys.length > 0 && <span className="adPlatformCount">{selectedCampaignKeys.length}</span>}{name === "Anúncios" && selectedAdsetKeys.length > 0 && <span className="adPlatformCount">{selectedAdsetKeys.length}</span>}</button>)}</div>
+          <div className="adDateFilter" ref={adPeriodRef}>
+            <button type="button" className="adDateTrigger" aria-label="Filtrar campanhas por data" aria-expanded={adPeriodOpen} onClick={() => { setDraftAdRange(adPeriod === "Personalizado" ? adRange : { from: "", to: "" }); setAdCalendarMonth((selectedDates?.from || todayISO()).slice(0, 7)); setAdSelectingEnd(false); setAdPeriodOpen((open) => !open); }}><CalendarDays size={15} /><span>{adPeriod === "Tempo todo" ? "Tempo todo" : `${adPeriod}: ${formatDashboardDate(selectedDates!.from)} a ${formatDashboardDate(selectedDates!.to)}`}</span><ChevronDown size={14} /></button>
+            {adPeriodOpen && <div className="adDatePopover"><div className="adDatePresets">{periodOptions.map((option) => <button type="button" key={option} className={adPeriod === option ? "active" : ""} onClick={() => { setAdPeriod(option); setAdPeriodOpen(false); }}>{option}</button>)}</div><div className="adDateCalendar"><div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setAdCalendarMonth(shiftCalendarMonth(adCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(adCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setAdCalendarMonth(shiftCalendarMonth(adCalendarMonth, 1))}>→</button></div><div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(adCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === draftAdRange.from || day === draftAdRange.to ? "selected" : ""} ${draftAdRange.from && draftAdRange.to && day > draftAdRange.from && day < draftAdRange.to ? "inRange" : ""}`} onClick={() => { if (!adSelectingEnd || (draftAdRange.from && day < draftAdRange.from)) { setDraftAdRange({ from: day, to: "" }); setAdSelectingEnd(true); } else { setDraftAdRange((range) => ({ ...range, to: day })); setAdSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div><small>{draftAdRange.from ? `${formatDashboardDate(draftAdRange.from)} → ${draftAdRange.to ? formatDashboardDate(draftAdRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small><button type="button" className="primary" disabled={!draftAdRange.from || !draftAdRange.to} onClick={() => { setAdRange(draftAdRange); setAdPeriod("Personalizado"); setAdPeriodOpen(false); }}>Aplicar período</button></div></div>}
+          </div>
+        </div>
       </>}
       <div className="adManagerToolbar"><div className="adToolbarFilters"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : `Buscar ${level.toLowerCase()}`} value={search} onChange={(event) => setSearch(event.target.value)} /></label>{manager && <div className="adStatusFilter" role="group" aria-label="Filtrar por veiculação"><button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>Todos</button><button type="button" className={statusFilter === "active" ? "active" : ""} aria-pressed={statusFilter === "active"} onClick={() => setStatusFilter("active")}>Ativos</button></div>}</div><div className="adSelectionInfo">{manager && selectedVisible.length > 0 && <><b>{selectedVisible.length} selecionados</b><button type="button" onClick={() => updateSelection([])}>Limpar</button></>}{manager && (level === "Conjuntos" || level === "Anúncios") && selectedCampaignKeys.length > 0 && <button type="button" onClick={() => { setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar campanhas</button>}{manager && level === "Anúncios" && selectedAdsetKeys.length > 0 && <button type="button" onClick={() => { setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar conjuntos</button>}<span>{visibleRows.length} {visibleCountLabel[visibleRows.length === 1 ? 0 : 1]}</span></div></div>
       {manager && <>
@@ -2134,7 +2175,7 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
             <colgroup>{metricColumns.map((col) => <col key={col.key} style={{ width: columnWidths[col.key] || col.width }} />)}</colgroup>
             <thead><tr>{metricColumns.map((col) => <th key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={col.title}>{col.key === "select" ? <input type="checkbox" aria-label="Selecionar todos os itens visíveis" checked={visibleIds.length > 0 && selectedVisible.length === visibleIds.length} onChange={(event) => updateSelection(event.target.checked ? [...new Set([...selectedIds, ...visibleIds])] : selectedIds.filter((id) => !visibleIds.includes(id)))} /> : col.title}{col.key !== "select" && <span className="adResizeHandle" role="separator" aria-label={`Ajustar largura: ${col.title}`} onPointerDown={(event) => beginResize(event, col.key, col.width)} />}</th>)}</tr></thead>
             <tbody>{visibleRows.map((c: any) => <tr key={rowId(c)} className={selectedIds.includes(rowId(c)) ? "adRowSelected" : ""}>{metricColumns.map((col) => <td key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={typeof col.render(c) === "string" ? col.render(c) : undefined}>{col.render(c)}</td>)}</tr>)}
-              {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={metricColumns.length}>{search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`}</td></tr>}
+              {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={metricColumns.length}>{scopedError || (!scopedData ? "Carregando dados do período…" : search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`)}</td></tr>}
             </tbody>
           </table>
         </div>

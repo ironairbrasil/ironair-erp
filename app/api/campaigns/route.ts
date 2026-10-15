@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
+import { adDateRange } from '@/lib/ad-date-range';
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
+  const dateRange=adDateRange(req);
   const rows=await db.adSpendDaily.findMany({where:{tenantId},select:{date:true,platform:true,accountId:true,campaignId:true,campaignName:true,adsetId:true,adsetName:true,adId:true,adName:true,spend:true,clicks:true,impressions:true}});
-  const [attrs,metaIntegration]=await Promise.all([db.attribution.findMany({where:{tenantId},include:{order:true}}),db.integration.findUnique({where:{tenantId_provider:{tenantId,provider:'Meta Ads'}},select:{metadata:true}})]);
+  const [attrs,metaIntegration]=await Promise.all([db.attribution.findMany({where:{tenantId,...(dateRange?{order:{status:'PAID' as const,paidAt:{gte:new Date(`${dateRange.from}T00:00:00.000-03:00`),lte:new Date(`${dateRange.to}T23:59:59.999-03:00`)}}}:{})},include:{order:true}}),db.integration.findUnique({where:{tenantId_provider:{tenantId,provider:'Meta Ads'}},select:{metadata:true}})]);
   const metaMetadata=metaIntegration?.metadata&&typeof metaIntegration.metadata==='object'&&!Array.isArray(metaIntegration.metadata)?metaIntegration.metadata as Record<string,unknown>:{};
   const statuses=metaMetadata.entityStatuses&&typeof metaMetadata.entityStatuses==='object'&&!Array.isArray(metaMetadata.entityStatuses)?metaMetadata.entityStatuses as Record<string,string>:{};
   type Summary={platform:string;accountId:string;campaignId:string;campaignName:string;adsetId?:string;adsetName?:string;adId?:string;adName?:string;spend:number;recentSpend:number;clicks:number;impressions:number;sales:number;revenue:number;cpa:number|null;roas:number|null};
@@ -16,7 +18,7 @@ export async function GET(req:Request){
       if(level==='adset'&&!row.adsetId||level==='ad'&&!row.adId)continue;
       const key=[row.platform,row.accountId,row.campaignId,level==='campaign'?'':row.adsetId||'',level==='ad'?row.adId||'':''].join('::');
       const current=grouped.get(key)||{platform:row.platform,accountId:row.accountId,campaignId:row.campaignId,campaignName:row.campaignName,adsetId:row.adsetId||undefined,adsetName:row.adsetName||undefined,adId:row.adId||undefined,adName:row.adName||undefined,spend:0,recentSpend:0,clicks:0,impressions:0,sales:0,revenue:0,cpa:null,roas:null};
-      current.spend+=Number(row.spend);current.clicks+=row.clicks;current.impressions+=row.impressions;
+      if(!dateRange||row.date>=dateRange.start&&row.date<=dateRange.end){current.spend+=Number(row.spend);current.clicks+=row.clicks;current.impressions+=row.impressions;}
       if(row.date>=recentSince)current.recentSpend+=Number(row.spend);
       grouped.set(key,current);
     }

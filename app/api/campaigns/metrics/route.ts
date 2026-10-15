@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 import { currentMetaToken, metaGraphVersion } from '@/lib/meta-token';
+import { adDateRange } from '@/lib/ad-date-range';
 
 type Action = { action_type: string; value: string };
 type Insight = { account_id?: string; campaign_id?: string; adset_id?: string; ad_id?: string; reach?: string; frequency?: string; impressions?: string; spend?: string; inline_link_clicks?: string; actions?: Action[]; action_values?: Action[] };
@@ -25,10 +26,11 @@ export async function GET(req: Request) {
     if (!integration?.accessTokenEncrypted || !integration.externalAccountId || integration.status !== 'CONNECTED') return NextResponse.json({ metrics: { accounts: {}, campaigns: {}, adsets: {}, ads: {} } });
     const account = integration.externalAccountId.replace(/^act_/, '');
     if (!/^\d+$/.test(account)) throw new Error('Conta Meta inválida');
-    const first = await db.adSpendDaily.findFirst({ where: { tenantId, platform: 'Meta', accountId: account }, orderBy: { date: 'asc' }, select: { date: true } });
-    if (!first) return NextResponse.json({ metrics: { accounts: {}, campaigns: {}, adsets: {}, ads: {} } });
-    const since = first.date.toISOString().slice(0, 10);
-    const until = new Date().toISOString().slice(0, 10);
+    const dateRange = adDateRange(req);
+    const first = dateRange ? null : await db.adSpendDaily.findFirst({ where: { tenantId, platform: 'Meta', accountId: account }, orderBy: { date: 'asc' }, select: { date: true } });
+    if (!dateRange && !first) return NextResponse.json({ metrics: { accounts: {}, campaigns: {}, adsets: {}, ads: {} } });
+    const since = dateRange?.from || first!.date.toISOString().slice(0, 10);
+    const until = dateRange?.to || new Date().toISOString().slice(0, 10);
     const cacheKey = `${tenantId}:${account}:${since}:${until}`;
     const cached = cache.get(cacheKey);
     if (cached && cached.expires > Date.now()) return NextResponse.json(cached.data);
