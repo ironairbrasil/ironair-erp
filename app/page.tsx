@@ -178,6 +178,7 @@ export default function Home() {
   const [calendarMonth, setCalendarMonth] = useState(() => todayISO().slice(0, 7));
   const [selectingRangeEnd, setSelectingRangeEnd] = useState(false);
   const dashboardCache = useRef(new Map<string, any>());
+  const dashboardPending = useRef(new Map<string, Promise<any>>());
   const dashboardRequest = useRef(0);
   const syncingRef = useRef(false);
   const rangeEffectReady = useRef(false);
@@ -328,18 +329,16 @@ export default function Home() {
     const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
     const key = dashboardKey(p, r, selectedPlatform, selectedProduct);
     const pr = periodRange(p, r, firstSaleDate);
-    const dash = await api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}`);
+    let pending = dashboardPending.current.get(key);
+    if (!pending) {
+      pending = api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}`);
+      dashboardPending.current.set(key, pending);
+      void pending.finally(() => { if (dashboardPending.current.get(key) === pending) dashboardPending.current.delete(key); }).catch(() => undefined);
+    }
+    const dash = await pending;
     dashboardCache.current.set(key, dash);
     if (request === dashboardRequest.current) applyDashboard(dash);
     return dash;
-  };
-  const buildAndCacheDashboards = (orders: any[], balances: any[]) => {
-    const { period: selectedPeriod, range: selectedRange, platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
-    const filteredOrders = orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)));
-    dashboardCache.current.clear();
-    for (const p of periodOptions) dashboardCache.current.set(dashboardKey(p, selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, p, selectedRange));
-    dashboardCache.current.set(dashboardKey("Personalizado", selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, "Personalizado", selectedRange));
-    applyDashboard(dashboardCache.current.get(dashboardKey(selectedPeriod, selectedRange, selectedPlatform, selectedProduct)) || dashboardCache.current.get(dashboardKey("Hoje", selectedRange, selectedPlatform, selectedProduct)));
   };
   const loadData = async (showLoading = true) => {
     const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
@@ -358,8 +357,7 @@ export default function Home() {
       setMovements(formatMovements(inventory.movements || [], inventory.balances || []));
       setCustomers(customerRows || []);
       setCampaigns(formatCampaigns(campaignRows));
-      buildAndCacheDashboards(orders || [], inventory.balances || []);
-      await loadDashboardFromApi().catch(() => null);
+      if (view === "Visão Geral") void loadDashboardFromApi().catch(() => null);
     } catch (e: any) {
       if (view !== "Integrações" && showLoading) notify(`Banco indisponível: ${e.message}`);
     } finally {
@@ -492,12 +490,7 @@ export default function Home() {
     }
     const cached = dashboardCache.current.get(dashboardKey());
     if (cached) applyDashboard(cached);
-    loadDashboardFromApi(period, range).catch(() => {
-      if (!orderRows.length && !inventoryRows.length) return;
-      const dash = buildDashboard(scopedOrders(orderRows), inventoryRows, period, range);
-      dashboardCache.current.set(dashboardKey(period, range), dash);
-      applyDashboard(dash);
-    });
+    loadDashboardFromApi(period, range).catch(() => notify("Não foi possível atualizar o dashboard"));
   }, [period, range.from, range.to, platform, product]);
   const open = (kind: ModalKind, data?: any) => {
     setSelected(data || null);
@@ -706,10 +699,10 @@ export default function Home() {
           </>
         )}{" "}
         {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} />}
-        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />}{" "}
+        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
         {view === "Performance" && (
           <>
-            <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />
+            <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />
             <ChannelTable rows={channelRows} />
           </>
         )}{" "}
@@ -1150,7 +1143,7 @@ function dashboardKpis(d: any) {
       value: Number(d?.media || 0) > 0 ? multiplier(revenue / Number(d.media)) : "—",
       delta: "Faturamento / investimento em anúncios",
     },
-  ];
+  ].map((card) => d ? card : { ...card, value: "—", delta: "Carregando dados..." });
 }
 function chartBars(rows: any[] = []) {
   if (!rows.length) return Array.from({ length: 14 }, () => ({ revenue: 2, profit: 2 }));
@@ -1424,8 +1417,14 @@ function formatMovements(rows: any[], balances: any[] = []) {
 function formatCampaigns(rows: any[]) {
   return rows.map((c) => ({
     campaignId: c.campaignId,
+    accountId: c.accountId,
     name: c.campaignName,
     platform: c.platform,
+    spendValue: Number(c.spend || 0),
+    revenueValue: Number(c.revenue || 0),
+    clicks: Number(c.clicks || 0),
+    impressions: Number(c.impressions || 0),
+    manual: c.accountId === "manual",
     spend: money(c.spend || 0),
     sales: c.sales || 0,
     revenue: money(c.revenue || 0),
@@ -1969,57 +1968,82 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     </div>
   );
 }
-function Campaigns({ campaigns, onNew, onDelete }: any) {
+function Campaigns({ campaigns, onNew, onDelete, manager = false }: any) {
+  const [selectedPlatform, setSelectedPlatform] = useState("Meta");
+  const [level, setLevel] = useState("Campanhas");
+  const [search, setSearch] = useState("");
+  const platforms = ["Meta", "Google", "TikTok"];
+  const levels = ["Contas", "Campanhas", "Conjuntos", "Anúncios"];
+  const platformRows = campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase()));
+  const accountRows = Array.from(new Map(platformRows.map((c: any) => [c.accountId, c.accountId])).values()).filter(Boolean).map((accountId: any) => {
+    const rows = platformRows.filter((c: any) => c.accountId === accountId);
+    return { campaignId: accountId, accountId, name: accountId === "manual" ? "Campanhas manuais" : accountId, spendValue: rows.reduce((sum: number, c: any) => sum + c.spendValue, 0), revenueValue: rows.reduce((sum: number, c: any) => sum + c.revenueValue, 0), sales: rows.reduce((sum: number, c: any) => sum + c.sales, 0), clicks: rows.reduce((sum: number, c: any) => sum + c.clicks, 0), impressions: rows.reduce((sum: number, c: any) => sum + c.impressions, 0), children: rows.length };
+  });
+  const visibleRows = (manager ? level === "Contas" ? accountRows : level === "Campanhas" ? platformRows : [] : campaigns).filter((c: any) => `${c.name} ${c.accountId || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const totalSpend = platformRows.reduce((sum: number, c: any) => sum + c.spendValue, 0);
+  const totalRevenue = platformRows.reduce((sum: number, c: any) => sum + c.revenueValue, 0);
   return (
-    <article className="card tableCard">
+    <article className={`card tableCard ${manager ? "adManager" : ""}`}>
       <div className="sectionHead">
         <div>
-          <h2>Campanhas</h2>
-          <p>Visão estilo UTMify: mídia → venda → lucro</p>
+          <h2>{manager ? "Gerenciador de anúncios" : "Campanhas"}</h2>
+          <p>{manager ? "Contas, campanhas, conjuntos e anúncios por plataforma" : "Investimento, vendas e retorno por campanha"}</p>
         </div>
         <div className="rowActions">
-          <span className="pill">Meta + Google</span>
           <button className="primary" onClick={onNew}>
             <Plus size={14} />
-            Nova campanha
+            Campanha manual
           </button>
         </div>
       </div>
+      {manager && <>
+        <div className="adPlatformTabs" role="tablist" aria-label="Plataforma de anúncios">
+          {platforms.map((name) => <button key={name} role="tab" aria-selected={selectedPlatform === name} className={selectedPlatform === name ? "active" : ""} onClick={() => { setSelectedPlatform(name); setLevel("Campanhas"); setSearch(""); }}><span className={`adPlatformIcon adPlatformIcon${name}`}>{name === "Meta" ? "∞" : name === "Google" ? "G" : "♪"}</span>{name} Ads<span className="adPlatformCount">{campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(name.toLowerCase())).length}</span></button>)}
+        </div>
+        <div className="adManagerMetrics"><div><small>Investimento</small><strong>{money(totalSpend)}</strong></div><div><small>Receita atribuída</small><strong>{money(totalRevenue)}</strong></div><div><small>ROAS</small><strong>{totalSpend ? `${(totalRevenue / totalSpend).toFixed(2)}x` : "—"}</strong></div><div><small>Campanhas</small><strong>{platformRows.length}</strong></div></div>
+        <div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => setLevel(name)}>{name}</button>)}</div>
+      </>}
+      <div className="adManagerToolbar"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : "Buscar campanha"} value={search} onChange={(event) => setSearch(event.target.value)} /></label><span>{visibleRows.length} {level === "Contas" && manager ? "contas" : level === "Campanhas" || !manager ? "campanhas" : level.toLowerCase()}</span></div>
       <div className="tableWrap">
         <table>
           <thead>
             <tr>
-              <th>Campanha</th>
-              <th>Plataforma</th>
+              <th>{manager && level === "Contas" ? "Conta de anúncios" : "Campanha"}</th>
+              {!manager && <th>Plataforma</th>}
+              {manager && <th>{level === "Contas" ? "Campanhas" : "Conta"}</th>}
+              {manager && <th>Impressões</th>}
+              {manager && <th>Cliques</th>}
               <th>Investimento</th>
               <th>Vendas</th>
               <th>Receita</th>
               <th>CPA</th>
               <th>ROAS</th>
-              <th>Lucro</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {campaigns.map((c: any) => (
-              <tr key={c.campaignId || c.name}>
+            {visibleRows.map((c: any) => (
+              <tr key={`${c.platform || selectedPlatform}-${c.accountId}-${c.campaignId || c.name}`}>
                 <td>
-                  <b>{c.name}</b>
+                  {manager && level === "Contas" ? <button className="adAccountLink" onClick={() => { setSearch(c.accountId); setLevel("Campanhas"); }}>{c.name}<ArrowRight size={14} /></button> : <b>{c.name}</b>}
                 </td>
-                <td>{c.platform}</td>
-                <td>{c.spend}</td>
+                {!manager && <td>{c.platform}</td>}
+                {manager && <td>{level === "Contas" ? c.children : c.accountId}</td>}
+                {manager && <td>{Number(c.impressions || 0).toLocaleString("pt-BR")}</td>}
+                {manager && <td>{Number(c.clicks || 0).toLocaleString("pt-BR")}</td>}
+                <td>{money(c.spendValue)}</td>
                 <td>{c.sales}</td>
-                <td>{c.revenue}</td>
-                <td>{c.cpa}</td>
-                <td>{c.roas}</td>
-                <td className="positive">{c.profit}</td>
+                <td>{money(c.revenueValue)}</td>
+                <td>{c.sales ? money(c.spendValue / c.sales) : "—"}</td>
+                <td>{c.spendValue ? `${(c.revenueValue / c.spendValue).toFixed(2)}x` : "—"}</td>
                 <td>
-                  <button className="mini danger" onClick={() => onDelete(c)}>
+                  {c.manual && <button className="mini danger" aria-label={`Excluir ${c.name}`} onClick={() => onDelete(c)}>
                     <Trash2 size={14} />
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}
+            {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={manager ? 10 : 7}>{manager && (level === "Conjuntos" || level === "Anúncios") ? `Ainda não há dados de ${level.toLowerCase()} sincronizados para ${selectedPlatform} Ads. A integração atual importa métricas por campanha.` : search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${selectedPlatform} Ads disponível.`}</td></tr>}
           </tbody>
         </table>
       </div>
