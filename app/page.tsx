@@ -565,6 +565,9 @@ export default function Home() {
               <small title={sessionInfo?.email}>{sessionInfo?.email || "Carregando conta..."}</small>
             </div>
           </div>
+          {sessionInfo && sessionInfo.tenants.length > 1 && <select className="accountTenantSelect" aria-label="Empresa ativa" value={sessionInfo.activeTenantId || ''} onChange={async event => { await apiJson('/api/auth/select-tenant', { method: 'POST', body: JSON.stringify({ tenantId: event.target.value }) }); location.reload(); }}>
+            {sessionInfo.tenants.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+          </select>}
           <button type="button" className="accountLogout" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; }}><LogOut size={15} />Sair da conta</button>
         </div>
       </aside>
@@ -578,9 +581,6 @@ export default function Home() {
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden} title={dashboardHidden ? "Mostrar dados" : "Ocultar dados"}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button>}
           </div>
           <div className="topbarActions">
-            {sessionInfo && <select aria-label="Empresa ativa" value={sessionInfo.activeTenantId || ''} onChange={async event => { await apiJson('/api/auth/select-tenant', { method: 'POST', body: JSON.stringify({ tenantId: event.target.value }) }); location.reload(); }} style={{ maxWidth: 155, background: '#101d27', color: '#dce9ee', border: '1px solid #2b404d', borderRadius: 8, padding: 7 }}>
-              {sessionInfo.tenants.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
-            </select>}
             <div className="notificationMenu" ref={notificationRef}>
               <button type="button" className="notificationTrigger" aria-label="Notificações" aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={17} />{stockAlerts.length > 0 && <span className="notificationCount">{stockAlerts.length}</span>}</button>
               {notificationOpen && <div className="notificationPopover">
