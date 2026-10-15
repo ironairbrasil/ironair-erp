@@ -12,6 +12,11 @@ const typeMap:Record<string,any>={
   'Ajuste de inventário':'ADJUSTMENT'
 };
 
+function movementDate(value:string|Date|undefined){
+  if(typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T12:00:00-03:00`;
+  return value;
+}
+
 export async function POST(req:Request){
   try{
     const tenantId=await getTenantId(req);
@@ -22,7 +27,8 @@ export async function POST(req:Request){
     const destination=String(body.warehouseCode||'CENTRAL').replaceAll(' ','_').toUpperCase();
     if(type==='TRANSFER_OUT'&&destination==='CENTRAL') throw new Error('Escolha Amazon FBA ou Mercado Livre Full para a transferência');
     const idempotencyKey=body.idempotencyKey||`manual:${body.sku}:${type}:${body.reference||body.ref||Date.now()}:${quantity}`;
-    const movement=(destination==='AMAZON_FBA'||destination==='ML_FULL')?await transferStock({tenantId,sku:String(body.sku||''),toWarehouseCode:destination,quantity:rawQuantity,reference:body.reference||body.ref,createdAt:body.date||body.createdAt,idempotencyKey}):await moveStock({
+    const createdAt=movementDate(body.date||body.createdAt);
+    const movement=(destination==='AMAZON_FBA'||destination==='ML_FULL')?await transferStock({tenantId,sku:String(body.sku||''),toWarehouseCode:destination,quantity:rawQuantity,reference:body.reference||body.ref,createdAt,idempotencyKey}):await moveStock({
       tenantId,
       sku:String(body.sku||''),
       warehouseCode:destination,
@@ -30,7 +36,7 @@ export async function POST(req:Request){
       type,
       reference:body.reference||body.ref,
       note:body.note,
-      createdAt:body.date||body.createdAt,
+      createdAt,
       idempotencyKey
     });
     await auditLog({

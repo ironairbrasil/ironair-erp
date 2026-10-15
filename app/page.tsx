@@ -150,6 +150,16 @@ export default function Home() {
     to: todayISO(),
   }));
   const [filterModal, setFilterModal] = useState<"period" | "platform" | "product" | null>(null);
+  useEffect(() => {
+    if (!filterModal) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target as Element).closest(".dashboardFilter.exportMenu")) setFilterModal(null);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setFilterModal(null); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [filterModal]);
   const [calendarMonth, setCalendarMonth] = useState(() => todayISO().slice(0, 7));
   const [selectingRangeEnd, setSelectingRangeEnd] = useState(false);
   const dashboardCache = useRef(new Map<string, any>());
@@ -917,12 +927,25 @@ function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje
 function fmtDate(value: any) {
   return value
     ? new Date(value).toLocaleString("pt-BR", {
+        timeZone: "America/Sao_Paulo",
         day: "2-digit",
         month: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
       })
     : "—";
+}
+function fmtMovementDate(movement: any) {
+  const value = movement?.createdAt;
+  if (movement?.source === "MANUAL" && typeof value === "string") {
+    const date = new Date(value);
+    if (date.getUTCHours() === 0 && date.getUTCMinutes() === 0 && date.getUTCSeconds() === 0) {
+      const [, month, day] = value.match(/^(\d{4})-(\d{2})-(\d{2})/) || [];
+      if (day && month) return `${day}/${month}`;
+    }
+    return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Sao_Paulo" });
+  }
+  return fmtDate(value);
 }
 function dashboardKpis(d: any) {
   const revenue = Number(d?.revenue || 0);
@@ -1173,7 +1196,7 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
   const fba = new Map<string, any>();
   const sold = new Map<string, any>();
   for (const m of movements || []) {
-    if (m.warehouseCode === "AMAZON_FBA" && Number(m.quantity) > 0 && !fba.has(m.sku)) fba.set(m.sku, { date: fmtDate(m.createdAt), qty: m.quantity });
+    if (m.warehouseCode === "AMAZON_FBA" && Number(m.quantity) > 0 && !fba.has(m.sku)) fba.set(m.sku, { date: fmtMovementDate(m), qty: m.quantity });
     if (!orders && m.type === "SALE" && Number(m.quantity) < 0) {
       const bucket = sold.get(m.sku) || {
         shopify: 0,
@@ -1253,7 +1276,7 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
 }
 function formatMovements(rows: any[]) {
   return (rows || []).map((m) => ({
-    date: fmtDate(m.createdAt),
+    date: fmtMovementDate(m),
     sku: m.sku,
     type: m.type,
     qty: m.quantity,
@@ -1527,6 +1550,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const [to, setTo] = useState("");
   const [salesPeriod, setSalesPeriod] = useState("Tempo todo");
   const [salesPeriodOpen, setSalesPeriodOpen] = useState(false);
+  const salesPeriodRef = useRef<HTMLDivElement>(null);
   const [salesDraftRange, setSalesDraftRange] = useState({ from: "", to: "" });
   const [salesCalendarMonth, setSalesCalendarMonth] = useState(todayISO().slice(0, 7));
   const [salesSelectingEnd, setSalesSelectingEnd] = useState(false);
@@ -1534,6 +1558,21 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!salesPeriodOpen && !exportOpen) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!salesPeriodRef.current?.contains(target)) setSalesPeriodOpen(false);
+      if (!exportMenuRef.current?.contains(target)) setExportOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setSalesPeriodOpen(false); setExportOpen(false); }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [salesPeriodOpen, exportOpen]);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ kind: "single"; sale: any } | { kind: "many"; sales: any[] } | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -1608,7 +1647,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
             <Trash2 size={14} />
             Excluir selecionados
           </button>
-          <div className="exportMenu">
+          <div className="exportMenu" ref={exportMenuRef}>
             <button className="ghost clickable" disabled={!filtered.length} onClick={() => setExportOpen((v) => !v)}>
               <Download size={14} /> Exportar
             </button>
@@ -1652,7 +1691,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
         <div className="mobileSalesFilterHead"><b>Filtros</b><button className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setMobileFiltersOpen(false)}><X size={20} /></button></div>
         <div className="salesSelectField"><Filter size={14} /><AnchoredSelect value={status} onChange={setStatus} options={["Todos", "PAID", "CANCELLED", "PENDING", "REFUNDED", "CHARGEBACK"]} compact /></div>
         <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
-        <div className="salesPeriodControl">
+        <div className="salesPeriodControl" ref={salesPeriodRef}>
           <button type="button" className="salesPeriodTrigger" aria-expanded={salesPeriodOpen} onClick={() => { setSalesPeriodOpen((open) => !open); setSalesCalendarMonth((from || todayISO()).slice(0, 7)); setSalesDraftRange({ from: salesPeriod === "Personalizado" ? from : "", to: salesPeriod === "Personalizado" ? to : "" }); setSalesSelectingEnd(false); }}><span>Período</span><b>{salesPeriod}</b><ChevronDown size={15} /></button>
           {salesPeriodOpen && <div className="salesPeriodOptions">
             {periodOptions.map((option) => <button type="button" key={option} className={salesPeriod === option ? "active" : ""} onClick={() => { const dates = periodRange(option, { from: "", to: "" }); setSalesPeriod(option); setFrom(option === "Tempo todo" ? "" : dates.from); setTo(option === "Tempo todo" ? "" : dates.to); setSalesPeriodOpen(false); }}>{option}</button>)}
@@ -2076,11 +2115,8 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
           Criar nova integração
         </button>
       </div>
-      {(["ADS", "Plataforma de vendas", "Banco", "Outros"] as const).map((category) => {
-        const group = visible.filter((i) => i.cat === category);
-        return <section className="integrationGroup" key={category}><h3>{category}</h3><div className="integrationGrid">
-        {!group.length && <p className="integrationEmpty">Nenhuma integração nesta categoria.</p>}
-        {group.map((i) => {
+      <div className="integrationGrid">
+        {visible.map((i) => {
           const status = i.status;
           return (
             <article className="card integration integrationClickable" key={i.name} onClick={() => onOpen({ ...i, status })}>
@@ -2088,7 +2124,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
               <div className="integrationInfo">
                 <b>{i.name}</b>
                 <small>{i.desc}</small>
-                <em>{i.cat}</em>
+                <span className="integrationCategoryBadge">{i.cat}</span>
               </div>
               <div className="integrationActions">
                 <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
@@ -2106,7 +2142,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
             </article>
           );
         })}
-      </div></section>;})}
+      </div>
     </>
   );
 }
