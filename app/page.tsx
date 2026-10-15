@@ -314,28 +314,38 @@ export default function Home() {
     setTimeout(() => setToast(""), m.length > 90 ? 8000 : 3000);
   };
   const api = apiJson;
-  const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product) => `${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}`;
+  const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product) => `${todayISO()}:${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}`;
+  const dashboardStorageKey = (key: string) => `ironair-dashboard-cache-v1:${sessionInfo?.activeTenantId}:${key}`;
   const applyDashboard = (dash: any) => {
     setDashboard(dash);
     setChannelRows(formatChannels(dash.channels || []));
   };
-  const loadDashboardFromApi = async (p = dashboardSelection.current.period, r = dashboardSelection.current.range) => {
+  useEffect(() => {
+    if (!sessionInfo?.activeTenantId || dashboard) return;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(dashboardStorageKey(dashboardKey())) || "null");
+      if (saved?.at && Date.now() - saved.at < 5 * 60_000 && saved.data) applyDashboard(saved.data);
+    } catch { /* Ignore unavailable or invalid browser storage. */ }
+  }, [sessionInfo?.activeTenantId]);
+  const loadDashboardFromApi = async (p = dashboardSelection.current.period, r = dashboardSelection.current.range, fresh = false) => {
     const request = ++dashboardRequest.current;
     const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
     const key = dashboardKey(p, r, selectedPlatform, selectedProduct);
+    const pendingKey = fresh ? `${key}:fresh` : key;
     const pr = periodRange(p, r, firstSaleDate);
-    let pending = dashboardPending.current.get(key);
+    let pending = dashboardPending.current.get(pendingKey);
     if (!pending) {
-      pending = api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}`);
-      dashboardPending.current.set(key, pending);
-      void pending.finally(() => { if (dashboardPending.current.get(key) === pending) dashboardPending.current.delete(key); }).catch(() => undefined);
+      pending = api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}${fresh ? "&fresh=1" : ""}`);
+      dashboardPending.current.set(pendingKey, pending);
+      void pending.finally(() => { if (dashboardPending.current.get(pendingKey) === pending) dashboardPending.current.delete(pendingKey); }).catch(() => undefined);
     }
     const dash = await pending;
     dashboardCache.current.set(key, dash);
+    if (sessionInfo?.activeTenantId) try { sessionStorage.setItem(dashboardStorageKey(key), JSON.stringify({ at: Date.now(), data: dash })); } catch { /* Keep the in-memory dashboard. */ }
     if (request === dashboardRequest.current) applyDashboard(dash);
     return dash;
   };
-  const loadData = async (showLoading = true, scope: "all" | "view" = "all") => {
+  const loadData = async (showLoading = true, scope: "all" | "view" = "all", forceDashboard = false) => {
     const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
     const fetchOnce = (url: string, fallback: any) => {
       let pending = dataPending.current.get(url);
@@ -376,7 +386,7 @@ export default function Home() {
     try {
       // Render the dashboard before competing with secondary page data for DB connections.
       if (view === "Visão Geral" || view === "Financeiro" || view === "Performance") {
-        await loadDashboardFromApi().catch(() => null);
+        await loadDashboardFromApi(undefined, undefined, forceDashboard || scope === "all").catch(() => null);
       }
       const keys = scope === "all" ? Object.keys(routes) : byView[view] || [];
       await Promise.all(keys.map(async (key) => {
@@ -420,7 +430,7 @@ export default function Home() {
         sync("Amazon", "/api/integrations/amazon/sync", { days: 7 }),
       ]);
       dashboardCache.current.clear();
-      await loadData(false, "view");
+      await loadData(false, "view", true);
       if (manual) {
         const failures = results.filter((r) => !r.ok);
         const successes = results

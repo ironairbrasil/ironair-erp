@@ -24,10 +24,10 @@ export async function getTenantId(req?: Request){
   const auth = await getAuthUser(req);
   if(!auth?.id || !auth.email || !auth.email_confirmed_at) throw new Error('unauthorized');
   const email = auth.email.toLowerCase();
-  const existing = await db.user.findUnique({ where: { email } });
+  const existing = await db.user.findUnique({ where: { email }, include: { memberships: { orderBy: { createdAt: 'asc' } } } });
   if(existing && existing.id !== auth.id) throw new Error('forbidden');
   const user = existing || await db.user.create({ data: { id: auth.id, email } });
-  let memberships = await db.membership.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'asc' } });
+  let memberships = existing?.memberships || [];
   if(!memberships.length && email === process.env.SAAS_BOOTSTRAP_OWNER_EMAIL?.toLowerCase()){
     await db.membership.upsert({ where: { tenantId_userId: { tenantId: DEFAULT_TENANT_ID, userId: user.id } }, create: { tenantId: DEFAULT_TENANT_ID, userId: user.id, role: 'OWNER' }, update: {} });
     memberships = await db.membership.findMany({ where: { userId: user.id } });

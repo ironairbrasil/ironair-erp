@@ -4,9 +4,34 @@ import { getTenantId } from '@/lib/tenant';
 import { CALENDAR_SCHEDULE_MONTHS, calendarPeriods } from '@/lib/expense-schedule';
 
 const localDay=(value:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(value);
+const dashboardCache = new Map<string, { expires: number; data: unknown }>();
+const dashboardPending = new Map<string, Promise<unknown>>();
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
+  const url = new URL(req.url);
+  const fresh = url.searchParams.get('fresh') === '1';
+  url.searchParams.delete('fresh');
+  const cacheKey = `${tenantId}:${localDay(new Date())}:${url.searchParams.toString()}`;
+  const pendingKey = fresh ? `${cacheKey}:fresh` : cacheKey;
+  const cached = dashboardCache.get(cacheKey);
+  if (!fresh && cached && cached.expires > Date.now()) return NextResponse.json(cached.data);
+  let pending = dashboardPending.get(pendingKey);
+  if (!pending) {
+    pending = calculateDashboard(req, tenantId);
+    dashboardPending.set(pendingKey, pending);
+  }
+  try {
+    const data = await pending;
+    dashboardCache.set(cacheKey, { expires: Date.now() + 20_000, data });
+    if (dashboardCache.size > 100) for (const [key, value] of dashboardCache) if (value.expires < Date.now()) dashboardCache.delete(key);
+    return NextResponse.json(data);
+  } finally {
+    if (dashboardPending.get(pendingKey) === pending) dashboardPending.delete(pendingKey);
+  }
+}
+
+async function calculateDashboard(req: Request, tenantId: string) {
   const u=new URL(req.url);
   const days=Math.min(Math.max(Number(u.searchParams.get('days')||30),1),365);
   const allTime=u.searchParams.get('all')==='1';
@@ -101,7 +126,7 @@ export async function GET(req:Request){
   const tiktokAds=spend.reduce((sum,s)=>/tiktok|tik tok/i.test(s.platform)?sum+Number(s.spend):sum,0);
   const available=inventory.reduce((sum,b)=>sum+Math.max(0,b.onHand-b.reserved),0);
   const trackingTotal=tracking.reduce((sum,t)=>sum+t._count._all,0);
-  return NextResponse.json({
+  return {
     periodMode:allTime?'all':null,
     periodFrom:rangeFrom,
     periodTo:rangeTo,
@@ -128,5 +153,5 @@ export async function GET(req:Request){
     trackingEvents:trackingTotal,
     daily:[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)),
     channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,salesProfit:c.revenue-c.fees-c.invested,profit:c.revenue-c.cogs-c.fees-c.invested}))
-  });
+  };
 }
