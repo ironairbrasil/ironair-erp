@@ -947,6 +947,11 @@ function fmtMovementDate(movement: any) {
   }
   return fmtDate(value);
 }
+function movementDay(movement: any) {
+  const value = movement?.createdAt;
+  if (movement?.source === "MANUAL" && typeof value === "string" && /T00:00:00(?:\.\d+)?Z$/.test(value)) return value.slice(0, 10);
+  return dateKey(value);
+}
 function dashboardKpis(d: any) {
   const revenue = Number(d?.revenue || 0);
   const cogs = Number(d?.cogs || 0);
@@ -1193,10 +1198,17 @@ function formatOrders(rows: any[]) {
 }
 function formatInventory(rows: any[], movements: any[] = [], orders?: any[], salesRange?: { from: string; to: string } | null) {
   const bySku = new Map<string, any>();
-  const fba = new Map<string, any>();
+  const transfers = new Map<string, { fba: number; full: number }>();
   const sold = new Map<string, any>();
   for (const m of movements || []) {
-    if (m.warehouseCode === "AMAZON_FBA" && Number(m.quantity) > 0 && !fba.has(m.sku)) fba.set(m.sku, { date: fmtMovementDate(m), qty: m.quantity });
+    const day = movementDay(m);
+    const inPeriod = !salesRange || (day >= salesRange.from && day <= salesRange.to);
+    if (inPeriod && m.type === "TRANSFER_IN" && Number(m.quantity) > 0 && (m.warehouseCode === "AMAZON_FBA" || m.warehouseCode === "ML_FULL")) {
+      const bucket = transfers.get(m.sku) || { fba: 0, full: 0 };
+      if (m.warehouseCode === "AMAZON_FBA") bucket.fba += Number(m.quantity);
+      else bucket.full += Number(m.quantity);
+      transfers.set(m.sku, bucket);
+    }
     if (!orders && m.type === "SALE" && Number(m.quantity) < 0) {
       const bucket = sold.get(m.sku) || {
         shopify: 0,
@@ -1254,8 +1266,8 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
       amazon: s.amazon || 0,
       shopee: s.shopee || 0,
       manual: s.manual || 0,
-      fbaDate: "—",
       fbaQty: 0,
+      fullQty: 0,
       status: "Saudável",
       productId: r.variant?.productId,
     };
@@ -1264,11 +1276,8 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
       item.reserved += r.reserved;
       item.available += Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0));
     }
-    const f = fba.get(sku);
-    if (f) {
-      item.fbaDate = f.date;
-      item.fbaQty = f.qty;
-    }
+    const transfer = transfers.get(sku);
+    if (transfer) { item.fbaQty = transfer.fba; item.fullQty = transfer.full; }
     item.status = item.available <= item.safety ? "Pouco" : "Saudável";
     bySku.set(sku, item);
   }
@@ -1395,6 +1404,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
               {showShopee && <th>Vend. Shopee</th>}
               <th>Total vendas</th>
               <th>Envio FBA</th>
+              <th>Envio Full</th>
               <th>Status</th>
               <th></th>
             </tr>
@@ -1417,7 +1427,8 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
                 <td>{hidden ? "—" : i.amazon}</td>
                 {showShopee && <td>{hidden ? "—" : i.shopee}</td>}
                 <td><b>{hidden ? "—" : Number(i.shopify || 0) + Number(i.ml || 0) + Number(i.amazon || 0) + Number(i.shopee || 0) + Number(i.manual || 0)}</b></td>
-                <td>{hidden ? "—" : i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
+                <td>{hidden ? "—" : i.fbaQty}</td>
+                <td>{hidden ? "—" : i.fullQty}</td>
                 <td>
                   <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
                 </td>
@@ -1429,7 +1440,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
               </tr>
             ))}
           </tbody>
-          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>—</td><td>—</td><td></td></tr></tfoot>
+          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>{hidden ? "—" : total("fbaQty")}</td><td>{hidden ? "—" : total("fullQty")}</td><td>—</td><td></td></tr></tfoot>
         </table>
       </div>
     </article>
