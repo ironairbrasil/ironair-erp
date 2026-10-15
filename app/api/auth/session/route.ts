@@ -11,5 +11,5 @@ export async function GET(req: Request) {
   if (user && user.id !== auth.id) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
   const tenants = user?.memberships.map(row => ({ id: row.tenantId, name: row.tenant.name, role: row.role })) || [];
   const activeTenantId = tenants.length ? await getTenantId(req) : null;
-  return NextResponse.json({ ok: true, email: auth.email, companyName: auth.user_metadata?.company_name || null, tenants, activeTenantId });
+  return NextResponse.json({ ok: true, email: auth.email, displayName: auth.user_metadata?.full_name || auth.user_metadata?.name || null, companyName: auth.user_metadata?.company_name || null, tenants, activeTenantId });
 }

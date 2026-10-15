@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
+import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
 import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 const menu = [
   ["Visão Geral", LayoutDashboard],
@@ -125,7 +125,7 @@ const integrationsSeed: Integration[] = [
   },
 ];
 export default function Home() {
-  const [sessionInfo, setSessionInfo] = useState<{ tenants: { id: string; name: string }[]; activeTenantId: string | null } | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<{ email: string; displayName?: string | null; companyName?: string | null; tenants: { id: string; name: string }[]; activeTenantId: string | null } | null>(null);
   useEffect(() => {
     fetch('/api/auth/session', { cache: 'no-store' }).then(async response => {
       if (!response.ok) { location.href = '/login'; return; }
@@ -535,6 +535,8 @@ export default function Home() {
     notify(`${format.toUpperCase()} exportado`);
   };
   const exportCsv = (name: string, rows: any[]) => exportFile(name, rows, "csv");
+  const accountName = sessionInfo?.displayName || sessionInfo?.companyName || sessionInfo?.tenants.find(tenant => tenant.id === sessionInfo.activeTenantId)?.name || sessionInfo?.email.split('@')[0] || "Minha conta";
+  const accountInitials = accountName.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join("");
   return (
     <main className={`shell theme-${theme}`}>
       {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
@@ -555,12 +557,15 @@ export default function Home() {
             </button>
           ))}
         </nav>
-        <div className="sidefoot">
-          <WalletCards size={18} />
-          <div>
-            <b>{loading ? "Sincronizando" : "Operação online"}</b>
-            <small>Dados via API local</small>
+        <div className="accountCard">
+          <div className="accountCardHeader">
+            <span className="accountAvatar" aria-hidden="true">{accountInitials || "IA"}</span>
+            <div className="accountIdentity">
+              <b title={accountName}>{accountName}</b>
+              <small title={sessionInfo?.email}>{sessionInfo?.email || "Carregando conta..."}</small>
+            </div>
           </div>
+          <button type="button" className="accountLogout" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; }}><LogOut size={15} />Sair da conta</button>
         </div>
       </aside>
       <section className="content">
@@ -576,7 +581,6 @@ export default function Home() {
             {sessionInfo && <select aria-label="Empresa ativa" value={sessionInfo.activeTenantId || ''} onChange={async event => { await apiJson('/api/auth/select-tenant', { method: 'POST', body: JSON.stringify({ tenantId: event.target.value }) }); location.reload(); }} style={{ maxWidth: 155, background: '#101d27', color: '#dce9ee', border: '1px solid #2b404d', borderRadius: 8, padding: 7 }}>
               {sessionInfo.tenants.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
             </select>}
-            <button type="button" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; }} title="Sair" style={{ background: 'transparent', border: '1px solid #2b404d', borderRadius: 8, color: '#dce9ee', padding: '7px 10px', cursor: 'pointer' }}>Sair</button>
             <div className="notificationMenu" ref={notificationRef}>
               <button type="button" className="notificationTrigger" aria-label="Notificações" aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={17} />{stockAlerts.length > 0 && <span className="notificationCount">{stockAlerts.length}</span>}</button>
               {notificationOpen && <div className="notificationPopover">

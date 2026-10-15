@@ -5,7 +5,7 @@ const ACCESS_COOKIE = 'ironair_access';
 const REFRESH_COOKIE = 'ironair_refresh';
 
 type AuthTokens = { access_token: string; refresh_token: string; expires_in?: number };
-export type AuthUser = { id: string; email?: string; email_confirmed_at?: string | null; user_metadata?: { company_name?: string } };
+export type AuthUser = { id: string; email?: string; email_confirmed_at?: string | null; user_metadata?: { company_name?: string; full_name?: string; name?: string } };
 
 function config() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
