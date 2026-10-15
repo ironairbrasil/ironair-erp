@@ -229,6 +229,8 @@ function num(v: any){
 
 function mapOrderStatus(o: any): IngestOrder['status']{
   const status = String(o.status || '').toLowerCase();
+  const payments = Array.isArray(o.payments) ? o.payments : [];
+  if(payments.some((payment: any) => String(payment.status || '').toLowerCase() === 'refunded')) return 'REFUNDED';
   if(status.includes('cancel')) return 'CANCELLED';
   if(status.includes('paid') || num(o.paid_amount) > 0) return 'PAID';
   return 'PENDING';
@@ -276,6 +278,15 @@ export function mapMercadoLivreOrder(o: any, tenantId: string, extra: MercadoLiv
     items: items.length ? items : [{ sku: `ML-${o.id}`, name: `Pedido Mercado Livre ${o.id}`, quantity: 1, unitPrice: num(o.paid_amount || o.total_amount), unitCost: 0 }],
     attribution: { source: 'Mercado Livre', medium: 'marketplace', campaign: 'Mercado Livre' }
   };
+}
+
+async function mapMercadoLivreOrderWithReturns(o: any, tenantId: string, extra: MercadoLivreOrderExtra = {}): Promise<IngestOrder>{
+  const mapped = mapMercadoLivreOrder(o, tenantId, extra);
+  const returnCase = await db.returnCase.findFirst({
+    where: { tenantId, channel: 'MERCADO_LIVRE', orderExternalId: mapped.externalId },
+    select: { id: true },
+  });
+  return returnCase ? { ...mapped, status: 'REFUNDED' } : mapped;
 }
 
 async function mercadoLivreShipmentId(order: any, tenantId: string){
@@ -336,7 +347,7 @@ export async function processMercadoLivreNotification(payload: any, tenantId: st
   if(!topic.includes('order') && !resource.includes('/orders/')) return { ignored: true };
   const order = await mercadoLivreApi(resource, {}, tenantId);
   const extra = await mercadoLivreOrderExtra(order, tenantId);
-  await ingestOrder(mapMercadoLivreOrder(order, tenantId, extra));
+  await ingestOrder(await mapMercadoLivreOrderWithReturns(order, tenantId, extra));
   await db.integration.updateMany({ where: { tenantId, provider: PROVIDER }, data: { lastSyncAt: new Date(), lastError: null } });
   return { ok: true, orderId: order.id };
 }
@@ -360,7 +371,7 @@ export async function syncMercadoLivreOrders(days = 365, tenantId?: string){
       const orderId = orderSummary?.id;
       const order = orderId ? await mercadoLivreApi(`/orders/${orderId}`, {}, conn.tenantId) : orderSummary;
       const extra = await mercadoLivreOrderExtra(order, conn.tenantId);
-      await ingestOrder({ ...mapMercadoLivreOrder(order, conn.tenantId, extra), skipInventory: true });
+      await ingestOrder({ ...await mapMercadoLivreOrderWithReturns(order, conn.tenantId, extra), skipInventory: true });
       count++;
     }
     offset += results.length;

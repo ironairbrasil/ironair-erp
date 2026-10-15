@@ -33,6 +33,11 @@ function overrideFields(value:unknown){
 }
 export async function ingestOrder(input:IngestOrder){
  const tenantId=input.tenantId||await getTenantId();
+ const manuallyDeleted=await db.auditLog.findFirst({
+  where:{tenantId,entityType:'Order',entityId:`${input.channel}:${input.externalId}`,action:'delete_manual_order'},
+  select:{id:true}
+ });
+ if(manuallyDeleted) return null;
  const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:{orderBy:{id:'asc'}},movements:{where:{tenantId,type:'SALE'},select:{id:true,idempotencyKey:true}}}});
  const hasManualSaleMovement=!!existing?.movements?.some(m=>String(m.idempotencyKey||'').startsWith('manual-assign-sale')||String(m.idempotencyKey||'').startsWith('manual:'));
  const orderOverrides=overrideFields(existing?.manualOverrides);

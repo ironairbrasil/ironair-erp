@@ -1,14 +1,17 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { BarChart3, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
 import { alerts, campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 const menu = [
   ["Visão Geral", LayoutDashboard],
   ["Performance", BarChart3],
   ["Vendas", ShoppingCart],
+  ["Devoluções", RefreshCw],
   ["Clientes", Users],
   ["Produtos", PackageCheck],
   ["Estoque", Boxes],
+  ["Despesas", WalletCards],
   ["Campanhas", Megaphone],
   ["Criativos", Tag],
   ["Jornada", ArrowUpRight],
@@ -17,6 +20,9 @@ const menu = [
   ["Configurações", Settings],
 ] as const;
 const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
+const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
+const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
+const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, {
     ...init,
@@ -112,35 +118,80 @@ const integrationsSeed: Integration[] = [
 ];
 export default function Home() {
   const [view, setView] = useState("Visão Geral");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [period, setPeriod] = useState("Hoje");
+  const [platform, setPlatform] = useState("");
+  const [product, setProduct] = useState("");
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<ModalKind>(null);
   const [selected, setSelected] = useState<any>(null);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [dashboardEditing, setDashboardEditing] = useState(false);
+  const [dashboardHidden, setDashboardHidden] = useState(false);
+  const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
+  const [dashboardDropTarget, setDashboardDropTarget] = useState<string | null>(null);
+  const dashboardDragSource = useRef<string | null>(null);
   const [range, setRange] = useState(() => ({
     from: startOfYearISO(),
     to: todayISO(),
   }));
+  const dashboardSelection = useRef({ period, range, platform, product });
+  dashboardSelection.current = { period, range, platform, product };
   const [draftRange, setDraftRange] = useState(() => ({
     from: startOfYearISO(),
     to: todayISO(),
   }));
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [filterModal, setFilterModal] = useState<"period" | "platform" | "product" | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState(() => todayISO().slice(0, 7));
+  const [selectingRangeEnd, setSelectingRangeEnd] = useState(false);
   const dashboardCache = useRef(new Map<string, any>());
+  const dashboardRequest = useRef(0);
   const syncingRef = useRef(false);
   const rangeEffectReady = useRef(false);
   const [orderRows, setOrderRows] = useState<any[]>([]);
   const [inventoryRows, setInventoryRows] = useState<any[]>([]);
   const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
   const [sales, setSales] = useState<any[]>([]);
+  const [returnRows, setReturnRows] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [catalogRows, setCatalogRows] = useState<any[]>([]);
+  const [expenseRows, setExpenseRows] = useState<any[]>([]);
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [channelRows, setChannelRows] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>(null);
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(dashboardLayoutStorageKey) || "[]");
+      if (Array.isArray(stored)) {
+        const known = stored.filter((id): id is string => typeof id === "string" && defaultDashboardLayout.includes(id));
+        const next = [...new Set(known)];
+        const missingKpis = defaultDashboardLayout.filter((id) => id.startsWith("kpi-") && !next.includes(id));
+        const firstWideBlock = next.findIndex((id) => !id.startsWith("kpi-"));
+        next.splice(firstWideBlock < 0 ? next.length : firstWideBlock, 0, ...missingKpis);
+        next.push(...defaultDashboardLayout.filter((id) => !next.includes(id)));
+        setDashboardLayout(next);
+      }
+    } catch { /* Keep the default layout if saved data is invalid. */ }
+  }, []);
+  const moveDashboardBlock = (source: string, target: string) => {
+    if (source === target) return;
+    setDashboardLayout((current) => {
+      const next = [...current];
+      const from = next.indexOf(source);
+      const to = next.indexOf(target);
+      if (from < 0 || to < 0) return current;
+      next.splice(from, 1);
+      next.splice(to, 0, source);
+      localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(next));
+      return next;
+    });
+  };
+  const dashboardRowStep = () => typeof window === "undefined" ? 4 : window.innerWidth <= 650 ? 1 : window.innerWidth <= 1050 ? 2 : 4;
   const [creatives, setCreatives] = useState<any[]>([
     {
       name: "Pablo • sabe passar roupa?",
@@ -162,44 +213,62 @@ export default function Home() {
     },
   ]);
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
+  const dashboardPlatforms = useMemo(() => [...new Set(orderRows.map((o) => String(o.channel || "")))].filter(Boolean).sort(), [orderRows]);
+  const dashboardProducts = useMemo(() => catalogRows.map((p) => [p.sku, p.name || p.product || p.sku] as [string, string]).sort((a, b) => a[1].localeCompare(b[1])), [catalogRows]);
+  const scopedOrders = (orders: any[]) => {
+    const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
+    return orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)));
+  };
+  const firstSaleDate = firstPaidSaleDay(scopedOrders(orderRows));
+  const allTimeStart = period === "Tempo todo" && dashboard?.periodMode === "all" ? dashboard.periodFrom : firstSaleDate;
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
+  const dashboardCards = dashboardKpis(dashboard);
+  const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
   const notify = (m: string) => {
     setToast(m);
     setTimeout(() => setToast(""), m.length > 90 ? 8000 : 3000);
   };
   const api = apiJson;
-  const dashboardKey = (p = period, r = range) => (p === "Personalizado" ? `custom:${r.from}:${r.to}` : p);
+  const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product) => `${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}`;
   const applyDashboard = (dash: any) => {
     setDashboard(dash);
     setChannelRows(formatChannels(dash.channels || []));
   };
-  const loadDashboardFromApi = async (p = period, r = range) => {
-    const pr = periodRange(p, r);
-    const dash = await api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}`);
-    dashboardCache.current.set(dashboardKey(p, r), dash);
-    applyDashboard(dash);
+  const loadDashboardFromApi = async (p = dashboardSelection.current.period, r = dashboardSelection.current.range) => {
+    const request = ++dashboardRequest.current;
+    const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
+    const key = dashboardKey(p, r, selectedPlatform, selectedProduct);
+    const pr = periodRange(p, r, firstSaleDate);
+    const dash = await api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}`);
+    dashboardCache.current.set(key, dash);
+    if (request === dashboardRequest.current) applyDashboard(dash);
     return dash;
   };
   const buildAndCacheDashboards = (orders: any[], balances: any[]) => {
+    const { period: selectedPeriod, range: selectedRange, platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
+    const filteredOrders = orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)));
     dashboardCache.current.clear();
-    for (const p of ["Hoje", "7 dias", "30 dias", "Este mês", "Tempo todo"]) dashboardCache.current.set(p, buildDashboard(orders, balances, p, range));
-    dashboardCache.current.set(dashboardKey("Personalizado", range), buildDashboard(orders, balances, "Personalizado", range));
-    applyDashboard(dashboardCache.current.get(dashboardKey()) || dashboardCache.current.get("Hoje"));
+    for (const p of ["Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"]) dashboardCache.current.set(dashboardKey(p, selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, p, selectedRange));
+    dashboardCache.current.set(dashboardKey("Personalizado", selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, "Personalizado", selectedRange));
+    applyDashboard(dashboardCache.current.get(dashboardKey(selectedPeriod, selectedRange, selectedPlatform, selectedProduct)) || dashboardCache.current.get(dashboardKey("Hoje", selectedRange, selectedPlatform, selectedProduct)));
   };
   const loadData = async (showLoading = true) => {
     const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
     if (showLoading) setLoading(true);
     try {
-      const [orders, inventory, customerRows, campaignRows] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns", [])]);
+      const [orders, inventory, customerRows, campaignRows, productRows, expenses, returns] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns", []), retry("/api/products", []), retry("/api/expenses", []), retry("/api/returns", [])]);
       setOrderRows(orders || []);
       setSales(formatOrders(orders));
+      setReturnRows(returns || []);
       setInventoryRows(inventory.balances || []);
       setProducts(formatInventory(inventory.balances || [], inventory.movements || []));
+      setCatalogRows(productRows || []);
+      setExpenseRows(expenses || []);
       setMovements(formatMovements(inventory.movements || []));
       setCustomers(customerRows || []);
       setCampaigns(formatCampaigns(campaignRows));
       buildAndCacheDashboards(orders || [], inventory.balances || []);
-      await loadDashboardFromApi(period, range).catch(() => null);
+      await loadDashboardFromApi().catch(() => null);
     } catch (e: any) {
       if (view !== "Integrações" && showLoading) notify(`Banco indisponível: ${e.message}`);
     } finally {
@@ -254,25 +323,18 @@ export default function Home() {
     }
   };
   const choosePeriod = (p: string) => {
-    setCalendarOpen(false);
+    setFilterModal(null);
     setPeriod(p);
-    const cached = dashboardCache.current.get(dashboardKey(p, range));
-    if (cached) applyDashboard(cached);
-    loadDashboardFromApi(p, range).catch(() => {
-      if (!cached && (orderRows.length || inventoryRows.length)) {
-        const dash = buildDashboard(orderRows, inventoryRows, p, range);
-        dashboardCache.current.set(dashboardKey(p, range), dash);
-        applyDashboard(dash);
-      }
-    });
   };
   const remove = async (url: string) => {
     try {
       await apiJson(url, { method: "DELETE" });
       await loadData();
       notify("Excluído do banco");
+      return true;
     } catch (e: any) {
       notify(e.message || "Erro ao excluir");
+      return false;
     }
   };
   const removeMany = async (url: string, ids: string[]) => {
@@ -280,13 +342,37 @@ export default function Home() {
       await apiJson(url, { method: "DELETE", body: JSON.stringify({ ids }) });
       await loadData();
       notify(`${ids.length} pedidos excluídos`);
+      return true;
     } catch (e: any) {
       notify(e.message || "Erro ao excluir");
+      return false;
     }
   };
   useEffect(() => {
     loadData();
   }, []);
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileMenuOpen(false); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener("keydown", closeOnEscape); };
+  }, [mobileMenuOpen]);
+  useEffect(() => {
+    if (view === "Vendas" || view === "Devoluções") loadData(false);
+    if (view === "Visão Geral") loadDashboardFromApi().catch(() => null);
+  }, [view]);
+  useEffect(() => {
+    if (view !== "Vendas" && view !== "Devoluções") return;
+    const refreshVisible = () => { if (document.visibilityState === "visible") loadData(false); };
+    window.addEventListener("focus", refreshVisible);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      window.removeEventListener("focus", refreshVisible);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [view]);
   useEffect(() => {
     const timer = window.setInterval(
       () => {
@@ -301,13 +387,15 @@ export default function Home() {
       rangeEffectReady.current = true;
       return;
     }
+    const cached = dashboardCache.current.get(dashboardKey());
+    if (cached) applyDashboard(cached);
     loadDashboardFromApi(period, range).catch(() => {
       if (!orderRows.length && !inventoryRows.length) return;
-      const dash = buildDashboard(orderRows, inventoryRows, period, range);
+      const dash = buildDashboard(scopedOrders(orderRows), inventoryRows, period, range);
       dashboardCache.current.set(dashboardKey(period, range), dash);
       applyDashboard(dash);
     });
-  }, [range.from, range.to]);
+  }, [period, range.from, range.to, platform, product]);
   const open = (kind: ModalKind, data?: any) => {
     setSelected(data || null);
     setModal(kind);
@@ -346,17 +434,19 @@ export default function Home() {
   const exportCsv = (name: string, rows: any[]) => exportFile(name, rows, "csv");
   return (
     <main className={`shell theme-${theme}`}>
-      <aside className="sidebar">
+      {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className={`sidebar ${mobileMenuOpen ? "mobileOpen" : ""}`} id="main-navigation">
         <div className="brand">
           <span className="brandmark">IA</span>
           <div>
             <b>Iron Air Hub</b>
             <small>ERP + Tracking</small>
           </div>
+          <button className="mobileMenuClose" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button>
         </div>
         <nav>
           {menu.map(([label, Icon]) => (
-            <button onClick={() => setView(label)} className={view === label ? "active" : ""} key={label}>
+            <button onClick={() => { setView(label); setMobileMenuOpen(false); }} className={view === label ? "active" : ""} key={label}>
               <Icon size={18} />
               <span>{label}</span>
             </button>
@@ -372,103 +462,82 @@ export default function Home() {
       </aside>
       <section className="content">
         <header className="topbar">
-          <div>
+          <button className="mobileMenuToggle" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} aria-controls="main-navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={22} /></button>
+          <span className="mobileAppName">Iron Air Hub</span>
+          <div className="desktopPageTitle">
             <h1>{title}</h1>
+            {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
+            {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden} title={dashboardHidden ? "Mostrar dados" : "Ocultar dados"}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button>}
           </div>
           <button className="themeToggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Alternar tema" aria-label="Alternar tema">
             <Sun size={16} className={theme === "light" ? "active" : ""} />
             <Moon size={16} className={theme === "dark" ? "active" : ""} />
           </button>
         </header>
+        <div className="mobilePageTitleRow"><h1 className="mobilePageTitle">{title}</h1>{view === "Visão Geral" && <><button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"}><Pencil size={16} /></button><button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button></>}</div>
         {view === "Visão Geral" && (
           <>
             <div className="filters">
+              <span className="filterDates">{formatDashboardDate(periodRange(period, range, allTimeStart).from)} a {formatDashboardDate(periodRange(period, range, allTimeStart).to)}</span>
               <button className="refreshBtn" onClick={() => refreshAll(true)} title="Atualizar Shopify, Mercado Livre, Amazon e banco" aria-label="Atualizar">
                 <RefreshCw size={16} />
               </button>
-              <button onClick={() => choosePeriod("Hoje")} className={period === "Hoje" ? "selected" : ""}>
-                Hoje
-              </button>
-              {["7 dias", "30 dias", "Este mês", "Tempo todo"].map((x) => (
-                <button onClick={() => choosePeriod(x)} className={period === x ? "selected" : ""} key={x}>
-                  {x}
-                </button>
-              ))}
-              <div className="customDate">
-                <button
-                  onClick={() => {
-                    setDraftRange(range);
-                    setPeriod("Personalizado");
-                    setCalendarOpen((v) => !v);
-                  }}
-                  className={period === "Personalizado" ? "selected" : ""}
-                >
-                  Personalizado
-                </button>
-                {calendarOpen && (
-                  <div className="datePopover">
-                    <label>
-                      <span>De</span>
-                      <input type="date" value={draftRange.from} onChange={(e) => setDraftRange((r) => ({ ...r, from: e.target.value }))} />
-                    </label>
-                    <label>
-                      <span>Até</span>
-                      <input type="date" value={draftRange.to} onChange={(e) => setDraftRange((r) => ({ ...r, to: e.target.value }))} />
-                    </label>
-                    <button
-                      className="primary"
-                      onClick={() => {
-                        setRange(draftRange);
-                        setCalendarOpen(false);
-                        setPeriod("Personalizado");
-                      }}
-                    >
-                      Aplicar
-                    </button>
+              <div className="dashboardFilter exportMenu"><span>Período</span><button className="filterTrigger" onClick={() => { setDraftRange(period === "Personalizado" ? range : { from: "", to: "" }); setCalendarMonth(todayISO().slice(0, 7)); setSelectingRangeEnd(false); setFilterModal(filterModal === "period" ? null : "period"); }} aria-expanded={filterModal === "period"}>{period}<ChevronDown size={14} /></button>
+                {filterModal === "period" && <div className="exportOptions dashboardOptions periodOptions">
+                  {["Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"].map((x) => <button key={x} onClick={() => choosePeriod(x)}>{x}</button>)}
+                  <div className="filterCustomDates">
+                    <div className="calendarHeader"><button aria-label="Mês anterior" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, -1))}>←</button><b>{calendarMonthTitle(calendarMonth)}</b><button aria-label="Próximo mês" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, 1))}>→</button></div>
+                    <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((x) => <span key={x}>{x}</span>)}{calendarDays(calendarMonth).map((day, i) => day ? <button key={day} className={`${day === draftRange.from || day === draftRange.to ? "selected" : ""} ${draftRange.from && draftRange.to && day > draftRange.from && day < draftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingRangeEnd || (draftRange.from && day < draftRange.from)) { setDraftRange({ from: day, to: "" }); setSelectingRangeEnd(true); } else { setDraftRange((r) => ({ ...r, to: day })); setSelectingRangeEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${i}`} />)}</div>
+                    <small>{draftRange.from ? `${formatDashboardDate(draftRange.from)} → ${draftRange.to ? formatDashboardDate(draftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small>
+                    <button className="primary" disabled={!draftRange.from || !draftRange.to} onClick={() => { setRange(draftRange); setPeriod("Personalizado"); setFilterModal(null); }}>Aplicar</button>
                   </div>
-                )}
+                </div>}
+              </div>
+              <div className="dashboardFilter exportMenu platformFilter"><span>Plataforma</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "platform" ? null : "platform")} aria-expanded={filterModal === "platform"}>{platform ? platform.replaceAll("_", " ") : "Todas"}<ChevronDown size={14} /></button>
+                {filterModal === "platform" && <div className="exportOptions dashboardOptions">{["", ...dashboardPlatforms].map((x) => <button key={x || "all"} onClick={() => { setPlatform(x); setFilterModal(null); }}>{x ? x.replaceAll("_", " ") : "Todas"}</button>)}</div>}
+              </div>
+              <div className="dashboardFilter exportMenu"><span>Produto</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "product" ? null : "product")} aria-expanded={filterModal === "product"}>{product ? String(dashboardProducts.find(([sku]) => sku === product)?.[1] || product) : "Todos"}<ChevronDown size={14} /></button>
+                {filterModal === "product" && <div className="exportOptions dashboardOptions">{[["", "Todos"], ...dashboardProducts].map(([sku, name]) => <button key={String(sku) || "all"} onClick={() => { setProduct(String(sku)); setFilterModal(null); }}>{String(name)}</button>)}</div>}
               </div>
             </div>
-            <section className="kpiGrid">
-              {dashboardKpis(dashboard).map((k) => (
-                <article className="card kpi" key={k.label}>
-                  <span>{k.label}</span>
-                  <strong>{k.value}</strong>
-                  <small>{k.delta}</small>
-                </article>
-              ))}
-            </section>
-            <section className="grid2">
-              <article className="card chartCard">
-                <div className="sectionHead">
-                  <div>
-                    <h2>Vendas no tempo</h2>
-                    <p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p>
-                  </div>
-                  <span className="pill">Banco</span>
-                </div>
-                <SalesTimeline rows={dashboard?.daily || []} period={period} range={range} />
-              </article>
-              <article className="card pad">
-                <div className="sectionHead">
-                  <div>
-                    <h2>Alertas da operação</h2>
-                    <p>Estoque, tracking e conciliação</p>
-                  </div>
-                  <span className="badge">{alerts.length}</span>
-                </div>
-                <div className="alerts">
-                  {alerts.map((a, i) => (
-                    <div className="alert" key={a}>
-                      <span>{i + 1}</span>
-                      <p>{a}</p>
+            <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
+              {dashboardLayout.map((blockId, index) => {
+                const kpi = blockId.startsWith("kpi-") ? dashboardCards[Number(blockId.slice(4))] : null;
+                const kpiPosition = kpi ? dashboardKpiIds.indexOf(blockId) : -1;
+                if (kpiPosition > 8 && !dashboardEditing) return null;
+                return <Fragment key={blockId}>
+                  {kpiPosition === 8 && !dashboardEditing && <div className={`dashboardMoreSection ${dashboardExpanded ? "expanded" : ""}`}>
+                    <div className={`dashboardExtraCards ${dashboardExpanded ? "expanded" : ""}`} aria-hidden={!dashboardExpanded}>
+                      <div className="dashboardExtraCardsInner">
+                        {dashboardKpiIds.slice(8).map((id) => {
+                          const extra = dashboardCards[Number(id.slice(4))];
+                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.delta) : extra.delta}</small></article></div>;
+                        })}
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </article>
-            </section>
-            <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} />
-            <Inventory products={products} onEdit={(p: any) => open("product", p)} />
+                    <div className="dashboardMoreDivider">
+                      <button type="button" className="dashboardMoreToggle" aria-expanded={dashboardExpanded} aria-label={dashboardExpanded ? "Mostrar menos cards" : "Mostrar mais cards"} onClick={() => setDashboardExpanded((expanded) => !expanded)}>
+                        {dashboardExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                      </button>
+                      <span>{dashboardExpanded ? "Mostrar menos" : "Mostrar mais"}</span>
+                    </div>
+                  </div>}
+                  {(kpiPosition < 8 || dashboardEditing) && <div className={`dashboardLayoutItem ${kpi ? "dashboardKpiItem" : blockId === "timeline" || blockId === "alerts" ? "dashboardHalfItem" : "dashboardFullItem"} ${dashboardDropTarget === blockId ? "dropTarget" : ""}`}
+                  onDragOver={dashboardEditing ? (event) => { event.preventDefault(); setDashboardDropTarget(blockId); } : undefined}
+                  onDragLeave={dashboardEditing ? () => setDashboardDropTarget((current) => current === blockId ? null : current) : undefined}
+                  onDrop={dashboardEditing ? (event) => { event.preventDefault(); moveDashboardBlock(dashboardDragSource.current || event.dataTransfer.getData("text/plain"), blockId); dashboardDragSource.current = null; setDashboardDropTarget(null); } : undefined}>
+                  {dashboardEditing && <div className="dashboardDragControls">
+                    <span draggable onDragStart={(event) => { dashboardDragSource.current = blockId; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", blockId); }} onDragEnd={() => { dashboardDragSource.current = null; setDashboardDropTarget(null); }} title="Arraste para reorganizar" aria-label="Arraste para reorganizar"><GripVertical size={18} /></span>
+                    <button type="button" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.max(0, index - dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para cima`}><ArrowUp size={16} /></button>
+                    <button type="button" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index - 1])} aria-label={`Mover ${kpi?.label || blockId} para a esquerda`}><ArrowLeft size={16} /></button>
+                    <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
+                    <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
+                  </div>}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={products} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} />}
+                </div>}
+                </Fragment>;
+              })}
+            </div>
           </>
         )}
         {view === "Vendas" && (
@@ -488,6 +557,7 @@ export default function Home() {
             onExport={(rows: any[], format: "csv" | "xml") => exportFile("vendas", rows, format)}
           />
         )}{" "}
+        {view === "Devoluções" && <Returns rows={returnRows} />}{" "}
         {view === "Clientes" && (
           <Customers
             rows={customers}
@@ -514,7 +584,8 @@ export default function Home() {
             <Movements movements={movements} onNew={() => open("movement")} />
           </>
         )}{" "}
-        {view === "Produtos" && <Products products={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />}{" "}
+        {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} />}
+        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />}{" "}
         {view === "Performance" && (
           <>
             <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />
@@ -530,6 +601,7 @@ export default function Home() {
           close={() => setModal(null)}
           notify={notify}
           products={products}
+          catalogProducts={catalogRows}
           integrations={integrationsSeed}
           onSave={async (kind: any, data: any) => {
             try {
@@ -549,7 +621,8 @@ export default function Home() {
                   method: "POST",
                   body: JSON.stringify({
                     ...data,
-                    sku: products.find((p: any) => p.product === data.product)?.sku || products[0]?.sku,
+                    sku: data.sku,
+                    product: catalogRows.find((p: any) => p.sku === data.sku)?.name || data.product,
                     quantity: 1,
                   }),
                 });
@@ -588,7 +661,7 @@ export default function Home() {
                 });
               else if (kind === "expense")
                 await apiJson("/api/expenses", {
-                  method: "POST",
+                  method: data.id ? "PATCH" : "POST",
                   body: JSON.stringify(data),
                 });
               else if (kind === "creative")
@@ -639,6 +712,8 @@ function periodDays(period: string) {
   if (period === "7 dias") return 7;
   if (period === "30 dias") return 30;
   if (period === "Este mês") return Math.max(1, new Date().getDate());
+  if (period === "Mês passado") return new Date(Date.UTC(Number(todayISO().slice(0, 4)), Number(todayISO().slice(5, 7)) - 1, 0)).getUTCDate();
+  if (period === "Este ano") return Math.floor((Date.parse(`${todayISO()}T12:00:00Z`) - Date.parse(`${todayISO().slice(0, 4)}-01-01T12:00:00Z`)) / 864e5) + 1;
   return 365;
 }
 function localISODate(d = new Date()) {
@@ -663,14 +738,25 @@ function dateKey(value: any) {
       })
     : "";
 }
-function periodRange(period: string, range: { from: string; to: string }) {
+function firstPaidSaleDay(orders: any[]) {
+  return orders.filter((o) => o.status === "PAID" && o.paidAt).map((o) => dateKey(o.paidAt)).sort()[0] || todayISO();
+}
+function periodRange(period: string, range: { from: string; to: string }, firstSaleDate = todayISO()) {
   const today = todayISO();
-  const d = new Date();
-  if (period === "Tempo todo") return { from: "2000-01-01", to: today };
+  if (period === "Tempo todo") return { from: firstSaleDate, to: today };
   if (period === "Personalizado") return range;
+  if (period === "Este ano") return { from: `${today.slice(0, 4)}-01-01`, to: today };
+  if (period === "Mês passado") {
+    const [year, month] = today.split("-").map(Number);
+    const previous = new Date(Date.UTC(year, month - 2, 1));
+    const previousYear = previous.getUTCFullYear();
+    const previousMonth = String(previous.getUTCMonth() + 1).padStart(2, "0");
+    const lastDay = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+    return { from: `${previousYear}-${previousMonth}-01`, to: `${previousYear}-${previousMonth}-${String(lastDay).padStart(2, "0")}` };
+  }
   if (period === "Este mês")
     return {
-      from: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`,
+      from: `${today.slice(0, 7)}-01`,
       to: today,
     };
   const days = periodDays(period);
@@ -696,12 +782,18 @@ function paginationNumbers(current: number, total: number) {
   return sorted.flatMap((n, i) => (i && n - sorted[i - 1] > 1 ? ["…", n] : [n]));
 }
 function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje", range = { from: startOfYearISO(), to: todayISO() }) {
-  const r = periodRange(period, range);
+  const r = periodRange(period, range, firstPaidSaleDay(orders));
   const daily = new Map<string, any>();
   const channels = new Map<string, any>();
+  const registeredCostBySku = new Map<string, number>((balances || []).map((balance: any) => [String(balance.variant?.sku || balance.sku || ""), Number(balance.variant?.unitCost || 0)]));
+  const ironAirCosts = [...registeredCostBySku].filter(([sku]) => /^IRON-AIR-/i.test(sku)).map(([, cost]) => cost).filter((cost) => cost > 0);
+  const sharedIronAirCost = ironAirCosts.length && ironAirCosts.every((cost) => cost === ironAirCosts[0]) ? ironAirCosts[0] : 0;
+  const itemUnitCost = (item: any) => Number(item.unitCost || 0) > 0 ? Number(item.unitCost) : registeredCostBySku.get(String(item.sku || "")) || (/\biron air\b/i.test(String(item.name || "")) ? sharedIronAirCost : 0);
   let revenue = 0,
     cogs = 0,
     fees = 0,
+    unitCostTotal = 0,
+    unitsWithCost = 0,
     ordersCount = 0;
   for (const o of orders) {
     if (o.status !== "PAID") continue;
@@ -709,7 +801,14 @@ function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje
     if (!key || key < r.from || key > r.to) continue;
     const orderRevenue = Number(o.grossAmount || 0) - Number(o.discountAmount || 0);
     const orderFees = Number(o.feeAmount || 0) + Number(o.shippingAmount || 0) + Number(o.taxAmount || 0);
-    const orderCogs = (o.items || []).reduce((sum: number, i: any) => sum + Number(i.unitCost || 0) * Number(i.quantity || 0), 0);
+    const orderCogs = (o.items || []).reduce((sum: number, i: any) => sum + itemUnitCost(i) * Number(i.quantity || 0), 0);
+    for (const item of o.items || []) {
+      const registeredUnitCost = itemUnitCost(item);
+      if (registeredUnitCost > 0) {
+        unitCostTotal += registeredUnitCost * Number(item.quantity || 0);
+        unitsWithCost += Number(item.quantity || 0);
+      }
+    }
     revenue += orderRevenue;
     cogs += orderCogs;
     fees += orderFees;
@@ -743,16 +842,23 @@ function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje
     channels.set(o.channel, c);
   }
   const salesProfit = revenue - fees;
-  const profit = salesProfit - cogs;
-  const available = (balances || []).reduce((sum: number, b: any) => sum + Math.max(0, Number(b.onHand || 0) - Number(b.reserved || 0) - Number(b.variant?.safetyStock || 0)), 0);
+  const grossProfit = salesProfit - cogs;
+  const profit = grossProfit;
+  const available = (balances || []).reduce((sum: number, b: any) => sum + Math.max(0, Number(b.onHand || 0) - Number(b.reserved || 0)), 0);
   return {
     periodDays: periodDays(period),
     revenue,
     orders: ordersCount,
     cogs,
+    markupUnitCost: unitsWithCost ? unitCostTotal / unitsWithCost : 0,
     fees,
+    taxes: 0,
     media: 0,
+    metaAds: 0,
+    googleAds: 0,
+    tiktokAds: 0,
     salesProfit,
+    grossProfit,
     profit,
     expenses: 0,
     margin: revenue ? profit / revenue : 0,
@@ -761,6 +867,9 @@ function buildDashboard(orders: any[] = [], balances: any[] = [], period = "Hoje
     ticket: ordersCount ? revenue / ordersCount : 0,
     available,
     trackingEvents: 0,
+    periodMode: period === "Tempo todo" ? "all" : null,
+    periodFrom: r.from,
+    periodTo: r.to,
     daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
     channels: [...channels.values()].map((c) => ({
       name: c.name,
@@ -785,6 +894,12 @@ function fmtDate(value: any) {
     : "—";
 }
 function dashboardKpis(d: any) {
+  const revenue = Number(d?.revenue || 0);
+  const cogs = Number(d?.cogs || 0);
+  const unitCost = Number(d?.markupUnitCost || 0);
+  const investment = cogs + Number(d?.fees || 0) + Number(d?.media || 0) + Number(d?.expenses || 0);
+  const multiplier = (value: number) => `${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`;
+  const ratio = (value: number) => String(Number(value.toFixed(2)));
   return [
     {
       label: "Faturamento",
@@ -794,17 +909,17 @@ function dashboardKpis(d: any) {
     {
       label: "Pedidos pagos",
       value: String(d?.orders || 0),
-      delta: "Fonte: banco",
+      delta: "Fonte: aprovados",
     },
     {
       label: "Lucro vendas",
       value: money(d?.salesProfit || 0),
-      delta: "Faturamento − taxa − frete",
+      delta: "Faturamento − taxas e frete − anúncios",
     },
     {
-      label: "Lucro geral",
+      label: "Lucro líquido",
       value: money(d?.profit || 0),
-      delta: `${((d?.margin || 0) * 100 || 0).toFixed(1)}% após custo`,
+      delta: "Faturamento − taxas e frete − anúncios − produtos − despesas",
     },
     {
       label: "Taxas + frete",
@@ -814,7 +929,7 @@ function dashboardKpis(d: any) {
     {
       label: "Custo dos produtos",
       value: money(d?.cogs || 0),
-      delta: "Custo do estoque vendido",
+      delta: "Custo unitário × quantidade vendida",
     },
     {
       label: "Ticket médio",
@@ -825,6 +940,46 @@ function dashboardKpis(d: any) {
       label: "Estoque disponível",
       value: `${d?.available || 0} un.`,
       delta: "Ledger materializado",
+    },
+    {
+      label: "Impostos",
+      value: money(d?.taxes || 0),
+      delta: "% sobre o faturamento",
+    },
+    {
+      label: "Markup",
+      value: unitCost > 0 ? multiplier(Number(d?.ticket || 0) / unitCost) : "—",
+      delta: unitCost > 0 ? `Ticket médio / custo unitário de ${money(unitCost)}` : "Aguardando custo do produto",
+    },
+    {
+      label: "Meta Ads",
+      value: money(d?.metaAds || 0),
+      delta: "Investimento em anúncios Meta",
+    },
+    {
+      label: "ROI",
+      value: investment > 0 ? ratio((revenue - investment) / investment) : "—",
+      delta: "Retorno sobre o investimento",
+    },
+    {
+      label: "Google Ads",
+      value: money(d?.googleAds || 0),
+      delta: "Investimento em anúncios Google",
+    },
+    {
+      label: "TikTok Ads",
+      value: money(d?.tiktokAds || 0),
+      delta: "Investimento em anúncios TikTok",
+    },
+    {
+      label: "Lucro bruto",
+      value: money(d?.grossProfit ?? (revenue - Number(d?.fees || 0) - Number(d?.media || 0) - cogs)),
+      delta: "Faturamento − taxas e frete − anúncios − produtos",
+    },
+    {
+      label: "ROAS total",
+      value: Number(d?.media || 0) > 0 ? multiplier(revenue / Number(d.media)) : "—",
+      delta: "Faturamento / investimento em anúncios",
     },
   ];
 }
@@ -845,8 +1000,29 @@ function compactDay(day: string) {
   const [, m, d] = day.split("-");
   return `${d}/${m}`;
 }
-function salesTimeline(rows: any[] = [], period: string, range: { from: string; to: string }) {
-  const r = periodRange(period, range);
+function formatDashboardDate(day: string) {
+  const [year, month, date] = day.split("-");
+  return `${date}/${month}/${year}`;
+}
+function shiftCalendarMonth(month: string, offset: number) {
+  const [year, value] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, value - 1 + offset, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function calendarMonthTitle(month: string) {
+  const [year, value] = month.split("-").map(Number);
+  const name = new Intl.DateTimeFormat("pt-BR", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, value - 1, 1)));
+  return `${name[0].toUpperCase()}${name.slice(1)} ${year}`;
+}
+function calendarDays(month: string) {
+  const [year, value] = month.split("-").map(Number);
+  const first = new Date(Date.UTC(year, value - 1, 1));
+  const blanks = (first.getUTCDay() + 6) % 7;
+  const count = new Date(Date.UTC(year, value, 0)).getUTCDate();
+  return [...Array(blanks).fill(""), ...Array.from({ length: count }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)];
+}
+function salesTimeline(rows: any[] = [], period: string, range: { from: string; to: string }, firstSaleDate = todayISO()) {
+  const r = periodRange(period, range, firstSaleDate);
   const source = new Map(rows.map((row) => [row.date, row]));
   const totalDays = Math.max(1, Math.round((new Date(`${r.to}T12:00:00.000-03:00`).getTime() - new Date(`${r.from}T12:00:00.000-03:00`).getTime()) / 864e5) + 1);
   const maxPoints = period === "Tempo todo" ? 24 : period === "30 dias" ? 30 : totalDays;
@@ -868,35 +1044,43 @@ function salesTimeline(rows: any[] = [], period: string, range: { from: string; 
   if (!points.length) points.push({ date: r.to, revenue: 0, orders: 0 });
   return points;
 }
-function SalesTimeline({ rows, period, range }: any) {
-  const points = salesTimeline(rows, period, range);
-  const max = Math.max(...points.map((p: any) => Number(p.revenue || 0)), 1);
-  const w = 640,
+function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false }: any) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  const points = salesTimeline(rows, period, range, firstSaleDate);
+  const max = Math.max(...points.map((p: any) => Number(p.revenue || 0)), 1) * 1.3;
+  const w = 1000,
     h = 210,
-    pad = 22;
+    pad = 18;
   const xy = (p: any, i: number) => {
     const x = points.length === 1 ? w / 2 : pad + (i / (points.length - 1)) * (w - pad * 2);
     const y = h - pad - (Number(p.revenue || 0) / max) * (h - pad * 2);
     return { x, y };
   };
-  const line = points
-    .map((p: any, i: number) => {
-      const { x, y } = xy(p, i);
-      return `${i ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
+  const coordinates = points.map(xy);
+  const line = points.length === 1
+    ? `M ${pad} ${coordinates[0].y} L ${w - pad} ${coordinates[0].y}`
+    : coordinates.slice(1).reduce((path: string, current: any, i: number) => {
+        const previous = coordinates[i];
+        const before = coordinates[Math.max(0, i - 1)];
+        const after = coordinates[Math.min(coordinates.length - 1, i + 2)];
+        const dx = (current.x - previous.x) / 3;
+        const control1 = previous.y + (current.y - before.y) / 6;
+        const control2 = current.y - (after.y - previous.y) / 6;
+        return `${path} C ${previous.x + dx} ${control1}, ${current.x - dx} ${control2}, ${current.x} ${current.y}`;
+      }, `M ${coordinates[0].x} ${coordinates[0].y}`);
   const area = `${line} L ${w - pad} ${h - pad} L ${pad} ${h - pad} Z`;
   const totalOrders = points.reduce((sum: number, p: any) => sum + Number(p.orders || 0), 0);
   return (
     <div className="lineChart">
       <div className="chartTopMetric">
-        <span>{totalOrders} vendas</span>
-        <b>{money(points.reduce((sum: number, p: any) => sum + Number(p.revenue || 0), 0))}</b>
+        <span>{hidden ? "—" : totalOrders} vendas</span>
+        <b>{hidden ? "—" : money(points.reduce((sum: number, p: any) => sum + Number(p.revenue || 0), 0))}</b>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Vendas no período">
+      {!hidden && hovered !== null && points[hovered] && <div className="chartTooltip" style={{ left: `${Math.max(10, Math.min(90, (coordinates[hovered].x / w) * 100))}%` }}><b>{formatDashboardDate(points[hovered].date)}</b><span>{points[hovered].orders} {points[hovered].orders === 1 ? "venda" : "vendas"} · {money(points[hovered].revenue)}</span></div>}
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label="Vendas no período">
         <defs>
           <linearGradient id="salesArea" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--accent2)" stopOpacity=".28" />
+            <stop offset="0%" stopColor="var(--accent2)" stopOpacity=".12" />
             <stop offset="100%" stopColor="var(--accent2)" stopOpacity="0" />
           </linearGradient>
         </defs>
@@ -905,18 +1089,15 @@ function SalesTimeline({ rows, period, range }: any) {
         {points.map((p: any, i: number) => {
           const { x, y } = xy(p, i);
           return (
-            <circle key={`${p.date}-${i}`} className="linePoint" cx={x} cy={y} r={p.revenue ? 4 : 3}>
-              <title>
-                {compactDay(p.date)} · {p.orders} vendas · {money(p.revenue)}
-              </title>
-            </circle>
+            <g key={`${p.date}-${i}`} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)} onFocus={() => setHovered(i)} onBlur={() => setHovered(null)} tabIndex={hidden ? -1 : 0} aria-label={hidden ? "Dados ocultos" : `${formatDashboardDate(p.date)}: ${p.orders} ${p.orders === 1 ? "venda" : "vendas"}, ${money(p.revenue)}`}>
+              <circle className="linePointHit" cx={x} cy={y} r={14} />
+              <circle className="linePoint" cx={x} cy={y} r={hovered === i ? 3.5 : 2.5} />
+            </g>
           );
         })}
       </svg>
-      <div className="lineAxis">
-        <span>{compactDay(points[0].date)}</span>
-        <span>{period === "Hoje" ? "Hoje" : compactDay(points[Math.floor(points.length / 2)]?.date || points[0].date)}</span>
-        <span>{period === "Tempo todo" ? "Hoje" : compactDay(points[points.length - 1].date)}</span>
+      <div className={`lineAxis ${points.length <= 14 ? "lineAxisAll" : ""}`}>
+        {(points.length <= 14 ? points : [{ date: periodRange(period, range, firstSaleDate).from }, points[Math.floor(points.length / 2)], { date: periodRange(period, range, firstSaleDate).to }]).map((p: any, i: number) => <span key={`${p.date}-${i}`}>{compactDay(p.date)}</span>)}
       </div>
     </div>
   );
@@ -943,7 +1124,7 @@ function formatOrders(rows: any[]) {
       fee,
       freight,
       cogs,
-      profit: revenue - fee - freight - Number(o.taxAmount || 0),
+      profit: o.status === "REFUNDED" || o.status === "CANCELLED" ? 0 : revenue - fee - freight - Number(o.taxAmount || 0),
       status: o.status,
       tracking: o.attribution?.fbclid || o.attribution?.gclid ? "Atribuído" : "Sem clique",
     };
@@ -1046,7 +1227,7 @@ function formatChannels(rows: any[]) {
     profit: money(c.salesProfit || 0),
   }));
 }
-function ChannelTable({ rows, onExport }: { rows: any[]; onExport: () => void }) {
+function ChannelTable({ rows, onExport, hidden = false }: { rows: any[]; onExport: () => void; hidden?: boolean }) {
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1054,12 +1235,12 @@ function ChannelTable({ rows, onExport }: { rows: any[]; onExport: () => void })
           <h2>Performance por canal</h2>
           <p>Receita e lucro de venda consolidado</p>
         </div>
-        <button className="ghost clickable" onClick={onExport}>
+        <button className="ghost clickable" onClick={onExport} disabled={hidden}>
           Exportar CSV
         </button>
       </div>
       <div className="tableWrap">
-        <table>
+        <table className="channelTable">
           <thead>
             <tr>
               <th>Canal</th>
@@ -1077,12 +1258,12 @@ function ChannelTable({ rows, onExport }: { rows: any[]; onExport: () => void })
                 <td>
                   <b>{c.name}</b>
                 </td>
-                <td>{c.invested}</td>
-                <td>{c.sales}</td>
-                <td>{c.revenue}</td>
-                <td>{c.cpa}</td>
-                <td>{c.roas}</td>
-                <td className="positive">{c.profit}</td>
+                <td>{hidden ? "—" : c.invested}</td>
+                <td>{hidden ? "—" : c.sales}</td>
+                <td>{hidden ? "—" : c.revenue}</td>
+                <td>{hidden ? "—" : c.cpa}</td>
+                <td>{hidden ? "—" : c.roas}</td>
+                <td className="positive">{hidden ? "—" : c.profit}</td>
               </tr>
             ))}
           </tbody>
@@ -1091,7 +1272,7 @@ function ChannelTable({ rows, onExport }: { rows: any[]; onExport: () => void })
     </article>
   );
 }
-function Inventory({ products, onEdit }: any) {
+function Inventory({ products, onEdit, hidden = false }: any) {
   const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
   const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
   const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
@@ -1104,19 +1285,19 @@ function Inventory({ products, onEdit }: any) {
         </div>
         <div className="inventorySummary">
           <span>
-            <b>{physical}</b> físico
+            <b>{hidden ? "—" : physical}</b> físico
           </span>
           <span>
-            <b>{available}</b> disponível
+            <b>{hidden ? "—" : available}</b> disponível
           </span>
           <span>
-            <b>{reserved}</b> reservado
+            <b>{hidden ? "—" : reserved}</b> reservado
           </span>
         </div>
       </div>
       <div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div>
       <div className="tableWrap">
-        <table>
+        <table className="inventoryTable">
           <thead>
             <tr>
               <th>Produto</th>
@@ -1141,22 +1322,22 @@ function Inventory({ products, onEdit }: any) {
                   <b>{i.product}</b>
                 </td>
                 <td>{i.sku}</td>
-                <td>{money(i.cost || 0)}</td>
-                <td>{money(i.price || 0)}</td>
-                <td>{i.physical}</td>
+                <td>{hidden ? "—" : money(i.cost || 0)}</td>
+                <td>{hidden ? "—" : money(i.price || 0)}</td>
+                <td>{hidden ? "—" : i.physical}</td>
                 <td>
-                  <b>{i.available}</b>
+                  <b>{hidden ? "—" : i.available}</b>
                 </td>
-                <td>{i.shopify}</td>
-                <td>{i.ml}</td>
-                <td>{i.amazon}</td>
-                <td>{i.shopee}</td>
-                <td>{i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
+                <td>{hidden ? "—" : i.shopify}</td>
+                <td>{hidden ? "—" : i.ml}</td>
+                <td>{hidden ? "—" : i.amazon}</td>
+                <td>{hidden ? "—" : i.shopee}</td>
+                <td>{hidden ? "—" : i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
                 <td>
                   <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
                 </td>
                 <td>
-                  <button className="mini" onClick={() => onEdit(i)}>
+                  <button className="mini" onClick={() => onEdit(i)} disabled={hidden}>
                     <Pencil size={14} />
                   </button>
                 </td>
@@ -1168,48 +1349,42 @@ function Inventory({ products, onEdit }: any) {
     </article>
   );
 }
-function Products({ products, onNew, onEdit, onDelete }: any) {
+function Products({ products, inventory, onNew, onEdit, onDelete }: any) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const rows = products.filter((p: any) => `${p.product} ${p.name} ${p.sku}`.toLowerCase().includes(query.toLowerCase()));
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const visible = rows.slice((Math.min(page, pages) - 1) * pageSize, Math.min(page, pages) * pageSize);
+  const stockFor = (sku: string) => inventory.find((item: any) => item.sku === sku);
+  const editable = (p: any) => ({ ...p, physical: stockFor(p.sku)?.physical || 0, safety: p.safetyStock, cost: p.unitCost, price: p.salePrice });
   return (
     <article className="card tableCard">
       <div className="sectionHead">
         <div>
           <h2>Catálogo de produtos</h2>
-          <p>SKUs, variantes, custo e disponibilidade</p>
+          <p>{rows.length} produtos · SKUs, preços e disponibilidade</p>
         </div>
         <button className="primary" onClick={onNew}>
           <Plus size={14} />
           Novo produto
         </button>
       </div>
-      <div className="productGrid">
-        {products.map((p: any) => (
-          <div className="productCard" key={p.sku}>
-            <div className="productVisual">
-              <PackageCheck />
-            </div>
-            <div>
-              <h3>{p.product}</h3>
-              <p>{p.sku}</p>
-              <div className="productMeta">
-                <span>
-                  Físico <b>{p.physical}</b>
-                </span>
-                <span>
-                  Disponível <b>{p.available}</b>
-                </span>
-              </div>
-            </div>
-            <div className="cardActions">
-              <button className="mini" onClick={() => onEdit(p)}>
-                <Pencil size={15} />
-              </button>
-              <button className="mini danger" onClick={() => onDelete(p)}>
-                <Trash2 size={15} />
-              </button>
-            </div>
-          </div>
-        ))}
+      <div className="catalogToolbar">
+        <label className="catalogSearch"><Search size={15} /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Pesquisar produto ou SKU..." /></label>
+        <div className="catalogPageSize">Itens por página <AnchoredSelect value={String(pageSize)} onChange={(v) => { setPageSize(Number(v)); setPage(1); }} options={["10", "25", "50"]} compact /></div>
       </div>
+      <div className="tableWrap">
+        <table className="catalogTable">
+          <thead><tr><th>SKU interno</th><th>Imagem</th><th>Produto</th><th>Variante</th><th>Preço</th><th>Custo</th><th>Físico</th><th>Disponível</th><th aria-label="Ações"></th></tr></thead>
+          <tbody>{visible.map((p: any) => <tr key={p.sku}>
+            <td><b>{p.sku}</b></td><td><span className="catalogImage"><PackageCheck size={18} /></span></td><td>{p.product}</td><td>{p.name}</td><td>{money(Number(p.salePrice || 0))}</td><td>{money(Number(p.unitCost || 0))}</td><td>{stockFor(p.sku)?.physical || 0}</td><td>{stockFor(p.sku)?.available || 0}</td>
+            <td><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={() => onEdit(editable(p))}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={() => onDelete(p)}><Trash2 size={15} /></button></div></td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+      {!rows.length && <div className="catalogEmpty">Nenhum produto encontrado.</div>}
+      <div className="catalogPagination"><span>Página {Math.min(page, pages)} de {pages}</span><div><button disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button><button disabled={page >= pages} onClick={() => setPage(page + 1)}>Próxima</button></div></div>
     </article>
   );
 }
@@ -1283,15 +1458,23 @@ function Customers({ rows, onNew, onEdit, onDelete, onBackfill }: any) {
   );
 }
 function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport }: any) {
-  const [status, setStatus] = useState("Todos");
+  const [status, setStatus] = useState("PAID");
   const [source, setSource] = useState("Todas");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [salesPeriod, setSalesPeriod] = useState("Tempo todo");
+  const [salesPeriodOpen, setSalesPeriodOpen] = useState(false);
+  const [salesDraftRange, setSalesDraftRange] = useState({ from: "", to: "" });
+  const [salesCalendarMonth, setSalesCalendarMonth] = useState(todayISO().slice(0, 7));
+  const [salesSelectingEnd, setSalesSelectingEnd] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
-  const statusClass = (status: string) => (status === "CANCELLED" ? "danger" : status === "PAID" ? "ok" : "warn");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ kind: "single"; sale: any } | { kind: "many"; sales: any[] } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const statusClass = (status: string) => (status === "CANCELLED" || status === "CHARGEBACK" ? "danger" : status === "PAID" ? "ok" : "warn");
   const keyOf = (s: any) => String(s.raw?.id || s.id);
   const sources = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((s: any) => s.source).filter(Boolean)))], [rows]);
   const filtered = useMemo(
@@ -1314,7 +1497,20 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     setExportOpen(false);
   }, [q, status, source, from, to, pageSize]);
   const selectedRows = filtered.filter((s: any) => selected.has(keyOf(s)));
-  const exportRows = selectedRows.map(({ raw, ...rest }: any) => rest);
+  const exportRows = (selectedRows.length ? selectedRows : filtered).map(({ raw, ...rest }: any) => rest);
+  const salesRevenue = filtered.reduce((total: number, sale: any) => sale.status === "PAID" ? total + Number(sale.raw?.grossAmount || 0) - Number(sale.raw?.discountAmount || 0) : total, 0);
+  useEffect(() => {
+    if (!mobileFiltersOpen) return;
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileFiltersOpen(false); };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [mobileFiltersOpen]);
+  useEffect(() => {
+    if (!pendingDelete || deleting) return;
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setPendingDelete(null); };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [pendingDelete, deleting]);
   const toggleOne = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -1328,29 +1524,32 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
       else pageRows.forEach((s: any) => next.add(keyOf(s)));
       return next;
     });
-  const deleteSelected = async () => {
-    await onDeleteMany(selectedRows);
-    setSelected(new Set());
+  const confirmDelete = async () => {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    try {
+      const result = pendingDelete.kind === "many" ? await onDeleteMany(pendingDelete.sales) : await onDelete(pendingDelete.sale);
+      if (result !== false) {
+        if (pendingDelete.kind === "many") setSelected(new Set());
+        setPendingDelete(null);
+      }
+    } finally {
+      setDeleting(false);
+    }
   };
   return (
-    <article className="card tableCard">
-      <div className="sectionHead">
-        <div>
-          <h2>Pedidos consolidados</h2>
-          <p>
-            {filtered.length} pedidos filtrados · {selected.size} selecionados
-          </p>
-        </div>
+    <div className="salesPage">
+      <div className="sectionHead salesPageHeader">
         <div className="rowActions">
-          <button className="ghost clickable" disabled={!selected.size} onClick={deleteSelected}>
+          <button className="ghost clickable salesDeleteButton" disabled={!selected.size} onClick={() => setPendingDelete({ kind: "many", sales: [...selectedRows] })}>
             <Trash2 size={14} />
             Excluir selecionados
           </button>
           <div className="exportMenu">
-            <button className="ghost clickable" disabled={!selected.size} onClick={() => setExportOpen((v) => !v)}>
+            <button className="ghost clickable" disabled={!filtered.length} onClick={() => setExportOpen((v) => !v)}>
               <Download size={14} /> Exportar
             </button>
-            {exportOpen && !!selected.size && (
+            {exportOpen && !!filtered.length && (
               <div className="exportOptions">
                 <button
                   onClick={() => {
@@ -1377,47 +1576,34 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
           </button>
         </div>
       </div>
-      <div className="search">
-        <Search size={16} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar pedido, cliente, campanha ou canal..." />
+      <section className="card salesSearchSection" aria-label="Busca e filtros de vendas">
+      <div className="salesSearchRow">
+        <div className="search">
+          <Search size={16} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar pedido, cliente, campanha ou canal..." />
+        </div>
+        <button className="mobileSalesFilterButton ghost" onClick={() => setMobileFiltersOpen(true)}><Filter size={16} />Filtros</button>
       </div>
-      <div className="salesFilters">
-        <label>
-          <Filter size={14} />
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option>Todos</option>
-            <option>PAID</option>
-            <option>CANCELLED</option>
-            <option>PENDING</option>
-            <option>REFUNDED</option>
-            <option>CHARGEBACK</option>
-          </select>
-        </label>
-        <label>
-          <span>Origem</span>
-          <select value={source} onChange={(e) => setSource(e.target.value)}>
-            {sources.map((x: any) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>De</span>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </label>
-        <label>
-          <span>Até</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-        </label>
-        <label>
-          <span>Linhas</span>
-          <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-            <option value={10}>10</option>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-          </select>
-        </label>
+      {mobileFiltersOpen && <button className="mobileSalesFilterBackdrop" aria-label="Fechar filtros" onClick={() => setMobileFiltersOpen(false)} />}
+      <div className={`salesFilters ${mobileFiltersOpen ? "mobileFiltersOpen" : ""}`}>
+        <div className="mobileSalesFilterHead"><b>Filtros</b><button className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setMobileFiltersOpen(false)}><X size={20} /></button></div>
+        <div className="salesSelectField"><Filter size={14} /><AnchoredSelect value={status} onChange={setStatus} options={["Todos", "PAID", "CANCELLED", "PENDING", "REFUNDED", "CHARGEBACK"]} compact /></div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
+        <div className="salesPeriodControl">
+          <button type="button" className="salesPeriodTrigger" aria-expanded={salesPeriodOpen} onClick={() => { setSalesPeriodOpen((open) => !open); setSalesCalendarMonth((from || todayISO()).slice(0, 7)); setSalesDraftRange({ from: salesPeriod === "Personalizado" ? from : "", to: salesPeriod === "Personalizado" ? to : "" }); setSalesSelectingEnd(false); }}><span>Período</span><b>{salesPeriod}</b><ChevronDown size={15} /></button>
+          {salesPeriodOpen && <div className="salesPeriodOptions">
+            {[
+              "Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"
+            ].map((option) => <button type="button" key={option} className={salesPeriod === option ? "active" : ""} onClick={() => { const dates = periodRange(option, { from: "", to: "" }); setSalesPeriod(option); setFrom(option === "Tempo todo" ? "" : dates.from); setTo(option === "Tempo todo" ? "" : dates.to); setSalesPeriodOpen(false); }}>{option}</button>)}
+            <div className="salesPeriodCalendar">
+              <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setSalesCalendarMonth(shiftCalendarMonth(salesCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(salesCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setSalesCalendarMonth(shiftCalendarMonth(salesCalendarMonth, 1))}>→</button></div>
+              <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(salesCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === salesDraftRange.from || day === salesDraftRange.to ? "selected" : ""} ${salesDraftRange.from && salesDraftRange.to && day > salesDraftRange.from && day < salesDraftRange.to ? "inRange" : ""}`} onClick={() => { if (!salesSelectingEnd || (salesDraftRange.from && day < salesDraftRange.from)) { setSalesDraftRange({ from: day, to: "" }); setSalesSelectingEnd(true); } else { setSalesDraftRange((range) => ({ ...range, to: day })); setSalesSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div>
+              <small>{salesDraftRange.from ? `${formatDashboardDate(salesDraftRange.from)} → ${salesDraftRange.to ? formatDashboardDate(salesDraftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small>
+              <button type="button" className="primary" disabled={!salesDraftRange.from || !salesDraftRange.to} onClick={() => { setFrom(salesDraftRange.from); setTo(salesDraftRange.to); setSalesPeriod("Personalizado"); setSalesPeriodOpen(false); }}>Aplicar</button>
+            </div>
+          </div>}
+        </div>
+        <div className="salesSelectField"><span>Linhas</span><AnchoredSelect value={String(pageSize)} onChange={(v) => setPageSize(Number(v))} options={["10", "25", "50", "100"]} compact /></div>
         <button
           className="ghost clickable"
           onClick={() => {
@@ -1425,11 +1611,25 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
             setSource("Todas");
             setFrom("");
             setTo("");
+            setSalesPeriod("Tempo todo");
+            setSalesPeriodOpen(false);
             setQ("");
           }}
         >
           Limpar
         </button>
+        <button className="mobileSalesFilterApply primary" onClick={() => setMobileFiltersOpen(false)}>Aplicar</button>
+      </div>
+      </section>
+      <section className="salesSummary" aria-label="Resumo das vendas">
+        <div className="card"><span>Vendas encontradas</span><strong>{filtered.length.toLocaleString("pt-BR")}</strong></div>
+        <div className="card"><span>Faturamento</span><strong>{money(salesRevenue)}</strong></div>
+      </section>
+      <article className="card tableCard salesResultsSection">
+      <div className="sectionHead"><h2>Pedidos consolidados</h2></div>
+      <div className="salesStatusTabs" role="tablist" aria-label="Tipo de vendas">
+        <button type="button" role="tab" aria-selected={status === "PAID"} className={status === "PAID" ? "active" : ""} onClick={() => setStatus("PAID")}>Aprovadas</button>
+        <button type="button" role="tab" aria-selected={status !== "PAID"} className={status !== "PAID" ? "active" : ""} onClick={() => setStatus("Todos")}>Todas</button>
       </div>
       <div className="tableWrap">
         <table>
@@ -1465,7 +1665,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                 <td>{s.value}</td>
                 <td>{money(s.fee || 0)}</td>
                 <td>{money(s.freight || 0)}</td>
-                <td className={s.profit >= 0 ? "positive" : "negative"}>{money(s.profit || 0)}</td>
+                <td className={s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : s.profit >= 0 ? "positive" : "negative"}>{money(s.profit || 0)}</td>
                 <td>
                   <span className={`status ${statusClass(s.status)}`}>{s.status}</span>
                 </td>
@@ -1484,7 +1684,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                       className="mini danger"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDelete(s);
+                        setPendingDelete({ kind: "single", sale: s });
                       }}
                     >
                       <Trash2 size={14} />
@@ -1520,7 +1720,15 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
           </button>
         </div>
       </div>
-    </article>
+      </article>
+      {pendingDelete && <div className="salesConfirmBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setPendingDelete(null); }}>
+        <div className="salesConfirmDialog" role="alertdialog" aria-modal="true" aria-labelledby="sales-confirm-title" aria-describedby="sales-confirm-description">
+          <h2 id="sales-confirm-title">Confirmar exclusão</h2>
+          <p id="sales-confirm-description">{pendingDelete.kind === "many" ? `Excluir ${pendingDelete.sales.length} pedidos selecionados?` : `Excluir o pedido ${pendingDelete.sale.id}?`} Essa ação não pode ser desfeita.</p>
+          <div className="salesConfirmActions"><button className="ghost clickable" disabled={deleting} onClick={() => setPendingDelete(null)}>Cancelar</button><button className="salesDeleteButton" disabled={deleting} onClick={confirmDelete}><Trash2 size={16} />{deleting ? "Excluindo..." : "Excluir"}</button></div>
+        </div>
+      </div>}
+    </div>
   );
 }
 function Campaigns({ campaigns, onNew, onDelete }: any) {
@@ -1731,12 +1939,40 @@ function Finance({ data, onNew }: any) {
           </button>
         </div>
         <div className="bigProfit">
-          {money(data?.profit || 0)} <small>lucro operacional estimado</small>
+          {money(data?.profit || 0)} <small>lucro líquido estimado</small>
         </div>
         <div className="formula">Receita − CMV − mídia − taxas − frete − despesas = lucro. Impostos podem ser adicionados por regra fiscal.</div>
       </article>
     </>
   );
+}
+function Expenses({ rows, data, onNew, onEdit, onDelete }: any) {
+  const annualCycles: Record<string, number> = { MONTHLY: 12, QUARTERLY: 4, SEMIANNUAL: 2, YEARLY: 1 };
+  const periodLabel: Record<string, string> = {
+    MONTHLY: "Dia 01 ao último dia do mês",
+    QUARTERLY: "Jan–Mar · Abr–Jun · Jul–Set · Out–Dez",
+    SEMIANNUAL: "01/01–30/06 · 01/07–31/12",
+    YEARLY: "01/01–31/12",
+  };
+  return <article className="card tableCard">
+    <div className="sectionHead"><div><h2>Despesas</h2><p>Valores fixos e percentuais que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
+    <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{money(data?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
+    <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id}><td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Fixa", CUSTOM: "Personalizada" }[expense.schedule as string] || "Personalizada"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={() => onEdit(expense)}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={() => onDelete(expense)}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
+    {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
+  </article>;
+}
+function Returns({ rows }: { rows: any[] }) {
+  const statusLabel: Record<string, string> = { IN_TRANSIT: "Devolução a caminho", DELIVERED: "Reembolsada", REFUNDED: "Reembolsada" };
+  return <article className="card tableCard">
+    <div className="sectionHead"><div><h2>Devoluções do Mercado Livre</h2><p>{rows.length} pedidos REFUNDED · {rows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {rows.filter((row) => row.refundAmount !== null).length} reembolsos confirmados</p></div></div>
+    <div className="formula">Os quatro pedidos aparecem como REFUNDED em Vendas, com lucro zero. Dois valores de reembolso ainda estão pendentes no Mercado Livre. O estoque só aumenta após o recebimento físico no estoque central.</div>
+    <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th>Motivo</th><th>Situação</th><th>Reembolso</th><th>Vendas</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>
+      <td><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">Pacote #{row.externalOrderId}</a></td>
+      <td>{row.customerName || "—"}</td>
+      <td>{row.sku || "—"}</td><td>{row.reason || "—"}</td><td><span className={`status ${row.refundAmount !== null ? "danger" : "warn"}`}>{statusLabel[row.status] || row.status}</span></td>
+      <td className={row.refundAmount === null ? undefined : "negative"}>{row.refundAmount === null ? "Pendente" : `-${money(row.refundAmount)}`}</td><td>{row.erpOrderStatus ? <span className={`status ${row.erpOrderStatus === "PAID" ? "ok" : row.erpOrderStatus === "REFUNDED" || row.erpOrderStatus === "PENDING" ? "warn" : "danger"}`}>{row.erpOrderStatus}</span> : "Verificar vínculo"}</td>
+    </tr>)}</tbody></table></div>
+  </article>;
 }
 function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
   const [rows, setRows] = useState<any[]>([]);
@@ -1866,8 +2102,8 @@ function SettingsView({ onEdit }: any) {
     </div>
   );
 }
-function Modal({ kind, data, close, notify, products, integrations, onSave }: any) {
-  const [f, setF] = useState<any>(data ? { ...data, _edit: data.sku } : {});
+function Modal({ kind, data, close, notify, products, catalogProducts, integrations, onSave }: any) {
+  const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date) } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const title: any = {
@@ -1877,7 +2113,7 @@ function Modal({ kind, data, close, notify, products, integrations, onSave }: an
     product: data ? "Editar produto" : "Novo produto",
     campaign: "Nova campanha",
     creative: "Novo criativo",
-    expense: "Lançar despesa",
+    expense: data ? "Editar despesa" : "Lançar despesa",
     integration: "Adicionar integração",
     integrationDetail: data?.name || "Integração",
     settings: "Configurações",
@@ -1903,7 +2139,7 @@ function Modal({ kind, data, close, notify, products, integrations, onSave }: an
         <div className="modalHead">
           <div>
             <h2>{title[kind]}</h2>
-            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
+            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : kind === "expense" ? "A despesa será salva e abatida do lucro líquido." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
           </div>
           <button className="close" onClick={close}>
             <X />
@@ -1924,7 +2160,7 @@ function Modal({ kind, data, close, notify, products, integrations, onSave }: an
           {kind === "sale" && (
             <FormGrid>
               <Input label="Cliente" value={f.customer} onChange={(v: any) => set("customer", v)} />
-              <Select label="Produto" value={f.product} onChange={(v: any) => set("product", v)} options={products.map((p: any) => p.product)} />
+              <Select label="Produto / voltagem" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
               <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
               <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={["Manual", "Shopify", "Mercado Livre", "Amazon", "Shopee"]} />
               <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
@@ -1972,10 +2208,14 @@ function Modal({ kind, data, close, notify, products, integrations, onSave }: an
           )}
           {kind === "expense" && (
             <FormGrid>
+              <AnchoredSelect label="Tipo" value={f.kind || "FIXED"} onChange={(v) => set("kind", v)} options={[{ value: "FIXED", label: "Valor fixo" }, { value: "PERCENT", label: "Porcentagem do faturamento" }]} />
               <Select label="Categoria" value={f.category} onChange={(v: any) => set("category", v)} options={["Frete", "Mídia", "Taxa", "Imposto", "Software", "Operacional", "Outro"]} />
               <Input label="Descrição" value={f.desc} onChange={(v: any) => set("desc", v)} />
-              <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
-              <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
+              {f.kind === "PERCENT" ? <Input label="Percentual (%)" type="number" value={f.rate} onChange={(v: any) => set("rate", v)} /> : <Input label="Valor (R$)" type="number" value={f.value} onChange={(v: any) => set("value", v)} />}
+              <AnchoredSelect label="Frequência / data" value={f.schedule || "FIXED"} onChange={(v) => setF((current: any) => ({ ...current, schedule: v, date: v === "CUSTOM" ? "" : todayISO() }))} options={[{ value: "FIXED", label: "Fixa" }, { value: "MONTHLY", label: "Mensal" }, { value: "QUARTERLY", label: "Trimestral" }, { value: "SEMIANNUAL", label: "Semestral" }, { value: "YEARLY", label: "Anual" }, { value: "CUSTOM", label: "Personalizada" }]} />
+              {f.schedule === "CUSTOM" && <CalendarDateField label="Escolher data" value={f.date || ""} onChange={(value) => set("date", value)} />}
+              {["MONTHLY", "QUARTERLY", "SEMIANNUAL", "YEARLY"].includes(f.schedule) && <p className="expenseScheduleHint">{{ MONTHLY: "Mês civil: dia 01 ao último dia.", QUARTERLY: "Trimestres civis: jan–mar, abr–jun, jul–set e out–dez.", SEMIANNUAL: "Semestres civis: 01/01–30/06 e 01/07–31/12.", YEARLY: "Ano civil: 01/01–31/12." }[f.schedule as "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "YEARLY"]} {f.kind === "PERCENT" ? "O percentual incide sobre o faturamento acumulado do período." : "O valor é lançado uma vez por período."}</p>}
+              {f.schedule === "FIXED" && <p className="expenseScheduleHint">{f.kind === "PERCENT" ? "Aplica o percentual ao faturamento a partir de hoje." : "Lançamento único na data de hoje."}</p>}
             </FormGrid>
           )}
           {kind === "integration" && (
@@ -2013,7 +2253,7 @@ function Modal({ kind, data, close, notify, products, integrations, onSave }: an
             <button className="ghost clickable" onClick={close} disabled={saving}>
               Cancelar
             </button>
-            <button className="primary" onClick={save} disabled={saving}>
+            <button className="primary" onClick={save} disabled={saving || (kind === "sale" && !f.sku) || (kind === "expense" && f.schedule === "CUSTOM" && !f.date)}>
               <Save size={15} />
               {saving ? "Salvando..." : kind === "integration" ? "Adicionar" : "Salvar"}
             </button>
@@ -2484,24 +2724,14 @@ function SaleDetail({ s, set, products }: any) {
   const selectedProduct = products.find((p: any) => p.sku === selectedSku);
   const qty = Number(rawItem.quantity || 1);
   const cogs = selectedProduct ? Number(selectedProduct.unitCost ?? selectedProduct.cost ?? 0) * qty : Number(s.cogs || 0);
-  const profit = gross - discount - cogs - fee - freight;
+  const profit = s.status === "REFUNDED" || s.status === "CANCELLED" ? 0 : gross - discount - cogs - fee - freight;
   return (
     <div className="detailGrid">
       <label className="field">
         <span>Cliente</span>
         <input value={s.customer || ""} onChange={(e) => set("customer", e.target.value)} />
       </label>
-      <label className="field">
-        <span>Produto / voltagem</span>
-        <select value={selectedSku} onChange={(e) => set("itemSku", e.target.value)}>
-          <option value="">Sem atribuir{originalSku ? ` (${originalSku})` : ""}</option>
-          {assignable.map((p: any) => (
-            <option key={p.sku} value={p.sku}>
-              {p.sku} · {p.product}
-            </option>
-          ))}
-        </select>
-      </label>
+      <AnchoredSelect label="Produto / voltagem" value={selectedSku} onChange={(v) => set("itemSku", v)} options={[{ value: "", label: `Sem atribuir${originalSku ? ` (${originalSku})` : ""}` }, ...assignable.map((p: any) => ({ value: p.sku, label: `${p.sku} · ${p.product}` }))]} />
       <div className="detailBox">
         <span>Valor</span>
         <b>{s.value}</b>
@@ -2511,8 +2741,8 @@ function SaleDetail({ s, set, products }: any) {
         <b>{money(cogs)}</b>
       </div>
       <div className="detailBox">
-        <span>Lucro geral</span>
-        <b>{money(profit)}</b>
+        <span>Lucro líquido</span>
+        <b className={s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : undefined}>{money(profit)}</b>
       </div>
       <div className="detailBox">
         <span>SKU atual</span>
@@ -2536,7 +2766,45 @@ function SaleDetail({ s, set, products }: any) {
 function FormGrid({ children }: { children: any }) {
   return <div className="formGrid">{children}</div>;
 }
+function CalendarDateField({ label, value, onChange, compact = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState(() => (value || todayISO()).slice(0, 7));
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !panelRef.current?.contains(target)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const anchor = triggerRef.current.closest(".salesSelectField") || triggerRef.current;
+      const rect = anchor.getBoundingClientRect();
+      const width = 284;
+      setPosition({ top: rect.bottom + 320 > window.innerHeight && rect.top > 320 ? rect.top - 314 : rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) });
+      setMonth((value || todayISO()).slice(0, 7));
+    }
+    setOpen((current) => !current);
+  };
+  return <div className={compact ? "salesDateField" : "field calendarDateField"}>
+    <span>{label}</span>
+    <button ref={triggerRef} type="button" className="calendarDateTrigger" aria-label={label} aria-expanded={open} onClick={toggle}>{value ? formatDashboardDate(value) : "dd/mm/aaaa"}<CalendarDays size={15} /></button>
+    {open && createPortal(<div ref={panelRef} className="singleDatePopover" style={position}>
+      <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setMonth(shiftCalendarMonth(month, -1))}>←</button><b>{calendarMonthTitle(month)}</b><button type="button" aria-label="Próximo mês" onClick={() => setMonth(shiftCalendarMonth(month, 1))}>→</button></div>
+      <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(month).map((day, i) => day ? <button type="button" key={day} className={day === value ? "selected" : ""} onClick={() => { onChange(day); setOpen(false); }}>{Number(day.slice(-2))}</button> : <span key={`blank-${i}`} />)}</div>
+      {value && <button type="button" className="clearDate" onClick={() => { onChange(""); setOpen(false); }}>Limpar data</button>}
+    </div>, document.querySelector(".shell") || document.body)}
+  </div>;
+}
 function Input({ label, value, onChange, type = "text" }: any) {
+  if (type === "date") return <CalendarDateField label={label} value={value || ""} onChange={onChange} />;
   return (
     <label className="field">
       <span>{label}</span>
@@ -2545,15 +2813,57 @@ function Input({ label, value, onChange, type = "text" }: any) {
   );
 }
 function Select({ label, value, onChange, options }: any) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <select value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Selecione...</option>
-        {options.map((x: string) => (
-          <option key={x}>{x}</option>
-        ))}
-      </select>
-    </label>
-  );
+  return <AnchoredSelect label={label} value={value ?? ""} onChange={onChange} options={[{ value: "", label: "Selecione..." }, ...options]} />;
+}
+
+type SelectOption = string | { value: string; label: string };
+function AnchoredSelect({ label, value, onChange, options, compact = false }: { label?: string; value: string; onChange: (value: string) => void; options: SelectOption[]; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const normalized = options.map((option) => typeof option === "string" ? { value: option, label: option } : option);
+  const current = normalized.find((option) => option.value === String(value ?? ""));
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !panelRef.current?.contains(target)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const closeOnScroll = (event: Event) => { if (!panelRef.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", closeOnScroll);
+    document.addEventListener("scroll", closeOnScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", closeOnScroll);
+      document.removeEventListener("scroll", closeOnScroll, true);
+    };
+  }, [open]);
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const triggerRect = triggerRef.current.getBoundingClientRect();
+      const filterPanel = triggerRef.current.closest(".salesFilters.mobileFiltersOpen") as HTMLElement | null;
+      const anchor = triggerRef.current.closest(".salesSelectField, .field") || triggerRef.current;
+      const anchorRect = anchor.getBoundingClientRect();
+      const panelRect = filterPanel?.getBoundingClientRect();
+      const panelStyle = filterPanel ? window.getComputedStyle(filterPanel) : null;
+      const left = panelRect ? panelRect.left + Number.parseFloat(panelStyle?.paddingLeft || "0") : anchorRect.left;
+      const availableWidth = panelRect ? panelRect.width - Number.parseFloat(panelStyle?.paddingLeft || "0") - Number.parseFloat(panelStyle?.paddingRight || "0") : anchorRect.width;
+      const width = Math.min(availableWidth, window.innerWidth - 16);
+      const height = Math.min(normalized.length * 38 + 12, 280);
+      setPosition({ top: triggerRect.bottom + height + 6 > window.innerHeight && triggerRect.top > height ? triggerRect.top - height - 6 : triggerRect.bottom + 6, left: Math.max(8, Math.min(left, window.innerWidth - width - 8)), width });
+    }
+    setOpen((currentOpen) => !currentOpen);
+  };
+  return <div className={compact ? "anchoredSelect anchoredSelectCompact" : "field anchoredSelect"}>
+    {label && <span>{label}</span>}
+    <button ref={triggerRef} type="button" className="anchoredSelectTrigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={toggle}><span>{current?.label || "Selecione..."}</span><ChevronDown size={15} /></button>
+    {open && createPortal(<div ref={panelRef} className={`anchoredSelectMenu${compact ? " compact" : ""}`} role="listbox" aria-label={label} style={position}>
+      {normalized.map((option) => <button key={option.value} type="button" role="option" aria-selected={option.value === String(value ?? "")} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}</button>)}
+    </div>, document.querySelector(".shell") || document.body)}
+  </div>;
 }

@@ -87,6 +87,30 @@ model Tenant {
   webhookReceipts     WebhookReceipt[]
   webhookEvents       WebhookEvent[]
   auditLogs           AuditLog[]
+  returnCases         ReturnCase[]
+}
+
+model ReturnCase {
+  id              String   @id @default(cuid())
+  tenantId        String
+  channel         Channel
+  externalOrderId String
+  orderExternalId String?
+  claimId         String?
+  status          String
+  reason          String?
+  sku             String?
+  quantity        Int      @default(1)
+  orderAmount     Decimal? @db.Decimal(12,2)
+  refundAmount    Decimal? @db.Decimal(12,2)
+  sourceUrl       String?
+  observedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, channel, externalOrderId])
+  @@index([tenantId, channel, status])
+  @@index([tenantId, channel, orderExternalId])
 }
 
 model Organization {
@@ -387,6 +411,9 @@ model Expense {
   category    String
   description String
   amount      Decimal @db.Decimal(12,2)
+  kind        String @default("FIXED")
+  rate        Decimal? @db.Decimal(7,4)
+  schedule    String @default("CUSTOM")
   channel     Channel?
   orderId     String?
   createdAt   DateTime @default(now())

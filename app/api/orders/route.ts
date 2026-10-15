@@ -75,7 +75,7 @@ export async function POST(req:Request){
       }],
       attribution:b.attribution||{source:b.source||'Manual',campaign:b.campaign||undefined}
     });
-    return NextResponse.json({ok:true,id:order.id});
+    return NextResponse.json({ok:true,id:order?.id || null});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});
   }
@@ -167,7 +167,10 @@ async function deleteOrderWithStockReverse(tenantId:string,id:string){
         });
       }
     }
-    await db.order.delete({where:{id}});
+    await db.$transaction([
+      db.auditLog.create({data:{tenantId,entityType:'Order',entityId:`${order.channel}:${order.externalId}`,action:'delete_manual_order',source:'MANUAL',before:{id:order.id,status:order.status,externalId:order.externalId,channel:order.channel},metadata:{orderId:order.id}}}),
+      db.order.delete({where:{id}})
+    ]);
 }
 
 export async function DELETE(req:Request){

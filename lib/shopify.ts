@@ -8,6 +8,7 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-10';
 const DEV_SHOP = process.env.SHOPIFY_SHOP_DOMAIN?.replace(/^https?:\/\//,'').replace(/\/$/,'');
 const DEV_TOKEN = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
 const SHOPIFY_WEBHOOK_TOPICS = ['orders/create','orders/paid','orders/updated','orders/cancelled','refunds/create','app/uninstalled'];
+const SHOPIFY_ORDER_FEE = 60.24;
 export const SHOPIFY_COMPLIANCE_TOPICS = ['customers/data_request','customers/redact','shop/redact'];
 
 type ShopifyConnection = { tenantId:string; integrationId?:string; shopDomain:string; accessToken:string; webhookSecret?:string; mode:'OAUTH'|'DEV_MANUAL' };
@@ -108,7 +109,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
     grossAmount:Math.max(0,total),
     discountAmount:discount,
     shippingAmount:shipping,
-    feeAmount:0,
+    feeAmount:SHOPIFY_ORDER_FEE,
     taxAmount:num(o.total_tax ?? o.totalTaxSet?.shopMoney?.amount),
     paymentMethod:(o.payment_gateway_names||o.paymentGatewayNames||[]).join(', ')||undefined,
     paidAt:o.processed_at||o.processedAt||o.created_at||o.createdAt,
