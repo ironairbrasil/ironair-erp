@@ -123,13 +123,14 @@ table th,table td,table td:last-child{text-align:center}
 .salesResultsSection .tableWrap::-webkit-scrollbar{height:9px}
 .salesResultsSection .tableWrap::-webkit-scrollbar-track{background:var(--panel2);border-radius:999px}
 .salesResultsSection .tableWrap::-webkit-scrollbar-thumb{background:var(--muted);border-radius:999px}
-.salesResultsSection table{min-width:1850px}
+.salesResultsSection table{min-width:1960px}
 .salesResultsSection th,.salesResultsSection td{padding-left:18px;padding-right:18px;white-space:nowrap}
-.salesResultsSection th:nth-child(2),.salesResultsSection td:nth-child(2){min-width:235px}
-.salesResultsSection th:nth-child(3),.salesResultsSection td:nth-child(3){min-width:145px}
+.salesResultsSection th:nth-child(2),.salesResultsSection td:nth-child(2){min-width:145px}
+.salesResultsSection th:nth-child(3),.salesResultsSection td:nth-child(3){min-width:235px}
 .salesResultsSection th:nth-child(4),.salesResultsSection td:nth-child(4){min-width:235px}
 .salesResultsSection th:nth-child(5),.salesResultsSection td:nth-child(5){min-width:175px}
-.salesResultsSection th:nth-child(n+6):nth-child(-n+9),.salesResultsSection td:nth-child(n+6):nth-child(-n+9){min-width:145px}
+.salesResultsSection th:nth-child(6),.salesResultsSection td:nth-child(6){min-width:110px}
+.salesResultsSection th:nth-child(n+7):nth-child(-n+10),.salesResultsSection td:nth-child(n+7):nth-child(-n+10){min-width:145px}
 .salesStatusTabs{display:flex;align-items:center;gap:4px;margin:2px 0 14px;padding:4px;border-bottom:1px solid var(--border)}
 .salesStatusTabs button{border:0;border-radius:8px;background:transparent;color:var(--muted);padding:9px 12px;font-size:13px;font-weight:600;cursor:pointer}
 .salesStatusTabs button.active{background:var(--panel2);color:var(--accent)}

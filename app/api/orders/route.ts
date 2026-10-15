@@ -45,7 +45,7 @@ async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
-  const rows=await db.order.findMany({where:{tenantId},take:1000,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:true,attribution:true,customer:true}});
+  const rows=await db.order.findMany({where:{tenantId},take:1000,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:{include:{variant:{select:{voltage:true}}}},attribution:true,customer:true}});
   return NextResponse.json(rows);
 }
 

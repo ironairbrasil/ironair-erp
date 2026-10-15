@@ -23,6 +23,7 @@ const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency",
 const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
 const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
 const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
+const dashboardExpandedStorageKey = "ironair-dashboard-expanded-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, {
     ...init,
@@ -132,6 +133,7 @@ export default function Home() {
   const [dashboardHidden, setDashboardHidden] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
   const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
+  const [dashboardLayoutLoaded, setDashboardLayoutLoaded] = useState(false);
   const [dashboardDropTarget, setDashboardDropTarget] = useState<string | null>(null);
   const dashboardDragSource = useRef<string | null>(null);
   const [range, setRange] = useState(() => ({
@@ -176,8 +178,17 @@ export default function Home() {
         next.push(...defaultDashboardLayout.filter((id) => !next.includes(id)));
         setDashboardLayout(next);
       }
+      setDashboardExpanded(localStorage.getItem(dashboardExpandedStorageKey) === "true");
     } catch { /* Keep the default layout if saved data is invalid. */ }
+    setDashboardLayoutLoaded(true);
   }, []);
+  useEffect(() => {
+    if (!dashboardLayoutLoaded) return;
+    try {
+      localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(dashboardLayout));
+      localStorage.setItem(dashboardExpandedStorageKey, String(dashboardExpanded));
+    } catch { /* The layout remains usable when browser storage is unavailable. */ }
+  }, [dashboardLayout, dashboardExpanded, dashboardLayoutLoaded]);
   const moveDashboardBlock = (source: string, target: string) => {
     if (source === target) return;
     setDashboardLayout((current) => {
@@ -187,7 +198,6 @@ export default function Home() {
       if (from < 0 || to < 0) return current;
       next.splice(from, 1);
       next.splice(to, 0, source);
-      localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(next));
       return next;
     });
   };
@@ -500,7 +510,7 @@ export default function Home() {
                 {filterModal === "product" && <div className="exportOptions dashboardOptions">{[["", "Todos"], ...dashboardProducts].map(([sku, name]) => <button key={String(sku) || "all"} onClick={() => { setProduct(String(sku)); setFilterModal(null); }}>{String(name)}</button>)}</div>}
               </div>
             </div>
-            <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
+            {dashboardLayoutLoaded && <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
               {dashboardLayout.map((blockId, index) => {
                 const kpi = blockId.startsWith("kpi-") ? dashboardCards[Number(blockId.slice(4))] : null;
                 const kpiPosition = kpi ? dashboardKpiIds.indexOf(blockId) : -1;
@@ -537,7 +547,7 @@ export default function Home() {
                 </div>}
                 </Fragment>;
               })}
-            </div>
+            </div>}
           </>
         )}
         {view === "Vendas" && (
@@ -1106,6 +1116,12 @@ function formatOrders(rows: any[]) {
   return (rows || []).map((o) => {
     const items = o.items || [];
     const firstItem = items[0];
+    const voltages = [...new Set(items.map((item: any) => {
+      const registered = String(item.variant?.voltage || "").trim();
+      if (registered) return registered;
+      const match = `${item.sku || ""} ${item.name || ""}`.match(/\b(110|127|220)\s*V\b/i);
+      return match ? `${match[1]}V` : "";
+    }).filter(Boolean))];
     const cogs = items.reduce((s: number, i: any) => s + Number(i.unitCost || 0) * Number(i.quantity || 0), 0);
     const fee = Number(o.feeAmount || 0);
     const freight = Number(o.shippingAmount || 0);
@@ -1116,6 +1132,7 @@ function formatOrders(rows: any[]) {
       date: fmtDate(o.paidAt || o.createdAt),
       customer: o.customer?.name || "Cliente",
       product: items.map((i: any) => `${i.name}${i.sku ? ` (${i.sku})` : ""}`).join(", ") || "—",
+      voltage: voltages.join(", ") || "—",
       itemSku: firstItem?.sku || "",
       orderItemId: firstItem?.id || "",
       source: o.channel,
@@ -1638,10 +1655,11 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
               <th className="checkCol">
                 <input type="checkbox" checked={allPageSelected} onChange={togglePage} aria-label="Selecionar página" />
               </th>
-              <th>Pedido</th>
               <th>Data</th>
+              <th>Pedido</th>
               <th>Cliente</th>
               <th>Origem</th>
+              <th>Voltagem</th>
               <th>Valor</th>
               <th>Taxa</th>
               <th>Frete</th>
@@ -1656,12 +1674,13 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                 <td className="checkCol" onClick={(e) => e.stopPropagation()}>
                   <input type="checkbox" checked={selected.has(keyOf(s))} onChange={() => toggleOne(keyOf(s))} aria-label={`Selecionar ${s.id}`} />
                 </td>
+                <td>{s.date}</td>
                 <td>
                   <b>{s.id}</b>
                 </td>
-                <td>{s.date}</td>
                 <td>{s.customer}</td>
                 <td>{s.source}</td>
+                <td>{s.voltage}</td>
                 <td>{s.value}</td>
                 <td>{money(s.fee || 0)}</td>
                 <td>{money(s.freight || 0)}</td>
