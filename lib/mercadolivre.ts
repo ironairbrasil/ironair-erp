@@ -238,6 +238,7 @@ function mapOrderStatus(o: any): IngestOrder['status']{
 
 type MercadoLivreOrderExtra = {
   shippingAmount?: number;
+  logisticType?: string;
   city?: string;
   state?: string;
   zip?: string;
@@ -259,6 +260,7 @@ export function mapMercadoLivreOrder(o: any, tenantId: string, extra: MercadoLiv
     tenantId,
     externalId: String(o.id),
     channel: 'MERCADO_LIVRE',
+    fulfillmentOrigin: /full|fulfillment/i.test(String(extra.logisticType || o.shipping?.logistic_type || '')) ? 'ML_FULL' : undefined,
     status: mapOrderStatus(o),
     currency: o.currency_id || 'BRL',
     grossAmount: num(o.paid_amount || o.total_amount),
@@ -331,6 +333,7 @@ async function mercadoLivreOrderExtra(order: any, tenantId: string): Promise<Mer
     const shipment: any = await mercadoLivreApi(`/shipments/${shipmentId}`, {
       headers: { 'x-format-new': 'true' }
     }, tenantId);
+    extra.logisticType = String(shipment?.logistic_type || shipment?.shipping_option?.logistic_type || '');
     const address = shipment?.receiver_address || shipment?.destination?.receiver_address || shipment?.destination?.shipping_address || {};
     extra.city = address?.city?.name || address?.city_name || address?.city || undefined;
     const state = address?.state?.id || address?.state?.name || address?.state_name || address?.state || undefined;

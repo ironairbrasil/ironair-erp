@@ -363,6 +363,7 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     tenantId,
     externalId: orderId,
     channel: 'AMAZON',
+    fulfillmentOrigin: String(order?.FulfillmentChannel || v2026?.fulfillmentChannel || '').toUpperCase() === 'AFN' ? 'AMAZON_FBA' : undefined,
     status: financials.refunded ? 'REFUNDED' : mapAmazonStatus(order),
     currency: order?.OrderTotal?.CurrencyCode || 'BRL',
     grossAmount: amount,

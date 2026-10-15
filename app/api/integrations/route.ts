@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getTenantId } from '@/lib/tenant';
+import { getTenantId, requireTenantAdmin } from '@/lib/tenant';
 
 type IntegrationRow={
   provider:string;
@@ -13,6 +13,7 @@ type IntegrationRow={
   mode?:string;
   shopDomain?:string|null;
   connectedAt?:Date|null;
+  externalAccountId?:string|null;
   webhooks?:Array<Record<string,unknown>>;
 };
 
@@ -42,6 +43,7 @@ export async function GET(req:Request){
       mode:row?.mode||'DEV_MANUAL',
       shopDomain:row?.shopDomain,
       connectedAt:row?.connectedAt,
+      externalAccountId:row?.externalAccountId,
       webhooks:row?.webhooks?.map(w=>({topic:w.topic,status:w.status,callbackUrl:w.callbackUrl,lastRegisteredAt:w.lastRegisteredAt,lastError:w.lastError}))||[]
     };
   }).filter(Boolean) as IntegrationRow[];
@@ -54,6 +56,7 @@ export async function GET(req:Request){
       missingFields:[],
       lastSyncAt:row.lastSyncAt,
       lastError:row.lastError,
+      externalAccountId:row.externalAccountId,
       fields:Array.isArray((row.config as any)?.fields)?(row.config as any).fields:[]
     });
   }
@@ -62,10 +65,11 @@ export async function GET(req:Request){
 
 export async function POST(req:Request){
   try{
-    const tenantId=await getTenantId(req);
+    const tenantId=await requireTenantAdmin(req);
     const b=await req.json();
     if(!b.provider&&!b.name) return NextResponse.json({ok:false,error:'provider obrigatório'},{status:400});
     const provider=String(b.provider||b.name);
+    if(provider==='Meta Ads') return NextResponse.json({ok:false,error:'Use a conexão autenticada da Meta'},{status:403});
     const mode=provider==='Shopify'||provider==='Mercado Livre'?'OAUTH':'DEV_MANUAL';
     const config={category:b.cat,webhook:b.webhook,fields:b.fields||[],hidden:false};
     const integration=await db.integration.upsert({
@@ -96,9 +100,10 @@ export async function POST(req:Request){
 
 export async function DELETE(req:Request){
   try{
-    const tenantId=await getTenantId(req);
+    const tenantId=await requireTenantAdmin(req);
     const provider=new URL(req.url).searchParams.get('provider');
     if(!provider) return NextResponse.json({ok:false,error:'provider obrigatório'},{status:400});
+    if(provider==='Meta Ads') return NextResponse.json({ok:false,error:'Use a desconexão autenticada da Meta'},{status:403});
     await db.integration.upsert({
       where:{tenantId_provider:{tenantId,provider}},
       create:{tenantId,provider,status:'DISCONNECTED',mode:'DEV_MANUAL',config:{hidden:true}},

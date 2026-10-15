@@ -1,8 +1,8 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
-import { alerts, campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
+import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
+import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 const menu = [
   ["Visão Geral", LayoutDashboard],
   ["Performance", BarChart3],
@@ -27,6 +27,7 @@ const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:
 const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
 const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
 const dashboardExpandedStorageKey = "ironair-dashboard-expanded-v1";
+const dashboardLayoutDirtyKey = "ironair-dashboard-layout-pending-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, {
     ...init,
@@ -37,7 +38,7 @@ const apiJson = async (url: string, init?: RequestInit) => {
   if (!r.ok || j.ok === false) throw new Error(j.error || "Falha na operação");
   return j;
 };
-type ModalKind = "movement" | "sale" | "customer" | "product" | "campaign" | "creative" | "expense" | "integration" | "integrationDetail" | "settings" | "saleDetail" | null;
+type ModalKind = "movement" | "movementEdit" | "sale" | "customer" | "product" | "campaign" | "creative" | "expense" | "integration" | "integrationDetail" | "settings" | "saleDetail" | null;
 type Integration = {
   name: string;
   status: "Conectado" | "Preparado";
@@ -47,6 +48,9 @@ type Integration = {
   accent: string;
   webhook: string;
   fields: string[];
+  accountId?: string;
+  lastSyncAt?: string;
+  lastError?: string;
 };
 const integrationsSeed: Integration[] = [
   {
@@ -121,6 +125,15 @@ const integrationsSeed: Integration[] = [
   },
 ];
 export default function Home() {
+  const [sessionInfo, setSessionInfo] = useState<{ tenants: { id: string; name: string }[]; activeTenantId: string | null } | null>(null);
+  useEffect(() => {
+    fetch('/api/auth/session', { cache: 'no-store' }).then(async response => {
+      if (!response.ok) { location.href = '/login'; return; }
+      const session = await response.json();
+      if (!session.tenants?.length) location.href = '/onboarding';
+      else setSessionInfo(session);
+    }).catch(() => { location.href = '/login'; });
+  }, []);
   const [view, setView] = useState("Visão Geral");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [period, setPeriod] = useState("Hoje");
@@ -137,6 +150,8 @@ export default function Home() {
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
   const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
   const [dashboardLayoutLoaded, setDashboardLayoutLoaded] = useState(false);
+  const dashboardLayoutSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const dashboardLayoutSaveRevision = useRef(0);
   const [dashboardDropTarget, setDashboardDropTarget] = useState<string | null>(null);
   const dashboardDragSource = useRef<string | null>(null);
   const [range, setRange] = useState(() => ({
@@ -181,33 +196,69 @@ export default function Home() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationTab, setNotificationTab] = useState<"Vendas" | "Alertas">("Vendas");
+  const notificationRef = useRef<HTMLDivElement>(null);
   const [catalogRows, setCatalogRows] = useState<any[]>([]);
   const [expenseRows, setExpenseRows] = useState<any[]>([]);
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [channelRows, setChannelRows] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>(null);
   useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(dashboardLayoutStorageKey) || "[]");
-      if (Array.isArray(stored)) {
-        const known = stored.filter((id): id is string => typeof id === "string" && defaultDashboardLayout.includes(id));
-        const next = [...new Set(known)];
-        const missingKpis = defaultDashboardLayout.filter((id) => id.startsWith("kpi-") && !next.includes(id));
-        const firstWideBlock = next.findIndex((id) => !id.startsWith("kpi-"));
-        next.splice(firstWideBlock < 0 ? next.length : firstWideBlock, 0, ...missingKpis);
-        next.push(...defaultDashboardLayout.filter((id) => !next.includes(id)));
-        setDashboardLayout(next);
-      }
-      setDashboardExpanded(localStorage.getItem(dashboardExpandedStorageKey) === "true");
-    } catch { /* Keep the default layout if saved data is invalid. */ }
-    setDashboardLayoutLoaded(true);
+    let active = true;
+    const normalize = (value: unknown) => {
+      const known = Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && defaultDashboardLayout.includes(id)) : [];
+      const next = [...new Set(known)];
+      next.push(...defaultDashboardLayout.filter((id) => !next.includes(id)));
+      return next;
+    };
+    const load = async () => {
+      let localLayout: string[] = defaultDashboardLayout;
+      let localExpanded = false;
+      let pending = false;
+      try {
+        localLayout = normalize(JSON.parse(localStorage.getItem(dashboardLayoutStorageKey) || "[]"));
+        localExpanded = localStorage.getItem(dashboardExpandedStorageKey) === "true";
+        pending = localStorage.getItem(dashboardLayoutDirtyKey) === "true";
+      } catch { /* Browser storage may be unavailable. */ }
+      let layout = localLayout;
+      let expanded = localExpanded;
+      try {
+        const saved = await apiJson("/api/dashboard/layout");
+        if (!pending && Array.isArray(saved.layout)) {
+          const remoteLayout = normalize(saved.layout);
+          const localWasCustomized = localLayout.some((id, index) => id !== defaultDashboardLayout[index]);
+          const remoteIsDefault = remoteLayout.every((id, index) => id === defaultDashboardLayout[index]);
+          if (!(localWasCustomized && remoteIsDefault)) {
+            layout = remoteLayout;
+            expanded = Boolean(saved.expanded);
+          }
+        }
+      } catch { /* Keep the browser layout while the API is unavailable. */ }
+      if (!active) return;
+      setDashboardLayout(layout);
+      setDashboardExpanded(expanded);
+      setDashboardLayoutLoaded(true);
+    };
+    void load();
+    return () => { active = false; };
   }, []);
   useEffect(() => {
     if (!dashboardLayoutLoaded) return;
     try {
       localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(dashboardLayout));
       localStorage.setItem(dashboardExpandedStorageKey, String(dashboardExpanded));
+      localStorage.setItem(dashboardLayoutDirtyKey, "true");
     } catch { /* The layout remains usable when browser storage is unavailable. */ }
+    const revision = ++dashboardLayoutSaveRevision.current;
+    dashboardLayoutSaveQueue.current = dashboardLayoutSaveQueue.current.catch(() => undefined).then(() => apiJson("/api/dashboard/layout", {
+      method: "PUT",
+      body: JSON.stringify({ layout: dashboardLayout, expanded: dashboardExpanded }),
+    })).then(() => {
+      if (revision === dashboardLayoutSaveRevision.current) {
+        try { localStorage.setItem(dashboardLayoutDirtyKey, "false"); } catch { /* Browser storage may be unavailable. */ }
+      }
+    }).catch(() => undefined);
   }, [dashboardLayout, dashboardExpanded, dashboardLayoutLoaded]);
   const moveDashboardBlock = (source: string, target: string) => {
     if (source === target) return;
@@ -218,6 +269,10 @@ export default function Home() {
       if (from < 0 || to < 0) return current;
       next.splice(from, 1);
       next.splice(to, 0, source);
+      try {
+        localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(next));
+        localStorage.setItem(dashboardLayoutDirtyKey, "true");
+      } catch { /* The in-memory layout still works. */ }
       return next;
     });
   };
@@ -253,6 +308,8 @@ export default function Home() {
   const allTimeStart = period === "Tempo todo" && dashboard?.periodMode === "all" ? dashboard.periodFrom : firstSaleDate;
   const inventorySalesRange = period === "Tempo todo" ? null : periodRange(period, range, firstSaleDate);
   const periodInventoryProducts = formatInventory(inventoryRows, inventoryMovementRows, scopedOrders(orderRows), inventorySalesRange);
+  const stockAlerts = products.filter((item) => Number(item.available || 0) <= Number(item.safety || 0)).map((item) => `${item.product} ${item.name || item.sku}: ${item.available} ${Number(item.available) === 1 ? "unidade disponível" : "unidades disponíveis"}.`);
+  const recentSales = orderRows.filter((order) => order.status === "PAID").sort((a, b) => new Date(b.paidAt || b.createdAt).getTime() - new Date(a.paidAt || a.createdAt).getTime()).slice(0, 8);
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
   const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
@@ -298,7 +355,7 @@ export default function Home() {
       setProducts(formatInventory(inventory.balances || [], inventory.movements || []));
       setCatalogRows(productRows || []);
       setExpenseRows(expenses || []);
-      setMovements(formatMovements(inventory.movements || []));
+      setMovements(formatMovements(inventory.movements || [], inventory.balances || []));
       setCustomers(customerRows || []);
       setCampaigns(formatCampaigns(campaignRows));
       buildAndCacheDashboards(orders || [], inventory.balances || []);
@@ -385,6 +442,18 @@ export default function Home() {
   useEffect(() => {
     loadData();
   }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") loadData(false); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!notificationOpen) return;
+    const dismiss = (event: PointerEvent) => { if (!notificationRef.current?.contains(event.target as Node)) setNotificationOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setNotificationOpen(false); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [notificationOpen]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
     const previousOverflow = document.body.style.overflow;
@@ -503,10 +572,24 @@ export default function Home() {
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden} title={dashboardHidden ? "Mostrar dados" : "Ocultar dados"}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button>}
           </div>
-          <button className="themeToggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Alternar tema" aria-label="Alternar tema">
-            <Sun size={16} className={theme === "light" ? "active" : ""} />
-            <Moon size={16} className={theme === "dark" ? "active" : ""} />
-          </button>
+          <div className="topbarActions">
+            {sessionInfo && <select aria-label="Empresa ativa" value={sessionInfo.activeTenantId || ''} onChange={async event => { await apiJson('/api/auth/select-tenant', { method: 'POST', body: JSON.stringify({ tenantId: event.target.value }) }); location.reload(); }} style={{ maxWidth: 155, background: '#101d27', color: '#dce9ee', border: '1px solid #2b404d', borderRadius: 8, padding: 7 }}>
+              {sessionInfo.tenants.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+            </select>}
+            <button type="button" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; }} title="Sair" style={{ background: 'transparent', border: '1px solid #2b404d', borderRadius: 8, color: '#dce9ee', padding: '7px 10px', cursor: 'pointer' }}>Sair</button>
+            <div className="notificationMenu" ref={notificationRef}>
+              <button type="button" className="notificationTrigger" aria-label="Notificações" aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={17} />{stockAlerts.length > 0 && <span className="notificationCount">{stockAlerts.length}</span>}</button>
+              {notificationOpen && <div className="notificationPopover">
+                <div className="notificationHeading"><b>Notificações</b><button type="button" aria-label="Fechar notificações" onClick={() => setNotificationOpen(false)}><X size={16} /></button></div>
+                <div className="notificationTabs"><button type="button" className={notificationTab === "Vendas" ? "active" : ""} onClick={() => setNotificationTab("Vendas")}>Vendas</button><button type="button" className={notificationTab === "Alertas" ? "active" : ""} onClick={() => setNotificationTab("Alertas")}>Alertas {stockAlerts.length > 0 ? `(${stockAlerts.length})` : ""}</button></div>
+                <div className="notificationList">{notificationTab === "Vendas" ? recentSales.length ? recentSales.map((order) => <div className="notificationItem" key={order.id}><ShoppingCart size={16} /><div><b>Venda aprovada · {money(Number(order.grossAmount || 0) - Number(order.discountAmount || 0))}</b><small>{order.customer?.name || order.externalId} · {fmtDate(order.paidAt || order.createdAt)}</small></div></div>) : <p className="notificationEmpty">Nenhuma venda aprovada.</p> : stockAlerts.length ? stockAlerts.map((alert) => <div className="notificationItem" key={alert}><Boxes size={16} /><div><b>Estoque de atenção</b><small>{alert}</small></div></div>) : <p className="notificationEmpty">Nenhum alerta de estoque.</p>}</div>
+              </div>}
+            </div>
+            <button className="themeToggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Alternar tema" aria-label="Alternar tema">
+              <Sun size={16} className={theme === "light" ? "active" : ""} />
+              <Moon size={16} className={theme === "dark" ? "active" : ""} />
+            </button>
+          </div>
         </header>
         <div className="mobilePageTitleRow"><h1 className="mobilePageTitle">{title}</h1>{view === "Visão Geral" && <><button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"}><Pencil size={16} /></button><button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button></>}</div>
         {view === "Visão Geral" && (
@@ -567,7 +650,7 @@ export default function Home() {
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -615,7 +698,7 @@ export default function Home() {
         {view === "Estoque" && (
           <>
             <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} showShopee={connectedProviders.has("Shopee")} />
-            <Movements movements={movements} onNew={() => open("movement")} />
+            <Movements movements={movements} onNew={() => open("movement")} onEdit={(movement: any) => open("movementEdit", movement)} />
           </>
         )}{" "}
         {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} />}
@@ -623,7 +706,7 @@ export default function Home() {
         {view === "Performance" && (
           <>
             <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}`)} />
-            <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} />
+            <ChannelTable rows={channelRows} />
           </>
         )}{" "}
         {view === "Jornada" && <Journey />} {view === "Financeiro" && <Finance data={dashboard} onNew={() => open("expense")} />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={creatives} onNew={() => open("creative")} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
@@ -650,6 +733,21 @@ export default function Home() {
                     reference: data.ref,
                     note: data.to ? `Destino: ${data.to}` : undefined,
                     date: data.date,
+                  }),
+                });
+              else if (kind === "movementEdit")
+                await apiJson(`/api/inventory/movement/${encodeURIComponent(data.id)}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    sku: data.sku,
+                    type: data.type,
+                    quantity: Number(data.qty),
+                    createdAt: data.createdAt,
+                    reference: data.ref,
+                    note: data.note,
+                    warehouseCode: data.warehouseCode,
+                    fromWarehouseCode: data.fromWarehouseCode,
+                    toWarehouseCode: data.toWarehouseCode,
                   }),
                 });
               else if (kind === "sale")
@@ -952,6 +1050,14 @@ function movementDay(movement: any) {
   if (movement?.source === "MANUAL" && typeof value === "string" && /T00:00:00(?:\.\d+)?Z$/.test(value)) return value.slice(0, 10);
   return dateKey(value);
 }
+function movementLocalDateTime(movement: any) {
+  const value = movement?.createdAt;
+  if (movement?.source === "MANUAL" && typeof value === "string" && /T00:00:00(?:\.\d+)?Z$/.test(value)) return `${value.slice(0, 10)}T12:00`;
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(value));
+  const part = (kind: string) => parts.find((item) => item.type === kind)?.value || "00";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+}
 function dashboardKpis(d: any) {
   const revenue = Number(d?.revenue || 0);
   const cogs = Number(d?.cogs || 0);
@@ -968,7 +1074,7 @@ function dashboardKpis(d: any) {
     {
       label: "Pedidos pagos",
       value: String(d?.orders || 0),
-      delta: "Fonte: aprovados",
+      delta: "Aprovados",
     },
     {
       label: "Lucro vendas",
@@ -996,9 +1102,9 @@ function dashboardKpis(d: any) {
       delta: "Receita / pedidos",
     },
     {
-      label: "Estoque disponível",
+      label: "Estoque",
       value: `${d?.available || 0} un.`,
-      delta: "Ledger materializado",
+      delta: "Disponíveis",
     },
     {
       label: "Impostos",
@@ -1184,7 +1290,7 @@ function formatOrders(rows: any[]) {
       voltage: voltages.join(", ") || "—",
       itemSku: firstItem?.sku || "",
       orderItemId: firstItem?.id || "",
-      source: o.channel,
+      source: o.sourceSnapshot?.fulfillmentOrigin === "AMAZON_FBA" || o.sourceSnapshot?.warehouseCode === "AMAZON_FBA" ? "Amazon FBA" : o.sourceSnapshot?.fulfillmentOrigin === "ML_FULL" || o.sourceSnapshot?.warehouseCode === "ML_FULL" ? "Mercado Livre Full" : o.channel,
       campaign: o.attribution?.campaign || o.attribution?.source || "—",
       value: money(Number(o.grossAmount || 0)),
       fee,
@@ -1283,15 +1389,33 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
   }
   return [...bySku.values()];
 }
-function formatMovements(rows: any[]) {
-  return (rows || []).map((m) => ({
+function formatMovements(rows: any[], balances: any[] = []) {
+  const byKey = new Map((rows || []).filter((m) => m.idempotencyKey).map((m) => [m.idempotencyKey, m]));
+  const running = new Map<string, number>();
+  for (const balance of balances) running.set(`${balance.variant?.sku || balance.sku}:${balance.warehouse?.code || balance.warehouseCode}`, Number(balance.onHand || 0));
+  return (rows || []).map((m) => {
+    const pairKey = String(m.idempotencyKey || "");
+    const other = byKey.get(m.type === "TRANSFER_IN" ? pairKey.slice(0, -3) : `${pairKey}:in`);
+    const balanceKey = `${m.sku}:${m.warehouseCode}`;
+    const balance = running.get(balanceKey);
+    if (balance !== undefined && m.type !== "RESERVE" && m.type !== "RELEASE") running.set(balanceKey, balance - Number(m.quantity || 0));
+    return ({
+    id: m.id,
+    raw: m,
     date: fmtMovementDate(m),
+    createdAt: movementLocalDateTime(m),
     sku: m.sku,
     type: m.type,
     qty: m.quantity,
     ref: m.reference || m.note || m.warehouseCode,
-    balance: "—",
-  }));
+    reference: m.reference || "",
+    note: m.note || "",
+    warehouseCode: m.warehouseCode,
+    fromWarehouseCode: m.type === "TRANSFER_OUT" ? m.warehouseCode : other?.warehouseCode || "CENTRAL",
+    toWarehouseCode: m.type === "TRANSFER_IN" ? m.warehouseCode : other?.warehouseCode || "AMAZON_FBA",
+    source: m.source,
+    balance: balance ?? "—",
+  }); });
 }
 function formatCampaigns(rows: any[]) {
   return rows.map((c) => ({
@@ -1317,7 +1441,7 @@ function formatChannels(rows: any[]) {
     profit: money(c.salesProfit || 0),
   }));
 }
-function ChannelTable({ rows, onExport, hidden = false }: { rows: any[]; onExport: () => void; hidden?: boolean }) {
+function ChannelTable({ rows, hidden = false }: { rows: any[]; hidden?: boolean }) {
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1325,9 +1449,6 @@ function ChannelTable({ rows, onExport, hidden = false }: { rows: any[]; onExpor
           <h2>Performance por canal</h2>
           <p>Receita e lucro de venda consolidado</p>
         </div>
-        <button className="ghost clickable" onClick={onExport} disabled={hidden}>
-          Exportar CSV
-        </button>
       </div>
       <div className="tableWrap">
         <table className="channelTable">
@@ -1942,7 +2063,7 @@ function Creatives({ rows, onNew }: any) {
     </article>
   );
 }
-function Movements({ movements, onNew }: any) {
+function Movements({ movements, onNew, onEdit }: any) {
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1965,6 +2086,7 @@ function Movements({ movements, onNew }: any) {
               <th>Quantidade</th>
               <th>Referência</th>
               <th>Saldo</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -1983,6 +2105,7 @@ function Movements({ movements, onNew }: any) {
                 <td>
                   <b>{m.balance}</b>
                 </td>
+                <td><button className="mini" title="Editar movimentação" aria-label={`Editar movimentação ${m.sku} ${m.date}`} onClick={() => onEdit(m)}><Pencil size={14} /></button></td>
               </tr>
             ))}
           </tbody>
@@ -2112,6 +2235,9 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
       ...seed,
       cat: integrationCategory(row.provider),
       status: row.status === "CONNECTED" ? "Conectado" : "Preparado",
+      accountId: row.externalAccountId || undefined,
+      lastSyncAt: row.lastSyncAt || undefined,
+      lastError: row.lastError || undefined,
     };
   });
   return (
@@ -2139,7 +2265,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
               </div>
               <div className="integrationActions">
                 <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
-                <button
+                {i.name !== "Meta Ads" && <button
                   className="mini danger"
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -2148,7 +2274,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
                   }}
                 >
                   <Trash2 size={14} />
-                </button>
+                </button>}
               </div>
             </article>
           );
@@ -2222,6 +2348,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const title: any = {
     movement: "Nova movimentação",
+    movementEdit: "Editar movimentação",
     sale: "Venda manual",
     customer: "Novo cliente",
     product: data ? "Editar produto" : "Novo produto",
@@ -2253,7 +2380,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
         <div className="modalHead">
           <div>
             <h2>{title[kind]}</h2>
-            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : kind === "expense" ? "A despesa será salva e abatida do lucro líquido." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
+            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : kind === "expense" ? "A despesa será salva e abatida do lucro líquido." : kind === "movementEdit" ? "Os dados da movimentação serão salvos no banco local." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
           </div>
           <button className="close" onClick={close}>
             <X />
@@ -2268,6 +2395,22 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
               <Input label="Referência / motivo" value={f.ref} onChange={(v: any) => set("ref", v)} />
               <Select label="Destino" value={f.to} onChange={(v: any) => setF((current: any) => ({ ...current, to: v, type: v === "Amazon FBA" || v === "Mercado Livre Full" ? "Transferência" : current.type === "Transferência" ? "" : current.type }))} options={channelOptions} />
+            </FormGrid>
+          )}
+          {kind === "movementEdit" && (
+            <FormGrid>
+              <Select label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} options={products.map((p: any) => p.sku)} />
+              <label className="field"><span>Data e hora</span><input type="datetime-local" value={f.createdAt || ""} onChange={(e) => set("createdAt", e.target.value)} /></label>
+              <Select label="Movimento" value={f.type} onChange={(v: any) => setF((current: any) => ({ ...current, type: v, qty: ["SALE", "DAMAGE"].includes(v) ? -Math.abs(Number(current.qty || 1)) : ["PURCHASE", "RETURN"].includes(v) ? Math.abs(Number(current.qty || 1)) : current.qty }))} options={f.type === "TRANSFER_IN" || f.type === "TRANSFER_OUT" ? [f.type] : ["PURCHASE", "SALE", "RESERVE", "RELEASE", "RETURN", "DAMAGE", "ADJUSTMENT"]} />
+              <Input label="Quantidade (+ entrada, − saída)" type="number" value={f.qty} onChange={(v: any) => set("qty", v)} />
+              {f.type === "TRANSFER_IN" || f.type === "TRANSFER_OUT" ? <>
+                <Select label="Origem" value={f.fromWarehouseCode} onChange={(v: any) => set("fromWarehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />
+                <Select label="Destino" value={f.toWarehouseCode} onChange={(v: any) => set("toWarehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />
+              </> : <Select label="Depósito" value={f.warehouseCode} onChange={(v: any) => set("warehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />}
+              <Input label="Referência" value={f.reference} onChange={(v: any) => setF((current: any) => ({ ...current, reference: v, ref: v }))} />
+              <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
+              <div className="field"><span>Saldo após movimento</span><strong>{f.balance}</strong><small>Recalculado ao salvar quantidade, SKU ou depósito.</small></div>
+              <div className="field"><span>Origem do registro</span><strong>{f.source === "SYNC" ? "Integração · edição manual" : "Manual"}</strong></div>
             </FormGrid>
           )}
           {kind === "sale" && (
@@ -2399,6 +2542,30 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
     notify(`Sincronizado: ${r.products || 0} produtos, ${r.orders || 0} pedidos`);
     reloadStatus();
   };
+  if (i.name === "Meta Ads") {
+    const connectMeta = async () => {
+      const result = await apiJson('/api/integrations/meta/authorize', { method: 'POST' });
+      if (result.url) window.location.href = result.url;
+    };
+    const disconnectMeta = async () => {
+      await apiJson('/api/integrations/meta/self-disconnect', { method: 'POST' });
+      notify('Meta Ads desconectada');
+      reloadStatus();
+    };
+    return <div>
+      <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Meta Ads</h3><p>Gastos, impressões e cliques por campanha</p></div><span className={i.status === "Conectado" ? "status ok" : "status warn"}>{i.status}</span></div>
+      <div className="detailGrid">
+        <div className="detailBox"><span>Conta de anúncios</span><b>{i.accountId || "Não conectada"}</b></div>
+        <div className="detailBox"><span>Última sincronização</span><b>{i.lastSyncAt ? fmtDate(i.lastSyncAt) : "Nunca"}</b></div>
+      </div>
+      {i.lastError && <p className="muted">Erro recente: {i.lastError}</p>}
+      <p className="muted">A conexão é separada por empresa. O token fica criptografado no servidor; a sincronização periódica usa somente a conta vinculada a esta empresa.</p>
+      <div className="formActions">
+        <button onClick={connectMeta}>{i.status === "Conectado" ? "Trocar conta Meta" : "Conectar Meta Ads"}</button>
+        {i.status === "Conectado" && <button onClick={disconnectMeta}>Desconectar</button>}
+      </div>
+    </div>;
+  }
   if (i.name === "Shopify") {
     const connected = status?.status === "CONNECTED";
     return (

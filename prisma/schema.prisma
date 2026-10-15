@@ -88,6 +88,15 @@ model Tenant {
   webhookEvents       WebhookEvent[]
   auditLogs           AuditLog[]
   returnCases         ReturnCase[]
+  dashboardLayout      DashboardLayout?
+}
+
+model DashboardLayout {
+  tenantId  String   @id
+  layout    Json
+  expanded  Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model ReturnCase {

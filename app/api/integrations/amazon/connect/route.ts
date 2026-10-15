@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { connectAmazonFromEnv } from '@/lib/amazon';
-import { getTenantId } from '@/lib/tenant';
+import { requireTenantAdmin } from '@/lib/tenant';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: Request){
   try{
-    const tenantId = await getTenantId(req);
+    const tenantId = await requireTenantAdmin(req);
     const integration = await connectAmazonFromEnv(tenantId);
     return NextResponse.json({ ok: true, status: integration.status, connectedAt: integration.connectedAt });
   }catch(e: any){
@@ -14,6 +14,6 @@ export async function POST(req: Request){
   }
 }
 
-export async function GET(req: Request){
-  return POST(req);
+export async function GET(){
+  return NextResponse.json({ ok: false, error: 'method_not_allowed' }, { status: 405 });
 }

@@ -28,7 +28,7 @@ export async function DELETE(req:Request){
     if(!sku) return NextResponse.json({ok:false,error:'sku obrigatório'},{status:400});
     const variant=await db.productVariant.update({where:{tenantId_sku:{tenantId,sku}},data:{active:false}});
     const activeSiblings=await db.productVariant.count({where:{tenantId,productId:variant.productId,active:true}});
-    if(activeSiblings===0) await db.product.update({where:{id:variant.productId},data:{active:false}});
+    if(activeSiblings===0) await db.product.update({where:{id:variant.productId,tenantId},data:{active:false}});
     return NextResponse.json({ok:true});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});
@@ -43,7 +43,7 @@ export async function POST(req:Request){
     if(!sku) return NextResponse.json({ok:false,error:'SKU obrigatório'},{status:400});
     const productName=String(b.product||b.name||'Produto').trim();
     const product=b.productId
-      ? await db.product.update({where:{id:b.productId},data:{name:productName}})
+      ? await db.product.update({where:{id:String(b.productId),tenantId},data:{name:productName}})
       : (await db.product.findFirst({where:{tenantId,name:productName}})) || await db.product.create({data:{tenantId,name:productName}});
     const existingSku=String(b._edit||sku);
     const before=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:existingSku}},include:{product:true}});
