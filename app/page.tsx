@@ -1017,7 +1017,7 @@ function dashboardKpis(d: any) {
     },
     {
       label: "ROI",
-      value: investment > 0 ? ratio((revenue - investment) / investment) : "—",
+      value: investment > 0 ? ratio(Math.max(0, (revenue - investment) / investment)) : "—",
       delta: "Retorno sobre o investimento",
     },
     {
