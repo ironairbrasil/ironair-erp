@@ -149,7 +149,9 @@ export default function Home() {
   const [dashboardHidden, setDashboardHidden] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
   const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
+  const [dashboardLayoutReady, setDashboardLayoutReady] = useState(false);
   const [dashboardLayoutLoaded, setDashboardLayoutLoaded] = useState(false);
+  const dashboardLayoutSkipSave = useRef(false);
   const dashboardLayoutSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const dashboardLayoutSaveRevision = useRef(0);
   const [dashboardDropTarget, setDashboardDropTarget] = useState<string | null>(null);
@@ -181,7 +183,9 @@ export default function Home() {
   const dashboardPending = useRef(new Map<string, Promise<any>>());
   const dashboardRequest = useRef(0);
   const syncingRef = useRef(false);
-  const rangeEffectReady = useRef(false);
+  const lastRangeKey = useRef<string | null>(null);
+  const lastLoadedView = useRef<string | null>(null);
+  const dataPending = useRef(new Map<string, Promise<any>>());
   const [orderRows, setOrderRows] = useState<any[]>([]);
   const [inventoryRows, setInventoryRows] = useState<any[]>([]);
   const [inventoryMovementRows, setInventoryMovementRows] = useState<any[]>([]);
@@ -224,8 +228,13 @@ export default function Home() {
         localExpanded = localStorage.getItem(dashboardExpandedStorageKey) === "true";
         pending = localStorage.getItem(dashboardLayoutDirtyKey) === "true";
       } catch { /* Browser storage may be unavailable. */ }
+      if (!active) return;
+      setDashboardLayout(localLayout);
+      setDashboardExpanded(localExpanded);
+      setDashboardLayoutReady(true);
       let layout = localLayout;
       let expanded = localExpanded;
+      let needsSave = pending;
       try {
         const saved = await apiJson("/api/dashboard/layout");
         if (!pending && Array.isArray(saved.layout)) {
@@ -235,10 +244,13 @@ export default function Home() {
           if (!(localWasCustomized && remoteIsDefault)) {
             layout = remoteLayout;
             expanded = Boolean(saved.expanded);
+          } else {
+            needsSave = true;
           }
         }
       } catch { /* Keep the browser layout while the API is unavailable. */ }
       if (!active) return;
+      dashboardLayoutSkipSave.current = !needsSave;
       setDashboardLayout(layout);
       setDashboardExpanded(expanded);
       setDashboardLayoutLoaded(true);
@@ -248,6 +260,7 @@ export default function Home() {
   }, []);
   useEffect(() => {
     if (!dashboardLayoutLoaded) return;
+    if (dashboardLayoutSkipSave.current) { dashboardLayoutSkipSave.current = false; return; }
     try {
       localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(dashboardLayout));
       localStorage.setItem(dashboardExpandedStorageKey, String(dashboardExpanded));
@@ -280,26 +293,6 @@ export default function Home() {
     });
   };
   const dashboardRowStep = () => typeof window === "undefined" ? 4 : window.innerWidth <= 650 ? 1 : window.innerWidth <= 1050 ? 2 : 4;
-  const [creatives, setCreatives] = useState<any[]>([
-    {
-      name: "Pablo • sabe passar roupa?",
-      platform: "Meta",
-      campaign: "IA Outubro",
-      spend: "R$ 1.420",
-      sales: 18,
-      roas: "6,8x",
-      status: "Ativo",
-    },
-    {
-      name: "Comparativo ferro × Iron Air",
-      platform: "Meta",
-      campaign: "Remarketing",
-      spend: "R$ 880",
-      sales: 9,
-      roas: "5,1x",
-      status: "Ativo",
-    },
-  ]);
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
   const dashboardPlatforms = useMemo(() => [...new Set(orderRows.map((o) => String(o.channel || "")))].filter(Boolean).sort(), [orderRows]);
   const dashboardProducts = useMemo(() => catalogRows.map((p) => [p.sku, p.name || p.product || p.sku] as [string, string]).sort((a, b) => a[1].localeCompare(b[1])), [catalogRows]);
@@ -342,26 +335,55 @@ export default function Home() {
     if (request === dashboardRequest.current) applyDashboard(dash);
     return dash;
   };
-  const loadData = async (showLoading = true) => {
+  const loadData = async (showLoading = true, scope: "all" | "view" = "all") => {
     const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
+    const fetchOnce = (url: string, fallback: any) => {
+      let pending = dataPending.current.get(url);
+      if (!pending) {
+        pending = retry(url, fallback);
+        dataPending.current.set(url, pending);
+        void pending.finally(() => { if (dataPending.current.get(url) === pending) dataPending.current.delete(url); }).catch(() => undefined);
+      }
+      return pending;
+    };
     if (showLoading) setLoading(true);
+    const routes: Record<string, { url: string; fallback: any; apply: (data: any) => void }> = {
+      orders: { url: "/api/orders", fallback: [], apply: (data) => { setOrderRows(data || []); setSales(formatOrders(data)); } },
+      inventory: { url: "/api/inventory", fallback: { balances: [], movements: [] }, apply: (data) => { setInventoryRows(data.balances || []); setInventoryMovementRows(data.movements || []); setProducts(formatInventory(data.balances || [], data.movements || [])); setMovements(formatMovements(data.movements || [], data.balances || [])); } },
+      customers: { url: "/api/customers", fallback: [], apply: (data) => setCustomers(data || []) },
+      campaigns: { url: "/api/campaigns?hierarchy=1", fallback: { campaigns: [], adsets: [], ads: [] }, apply: (data) => { setCampaigns(formatCampaigns(data.campaigns || [], "campaign")); setAdsets(formatCampaigns(data.adsets || [], "adset")); setAds(formatCampaigns(data.ads || [], "ad")); } },
+      products: { url: "/api/products", fallback: [], apply: (data) => setCatalogRows(data || []) },
+      expenses: { url: "/api/expenses", fallback: [], apply: (data) => setExpenseRows(data || []) },
+      returns: { url: "/api/returns", fallback: [], apply: (data) => setReturnRows(data || []) },
+      integrations: { url: "/api/integrations", fallback: [], apply: (data) => setIntegrationRows(Array.isArray(data) ? data : []) },
+    };
+    const byView: Record<string, string[]> = {
+      "Visão Geral": ["orders", "inventory", "products", "integrations"],
+      "Performance": ["campaigns"],
+      "Vendas": ["orders", "inventory", "products", "customers", "integrations"],
+      "Devoluções": ["returns", "orders"],
+      "Clientes": ["customers"],
+      "Produtos": ["products", "inventory"],
+      "Estoque": ["inventory", "orders", "products", "integrations"],
+      "Despesas": ["expenses"],
+      "Campanhas": ["campaigns"],
+      "Criativos": ["campaigns"],
+      "Financeiro": ["expenses"],
+      "Integrações": [],
+      "Configurações": [],
+      "Jornada": [],
+    };
     try {
-      const [orders, inventory, customerRows, campaignRows, productRows, expenses, returns, integrations] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns?hierarchy=1", { campaigns: [], adsets: [], ads: [] }), retry("/api/products", []), retry("/api/expenses", []), retry("/api/returns", []), retry("/api/integrations", [])]);
-      setIntegrationRows(Array.isArray(integrations) ? integrations : []);
-      setOrderRows(orders || []);
-      setSales(formatOrders(orders));
-      setReturnRows(returns || []);
-      setInventoryRows(inventory.balances || []);
-      setInventoryMovementRows(inventory.movements || []);
-      setProducts(formatInventory(inventory.balances || [], inventory.movements || []));
-      setCatalogRows(productRows || []);
-      setExpenseRows(expenses || []);
-      setMovements(formatMovements(inventory.movements || [], inventory.balances || []));
-      setCustomers(customerRows || []);
-      setCampaigns(formatCampaigns(campaignRows.campaigns || [], "campaign"));
-      setAdsets(formatCampaigns(campaignRows.adsets || [], "adset"));
-      setAds(formatCampaigns(campaignRows.ads || [], "ad"));
-      if (view === "Visão Geral") void loadDashboardFromApi().catch(() => null);
+      // Render the dashboard before competing with secondary page data for DB connections.
+      if (view === "Visão Geral" || view === "Financeiro" || view === "Performance") {
+        await loadDashboardFromApi().catch(() => null);
+      }
+      const keys = scope === "all" ? Object.keys(routes) : byView[view] || [];
+      await Promise.all(keys.map(async (key) => {
+        const route = routes[key];
+        const data = await fetchOnce(route.url, route.fallback);
+        route.apply(data);
+      }));
     } catch (e: any) {
       if (view !== "Integrações" && showLoading) notify(`Banco indisponível: ${e.message}`);
     } finally {
@@ -398,7 +420,7 @@ export default function Home() {
         sync("Amazon", "/api/integrations/amazon/sync", { days: 7 }),
       ]);
       dashboardCache.current.clear();
-      await loadData(false);
+      await loadData(false, "view");
       if (manual) {
         const failures = results.filter((r) => !r.ok);
         const successes = results
@@ -442,12 +464,9 @@ export default function Home() {
     }
   };
   useEffect(() => {
-    loadData();
-  }, []);
-  useEffect(() => {
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") loadData(false); }, 60_000);
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") loadData(false, "view"); }, 60_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [view]);
   useEffect(() => {
     if (!notificationOpen) return;
     const dismiss = (event: PointerEvent) => { if (!notificationRef.current?.contains(event.target as Node)) setNotificationOpen(false); };
@@ -465,12 +484,13 @@ export default function Home() {
     return () => { document.body.style.overflow = previousOverflow; document.removeEventListener("keydown", closeOnEscape); };
   }, [mobileMenuOpen]);
   useEffect(() => {
-    if (view === "Vendas" || view === "Devoluções") loadData(false);
-    if (view === "Visão Geral") loadDashboardFromApi().catch(() => null);
+    if (lastLoadedView.current === view) return;
+    lastLoadedView.current = view;
+    loadData(false, "view");
   }, [view]);
   useEffect(() => {
     if (view !== "Vendas" && view !== "Devoluções") return;
-    const refreshVisible = () => { if (document.visibilityState === "visible") loadData(false); };
+    const refreshVisible = () => { if (document.visibilityState === "visible") loadData(false, "view"); };
     window.addEventListener("focus", refreshVisible);
     document.addEventListener("visibilitychange", refreshVisible);
     return () => {
@@ -488,11 +508,14 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (!rangeEffectReady.current) {
-      rangeEffectReady.current = true;
+    const key = dashboardKey();
+    if (lastRangeKey.current === null) {
+      lastRangeKey.current = key;
       return;
     }
-    const cached = dashboardCache.current.get(dashboardKey());
+    if (lastRangeKey.current === key) return;
+    lastRangeKey.current = key;
+    const cached = dashboardCache.current.get(key);
     if (cached) applyDashboard(cached);
     loadDashboardFromApi(period, range).catch(() => notify("Não foi possível atualizar o dashboard"));
   }, [period, range.from, range.to, platform, product]);
@@ -618,7 +641,7 @@ export default function Home() {
                 {filterModal === "product" && <div className="exportOptions dashboardOptions">{[["", "Todos"], ...dashboardProducts].map(([sku, name]) => <button key={String(sku) || "all"} onClick={() => { setProduct(String(sku)); setFilterModal(null); }}>{String(name)}</button>)}</div>}
               </div>
             </div>
-            {dashboardLayoutLoaded && <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
+            {dashboardLayoutReady && <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
               {dashboardLayout.map((blockId, index) => {
                 const kpi = blockId.startsWith("kpi-") ? dashboardCards[Number(blockId.slice(4))] : null;
                 const kpiPosition = kpi ? dashboardKpiIds.indexOf(blockId) : -1;
@@ -710,7 +733,7 @@ export default function Home() {
             <ChannelTable rows={channelRows} />
           </>
         )}{" "}
-        {view === "Jornada" && <Journey />} {view === "Financeiro" && <Finance data={dashboard} onNew={() => open("expense")} />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={creatives} onNew={() => open("creative")} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
+        {view === "Jornada" && <Journey />} {view === "Financeiro" && <Finance data={dashboard} onNew={() => open("expense")} />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
       {modal && (
         <Modal
@@ -799,19 +822,6 @@ export default function Home() {
                   method: data.id ? "PATCH" : "POST",
                   body: JSON.stringify(data),
                 });
-              else if (kind === "creative")
-                setCreatives((v) => [
-                  ...v,
-                  {
-                    name: data.name || "Novo criativo",
-                    platform: data.platform || "Meta",
-                    campaign: data.campaign || "Sem campanha",
-                    spend: "R$ 0",
-                    sales: 0,
-                    roas: "0x",
-                    status: "Rascunho",
-                  },
-                ]);
               setModal(null);
               await loadData();
               notify("Salvo e persistido");
@@ -1978,22 +1988,113 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     </div>
   );
 }
+function AdThumbnail({ url, small = false, platform = "meta" }: { url?: string; small?: boolean; platform?: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  return <span className={`adThumbnail ${small ? "small" : ""}`}>{url && !failed ? <img src={url} alt="Miniatura do anúncio" loading="lazy" onError={() => setFailed(true)} /> : <img src={`/integration-logos/${platform.toLowerCase().replace(" ads", "")}-ads.webp`} alt="Miniatura indisponível" />}</span>;
+}
 function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager = false }: any) {
   const [selectedPlatform, setSelectedPlatform] = useState("Meta");
   const [level, setLevel] = useState("Campanhas");
   const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<string[]>([]);
+  const [selectedAdsetKeys, setSelectedAdsetKeys] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"all" | "active">("all");
+  const [metaMetrics, setMetaMetrics] = useState<any>(null);
+  const [metricsError, setMetricsError] = useState("");
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!manager) return;
+    let active = true;
+    try { setColumnWidths(JSON.parse(localStorage.getItem("ironair-ads-column-widths-v1") || "{}")); } catch { /* ignore invalid saved layout */ }
+    apiJson("/api/campaigns/metrics").then((data) => { if (active) setMetaMetrics(data.metrics); }).catch((error) => { if (active) setMetricsError(error.message || "Métricas Meta indisponíveis"); });
+    return () => { active = false; };
+  }, [manager]);
+  useEffect(() => {
+    if (!manager || level !== "Anúncios" || selectedPlatform !== "Meta") return;
+    let active = true;
+    apiJson("/api/campaigns/thumbnails").then((data) => { if (active) setThumbnails(data.thumbnails || {}); }).catch(() => {});
+    return () => { active = false; };
+  }, [manager, level, selectedPlatform]);
   const platforms = ["Meta", "Google", "TikTok"];
   const levels = ["Contas", "Campanhas", "Conjuntos", "Anúncios"];
+  const campaignKey = (c: any) => [c.platform, c.accountId, c.campaignId].join(":");
+  const adsetKey = (c: any) => [c.platform, c.accountId, c.campaignId, c.adsetId].join(":");
   const platformRows = campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase()));
   const accountRows = Array.from(new Map(platformRows.map((c: any) => [c.accountId, c.accountId])).values()).filter(Boolean).map((accountId: any) => {
     const rows = platformRows.filter((c: any) => c.accountId === accountId);
-    return { campaignId: accountId, accountId, name: accountId === "manual" ? "Campanhas manuais" : accountId, spendValue: rows.reduce((sum: number, c: any) => sum + c.spendValue, 0), recentSpend: rows.reduce((sum: number, c: any) => sum + c.recentSpend, 0), revenueValue: rows.reduce((sum: number, c: any) => sum + c.revenueValue, 0), sales: rows.reduce((sum: number, c: any) => sum + c.sales, 0), clicks: rows.reduce((sum: number, c: any) => sum + c.clicks, 0), impressions: rows.reduce((sum: number, c: any) => sum + c.impressions, 0), children: rows.length };
+    return { campaignId: accountId, accountId, name: accountId === "manual" ? "Campanhas manuais" : accountId, status: rows.some((c: any) => c.status === "ACTIVE") ? "ACTIVE" : null, spendValue: rows.reduce((sum: number, c: any) => sum + c.spendValue, 0), recentSpend: rows.reduce((sum: number, c: any) => sum + c.recentSpend, 0), revenueValue: rows.reduce((sum: number, c: any) => sum + c.revenueValue, 0), sales: rows.reduce((sum: number, c: any) => sum + c.sales, 0), clicks: rows.reduce((sum: number, c: any) => sum + c.clicks, 0), impressions: rows.reduce((sum: number, c: any) => sum + c.impressions, 0), children: rows.length };
   });
   const levelRows = level === "Conjuntos" ? adsets : level === "Anúncios" ? ads : campaigns;
-  const visibleRows = (manager ? level === "Contas" ? accountRows : level === "Campanhas" ? platformRows : levelRows.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase())) : campaigns).filter((c: any) => `${c.name} ${c.accountId || ""} ${c.campaignName || ""} ${c.campaignId || ""} ${c.adsetName || ""} ${c.adsetId || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const visibleRows = (manager ? level === "Contas" ? accountRows : level === "Campanhas" ? platformRows : levelRows.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase())) : campaigns).filter((c: any) => (!manager || statusFilter === "all" || c.status === "ACTIVE") && (level !== "Conjuntos" && level !== "Anúncios" || !selectedCampaignKeys.length || selectedCampaignKeys.includes(campaignKey(c))) && (level !== "Anúncios" || !selectedAdsetKeys.length || selectedAdsetKeys.includes(adsetKey(c))) && `${c.name} ${c.accountId || ""} ${c.campaignName || ""} ${c.campaignId || ""} ${c.adsetName || ""} ${c.adsetId || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const rowIdFor = (c: any, rowLevel: string) => [rowLevel, c.platform || selectedPlatform, c.accountId, c.campaignId, c.adsetId, c.adId].join(":");
+  const rowId = (c: any) => rowIdFor(c, level);
+  const updateSelection = (nextIds: string[]) => {
+    setSelectedIds(nextIds);
+    if (level === "Campanhas") {
+      setSelectedCampaignKeys(platformRows.filter((c: any) => nextIds.includes(rowId(c))).map(campaignKey));
+      setSelectedAdsetKeys([]);
+    } else if (level === "Conjuntos") {
+      setSelectedAdsetKeys(adsets.filter((c: any) => nextIds.includes(rowId(c))).map(adsetKey));
+    }
+  };
+  const changeLevel = (nextLevel: string) => {
+    setLevel(nextLevel);
+    setSearch("");
+    setSelectedIds(nextLevel === "Campanhas" ? platformRows.filter((c: any) => selectedCampaignKeys.includes(campaignKey(c))).map((c: any) => rowIdFor(c, nextLevel)) : nextLevel === "Conjuntos" ? adsets.filter((c: any) => selectedAdsetKeys.includes(adsetKey(c))).map((c: any) => rowIdFor(c, nextLevel)) : []);
+  };
+  const visibleIds = visibleRows.map(rowId);
+  const visibleCountLabel = level === "Contas" && manager ? ["conta", "contas"] : level === "Conjuntos" && manager ? ["conjunto", "conjuntos"] : level === "Anúncios" && manager ? ["anúncio", "anúncios"] : ["campanha", "campanhas"];
+  const selectedVisible = visibleIds.filter((id: string) => selectedIds.includes(id));
+  const showActions = visibleRows.some((c: any) => c.manual);
   const totalSpend = platformRows.reduce((sum: number, c: any) => sum + c.spendValue, 0);
   const totalRevenue = platformRows.reduce((sum: number, c: any) => sum + c.revenueValue, 0);
   const statusLabels: Record<string, string> = { ACTIVE: "Ativa", PAUSED: "Pausada", CAMPAIGN_PAUSED: "Campanha pausada", ADSET_PAUSED: "Conjunto pausado", DISAPPROVED: "Reprovado", PENDING_REVIEW: "Em análise", WITH_ISSUES: "Com problemas", IN_PROCESS: "Processando", ARCHIVED: "Arquivada" };
+  const metric = (c: any) => selectedPlatform === "Meta" ? metaMetrics?.[level === "Contas" ? "accounts" : level === "Conjuntos" ? "adsets" : level === "Anúncios" ? "ads" : "campaigns"]?.[level === "Contas" ? c.accountId : level === "Conjuntos" ? c.adsetId : level === "Anúncios" ? c.adId : c.campaignId] : undefined;
+  const count = (value: number | undefined) => value == null ? "—" : value.toLocaleString("pt-BR");
+  const amount = (value: number | undefined) => value == null ? "—" : money(value);
+  const percent = (value: number | undefined) => value == null ? "—" : `${value.toFixed(2)}%`;
+  const ratio = (value: number | undefined) => value == null ? "—" : `${value.toFixed(2)}x`;
+  const metricColumns = [
+    { key: "select", title: "", width: 38, render: (c: any) => <input type="checkbox" aria-label={`Selecionar ${c.name}`} checked={selectedIds.includes(rowId(c))} onChange={(event) => updateSelection(event.target.checked ? [...selectedIds, rowId(c)] : selectedIds.filter((id) => id !== rowId(c)))} /> },
+    { key: "name", title: level === "Contas" ? "Conta de anúncios" : level === "Conjuntos" ? "Conjunto de anúncios" : level === "Anúncios" ? "Anúncio" : "Campanha", width: 290, render: (c: any) => level !== "Anúncios" ? <button className="adAccountLink" title={c.name} onClick={() => { if (level === "Campanhas") { setSelectedCampaignKeys([campaignKey(c)]); setSelectedAdsetKeys([]); } else if (level === "Conjuntos") setSelectedAdsetKeys([adsetKey(c)]); changeLevel(level === "Contas" ? "Campanhas" : level === "Campanhas" ? "Conjuntos" : "Anúncios"); setSelectedIds([]); if (level === "Contas") setSearch(c.accountId); }}>{c.name}</button> : <span className="adNameWithThumb"><AdThumbnail url={thumbnails[c.adId]} small platform={c.platform} /><b title={c.name}>{c.name}</b></span> },
+    { key: "related", title: level === "Contas" ? "Campanhas" : level === "Anúncios" ? "Conjunto" : level === "Conjuntos" ? "Campanha" : "Conta", width: 185, render: (c: any) => level === "Contas" ? c.children : level === "Anúncios" ? c.adsetName || c.adsetId : level === "Conjuntos" ? c.campaignName : c.accountId },
+    { key: "status", title: "Veiculação", width: 160, render: (c: any) => <span className={`adDelivery ${c.status === "ACTIVE" || (!c.status && c.recentSpend > 0) ? "active" : ""}`} title={c.status ? "Status informado pela plataforma" : "Gasto registrado nos últimos 7 dias"}>{c.status ? statusLabels[c.status] || c.status : c.recentSpend > 0 ? "Com gasto (7d)" : "Sem gasto (7d)"}</span> },
+    { key: "spend", title: "Valor gasto", width: 130, render: (c: any) => money(c.spendValue) },
+    { key: "impressions", title: "Impressões", width: 120, render: (c: any) => count(c.impressions) },
+    { key: "reach", title: "Alcance", width: 115, render: (c: any) => count(metric(c)?.reach) },
+    { key: "frequency", title: "Frequência", width: 115, render: (c: any) => metric(c)?.frequency == null ? "—" : Number(metric(c).frequency).toFixed(2) },
+    { key: "cpm", title: "CPM", width: 120, render: (c: any) => c.impressions ? money(c.spendValue / c.impressions * 1000) : "—" },
+    { key: "clicks", title: "Cliques (todos)", width: 130, render: (c: any) => count(c.clicks) },
+    { key: "ctr", title: "CTR (todos)", width: 120, render: (c: any) => c.impressions ? percent(c.clicks / c.impressions * 100) : "—" },
+    { key: "cpc", title: "CPC (todos)", width: 120, render: (c: any) => c.clicks ? money(c.spendValue / c.clicks) : "—" },
+    { key: "linkClicks", title: "Cliques no link", width: 135, render: (c: any) => count(metric(c)?.linkClicks) },
+    { key: "linkCtr", title: "CTR (link)", width: 120, render: (c: any) => metric(c) && c.impressions ? percent(metric(c).linkClicks / c.impressions * 100) : "—" },
+    { key: "linkCpc", title: "CPC (link)", width: 120, render: (c: any) => metric(c)?.linkClicks ? money(c.spendValue / metric(c).linkClicks) : "—" },
+    { key: "landingViews", title: "Visualizações da página", width: 170, render: (c: any) => count(metric(c)?.landingViews) },
+    { key: "checkouts", title: "Finalizações de compra", width: 175, render: (c: any) => count(metric(c)?.checkouts) },
+    { key: "checkoutValue", title: "Valor de finalizações", width: 170, render: (c: any) => amount(metric(c)?.checkoutValue) },
+    { key: "purchases", title: "Compras Meta", width: 135, render: (c: any) => count(metric(c)?.purchases) },
+    { key: "purchaseValue", title: "Valor de compras Meta", width: 175, render: (c: any) => amount(metric(c)?.purchaseValue) },
+    { key: "costPerPurchase", title: "Custo por compra Meta", width: 175, render: (c: any) => metric(c)?.purchases ? money(c.spendValue / metric(c).purchases) : "—" },
+    { key: "purchaseRoas", title: "ROAS Meta", width: 125, render: (c: any) => metric(c) && c.spendValue ? ratio(metric(c).purchaseValue / c.spendValue) : "—" },
+    { key: "erpSales", title: "Vendas ERP", width: 115, render: (c: any) => count(c.sales) },
+    { key: "erpRevenue", title: "Receita ERP", width: 130, render: (c: any) => money(c.revenueValue) },
+    { key: "erpCpa", title: "CPA ERP", width: 115, render: (c: any) => c.sales ? money(c.spendValue / c.sales) : "—" },
+    { key: "erpRoas", title: "ROAS ERP", width: 115, render: (c: any) => c.spendValue ? ratio(c.revenueValue / c.spendValue) : "—" },
+    ...(showActions ? [{ key: "actions", title: "", width: 60, render: (c: any) => c.manual ? <button className="mini danger" aria-label={`Excluir ${c.name}`} onClick={() => onDelete(c)}><Trash2 size={14} /></button> : null }] : []),
+  ];
+  const fullWidth = metricColumns.reduce((total, col) => total + (columnWidths[col.key] || col.width), 0);
+  const beginResize = (event: React.PointerEvent<HTMLSpanElement>, key: string, width: number) => {
+    event.preventDefault(); event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = columnWidths[key] || width;
+    const move = (next: PointerEvent) => setColumnWidths((previous) => ({ ...previous, [key]: Math.max(key === "name" ? 145 : 72, startWidth + next.clientX - startX) }));
+    const end = (next: PointerEvent) => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); setColumnWidths((previous) => { const updated = { ...previous, [key]: Math.max(key === "name" ? 145 : 72, startWidth + next.clientX - startX) }; localStorage.setItem("ironair-ads-column-widths-v1", JSON.stringify(updated)); return updated; }); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end, { once: true });
+  };
   return (
     <article className={`card tableCard ${manager ? "adManager" : ""}`}>
       <div className="sectionHead">
@@ -2010,16 +2111,29 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
       </div>
       {manager && <>
         <div className="adPlatformTabs" role="tablist" aria-label="Plataforma de anúncios">
-          {platforms.map((name) => <button key={name} role="tab" aria-selected={selectedPlatform === name} className={selectedPlatform === name ? "active" : ""} onClick={() => { setSelectedPlatform(name); setLevel("Campanhas"); setSearch(""); }}><span className="adPlatformIcon"><img src={`/integration-logos/${name.toLowerCase()}-ads.webp`} alt="" /></span>{name} Ads<span className="adPlatformCount">{campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(name.toLowerCase())).length}</span></button>)}
+          {platforms.map((name) => <button key={name} role="tab" aria-selected={selectedPlatform === name} className={selectedPlatform === name ? "active" : ""} onClick={() => { setSelectedPlatform(name); setLevel("Campanhas"); setSearch(""); setSelectedIds([]); setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); }}><span className="adPlatformIcon"><img src={`/integration-logos/${name.toLowerCase()}-ads.webp`} alt="" /></span>{name} Ads<span className="adPlatformCount">{campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(name.toLowerCase())).length}</span></button>)}
         </div>
         <div className="adManagerMetrics"><div><small>Investimento</small><strong>{money(totalSpend)}</strong></div><div><small>Receita atribuída</small><strong>{money(totalRevenue)}</strong></div><div><small>ROAS</small><strong>{totalSpend ? `${(totalRevenue / totalSpend).toFixed(2)}x` : "—"}</strong></div><div><small>Campanhas</small><strong>{platformRows.length}</strong></div></div>
-        <div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => setLevel(name)}>{name}</button>)}</div>
+        <div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => changeLevel(name)}>{name}{name === "Conjuntos" && selectedCampaignKeys.length > 0 && <span className="adPlatformCount">{selectedCampaignKeys.length}</span>}{name === "Anúncios" && selectedAdsetKeys.length > 0 && <span className="adPlatformCount">{selectedAdsetKeys.length}</span>}</button>)}</div>
       </>}
-      <div className="adManagerToolbar"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : "Buscar campanha"} value={search} onChange={(event) => setSearch(event.target.value)} /></label><span>{visibleRows.length} {level === "Contas" && manager ? "contas" : level === "Campanhas" || !manager ? "campanhas" : level.toLowerCase()}</span></div>
-      <div className="tableWrap">
+      <div className="adManagerToolbar"><div className="adToolbarFilters"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : `Buscar ${level.toLowerCase()}`} value={search} onChange={(event) => setSearch(event.target.value)} /></label>{manager && <div className="adStatusFilter" role="group" aria-label="Filtrar por veiculação"><button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>Todos</button><button type="button" className={statusFilter === "active" ? "active" : ""} aria-pressed={statusFilter === "active"} onClick={() => setStatusFilter("active")}>Ativos</button></div>}</div><div className="adSelectionInfo">{manager && selectedVisible.length > 0 && <><b>{selectedVisible.length} selecionados</b><button type="button" onClick={() => updateSelection([])}>Limpar</button></>}{manager && (level === "Conjuntos" || level === "Anúncios") && selectedCampaignKeys.length > 0 && <button type="button" onClick={() => { setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar campanhas</button>}{manager && level === "Anúncios" && selectedAdsetKeys.length > 0 && <button type="button" onClick={() => { setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar conjuntos</button>}<span>{visibleRows.length} {visibleCountLabel[visibleRows.length === 1 ? 0 : 1]}</span></div></div>
+      {manager && <>
+        <div className="adMetricsNote">{metricsError ? `Métricas da Meta indisponíveis: ${metricsError}` : !metaMetrics && selectedPlatform === "Meta" ? "Carregando métricas detalhadas da Meta…" : "Métricas da Meta e atribuições do ERP exibidas em colunas separadas."} Arraste a borda do cabeçalho para ajustar a coluna.</div>
+        <div className="tableWrap adWideTable">
+          <table style={{ width: fullWidth }}>
+            <colgroup>{metricColumns.map((col) => <col key={col.key} style={{ width: columnWidths[col.key] || col.width }} />)}</colgroup>
+            <thead><tr>{metricColumns.map((col) => <th key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={col.title}>{col.key === "select" ? <input type="checkbox" aria-label="Selecionar todos os itens visíveis" checked={visibleIds.length > 0 && selectedVisible.length === visibleIds.length} onChange={(event) => updateSelection(event.target.checked ? [...new Set([...selectedIds, ...visibleIds])] : selectedIds.filter((id) => !visibleIds.includes(id)))} /> : col.title}{col.key !== "select" && <span className="adResizeHandle" role="separator" aria-label={`Ajustar largura: ${col.title}`} onPointerDown={(event) => beginResize(event, col.key, col.width)} />}</th>)}</tr></thead>
+            <tbody>{visibleRows.map((c: any) => <tr key={rowId(c)} className={selectedIds.includes(rowId(c)) ? "adRowSelected" : ""}>{metricColumns.map((col) => <td key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={typeof col.render(c) === "string" ? col.render(c) : undefined}>{col.render(c)}</td>)}</tr>)}
+              {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={metricColumns.length}>{search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>}
+      {!manager && <div className="tableWrap">
         <table>
           <thead>
             <tr>
+              {manager && <th className="adSelectCell"><input type="checkbox" aria-label="Selecionar todos os itens visíveis" checked={visibleIds.length > 0 && selectedVisible.length === visibleIds.length} onChange={(event) => setSelectedIds(event.target.checked ? [...new Set([...selectedIds, ...visibleIds])] : selectedIds.filter((id) => !visibleIds.includes(id)))} /></th>}
               <th>{manager ? level === "Contas" ? "Conta de anúncios" : level === "Conjuntos" ? "Conjunto de anúncios" : level === "Anúncios" ? "Anúncio" : "Campanha" : "Campanha"}</th>
               {!manager && <th>Plataforma</th>}
               {manager && <th>{level === "Contas" ? "Campanhas" : level === "Anúncios" ? "Conjunto" : level === "Conjuntos" ? "Campanha" : "Conta"}</th>}
@@ -2034,14 +2148,15 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
               <th>Receita</th>
               <th>CPA</th>
               <th>ROAS</th>
-              <th></th>
+              {showActions && <th></th>}
             </tr>
           </thead>
           <tbody>
             {visibleRows.map((c: any) => (
-              <tr key={`${c.platform || selectedPlatform}-${c.accountId}-${c.campaignId || c.name}`}>
+              <tr key={rowId(c)} className={manager && selectedIds.includes(rowId(c)) ? "adRowSelected" : ""}>
+                {manager && <td className="adSelectCell"><input type="checkbox" aria-label={`Selecionar ${c.name}`} checked={selectedIds.includes(rowId(c))} onChange={(event) => setSelectedIds(event.target.checked ? [...selectedIds, rowId(c)] : selectedIds.filter((id) => id !== rowId(c)))} /></td>}
                 <td>
-                  {manager && level !== "Anúncios" ? <button className="adAccountLink" onClick={() => { setSearch(level === "Contas" ? c.accountId : level === "Campanhas" ? c.campaignId : c.adsetId); setLevel(level === "Contas" ? "Campanhas" : level === "Campanhas" ? "Conjuntos" : "Anúncios"); }}>{c.name}<ArrowRight size={14} /></button> : <b>{c.name}</b>}
+                  {manager && level !== "Anúncios" ? <button className="adAccountLink" onClick={() => { setSearch(level === "Contas" ? c.accountId : level === "Campanhas" ? c.campaignId : c.adsetId); setLevel(level === "Contas" ? "Campanhas" : level === "Campanhas" ? "Conjuntos" : "Anúncios"); setSelectedIds([]); }}>{c.name}</button> : <b>{c.name}</b>}
                 </td>
                 {!manager && <td>{c.platform}</td>}
                 {manager && <td>{level === "Contas" ? c.children : level === "Anúncios" ? c.adsetName || c.adsetId : level === "Conjuntos" ? c.campaignName : c.accountId}</td>}
@@ -2056,61 +2171,55 @@ function Campaigns({ campaigns, adsets = [], ads = [], onNew, onDelete, manager 
                 <td>{money(c.revenueValue)}</td>
                 <td>{c.sales ? money(c.spendValue / c.sales) : "—"}</td>
                 <td>{c.spendValue ? `${(c.revenueValue / c.spendValue).toFixed(2)}x` : "—"}</td>
-                <td>
+                {showActions && <td>
                   {c.manual && <button className="mini danger" aria-label={`Excluir ${c.name}`} onClick={() => onDelete(c)}>
                     <Trash2 size={14} />
                   </button>}
-                </td>
+                </td>}
               </tr>
             ))}
-            {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={manager ? 14 : 7}>{search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`}</td></tr>}
+            {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={(manager ? 14 : 7) + (showActions ? 1 : 0)}>{search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`}</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
     </article>
   );
 }
-function Creatives({ rows, onNew }: any) {
+function Creatives({ rows }: { rows: any[] }) {
+  const [query, setQuery] = useState("");
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [sortMode, setSortMode] = useState<"default" | "spend" | "clicks" | "sales">("default");
+  const filtersMenuRef = useRef<HTMLDetailsElement>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [metaSales, setMetaSales] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let active = true;
+    Promise.allSettled([apiJson("/api/campaigns/thumbnails"), apiJson("/api/campaigns/metrics")]).then(([images, metrics]) => {
+      if (!active) return;
+      if (images.status === "fulfilled") setThumbnails(images.value.thumbnails || {});
+      if (metrics.status === "fulfilled") setMetaSales(Object.fromEntries(Object.entries(metrics.value.metrics?.ads || {}).map(([id, value]: [string, any]) => [id, Number(value.purchases || 0)])));
+    });
+    return () => { active = false; };
+  }, []);
+  const salesFor = (row: any) => String(row.platform).toLowerCase().includes("meta") ? metaSales[row.adId] : Number(row.sales || 0);
+  const filtered = rows.filter((row) => `${row.name} ${row.campaignName} ${row.adsetName}`.toLowerCase().includes(query.toLowerCase()) && (!activeOnly || row.status === "ACTIVE")).sort((a, b) => sortMode === "spend" ? b.spendValue - a.spendValue : sortMode === "clicks" ? b.clicks - a.clicks : sortMode === "sales" ? (salesFor(b) || 0) - (salesFor(a) || 0) || b.spendValue - a.spendValue : 0);
+  const statusLabels: Record<string, string> = { ACTIVE: "Ativo", PAUSED: "Pausado", CAMPAIGN_PAUSED: "Campanha pausada", ADSET_PAUSED: "Conjunto pausado", DISAPPROVED: "Reprovado", PENDING_REVIEW: "Em análise" };
   return (
-    <article className="card tableCard">
-      <div className="sectionHead">
-        <div>
-          <h2>Criativos</h2>
-          <p>Compare anúncios por venda, ROAS e campanha</p>
-        </div>
-        <button className="primary" onClick={onNew}>
-          <Plus size={14} />
-          Novo criativo
-        </button>
-      </div>
-      <div className="creativeGrid">
-        {rows.map((r: any) => (
-          <div className="creativeCard" key={r.name}>
-            <div className="creativeThumb">
-              <Tag />
-            </div>
-            <span className="status ok">{r.status}</span>
-            <h3>{r.name}</h3>
-            <p>
-              {r.platform} • {r.campaign}
-            </p>
-            <div className="creativeStats">
-              <span>
-                Gasto<b>{r.spend}</b>
-              </span>
-              <span>
-                Vendas<b>{r.sales}</b>
-              </span>
-              <span>
-                ROAS<b>{r.roas}</b>
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+    <article className="card tableCard realCreatives">
+      <div className="sectionHead"><div><h2>Criativos</h2><p>Anúncios sincronizados das plataformas conectadas</p></div><span className="pill">{filtered.length} {filtered.length === 1 ? "anúncio" : "anúncios"}</span></div>
+      <div className="creativeToolbar"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar criativo" placeholder="Buscar anúncio ou campanha" value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button" className={`creativeActiveFilter ${activeOnly ? "active" : ""}`} aria-pressed={activeOnly} onClick={() => setActiveOnly((current) => !current)}>Ativos</button><details className="creativeFiltersMenu" ref={filtersMenuRef}><summary><Filter size={14} /> Filtros <ChevronDown size={14} /></summary><div className="creativeFiltersOptions" role="group" aria-label="Ordenar criativos">{([['default', 'Padrão'], ['spend', 'Mais gasto'], ['clicks', 'Mais cliques'], ['sales', 'Mais vendas']] as const).map(([value, label]) => <button type="button" key={value} className={sortMode === value ? "active" : ""} aria-pressed={sortMode === value} onClick={() => { setSortMode(value); if (filtersMenuRef.current) filtersMenuRef.current.open = false; }}>{label}{sortMode === value && <CheckCircle2 size={14} />}</button>)}</div></details></div>
+      {filtered.length ? <div className="creativeGrid">
+        {filtered.map((row) => <div className="creativeCard" key={`${row.platform}:${row.accountId}:${row.adId}`}>
+          <div className="realCreativeHeading"><span className="adPlatformIcon"><img src={`/integration-logos/${String(row.platform).toLowerCase().replace(" ads", "")}-ads.webp`} alt="" /></span><span className={`adDelivery ${row.status === "ACTIVE" ? "active" : ""}`}>{statusLabels[row.status] || row.status || "Sem status"}</span></div>
+          <div className="creativeIdentity"><AdThumbnail url={thumbnails[row.adId]} platform={row.platform} /><div><h3 title={row.name}>{row.name}</h3><p title={row.campaignName}>{row.campaignName || "Campanha não informada"}</p><p title={row.adsetName}>{row.adsetName || "Conjunto não informado"}</p></div></div>
+          <div className="creativeStats"><span>Gasto<b>{money(row.spendValue)}</b></span><span>Cliques<b>{row.clicks.toLocaleString("pt-BR")}</b></span><span>{String(row.platform).toLowerCase().includes("meta") ? "Compras Meta" : "Vendas ERP"}<b>{salesFor(row) == null ? "—" : salesFor(row).toLocaleString("pt-BR")}</b></span></div>
+        </div>)}
+      </div> : <p className="adManagerEmpty">{query || activeOnly ? "Nenhum anúncio encontrado para este filtro." : "Nenhum anúncio sincronizado ainda."}</p>}
+      <p className="creativeSourceNote">Miniaturas e compras vêm da Meta quando disponíveis. Os valores podem diferir das vendas atribuídas pelo ERP.</p>
     </article>
   );
 }
+
 function Movements({ movements, onNew, onEdit }: any) {
   return (
     <article className="card tableCard">

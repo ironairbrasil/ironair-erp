@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers';
+import { createHash } from 'node:crypto';
 import type { NextResponse } from 'next/server';
 
 const ACCESS_COOKIE = 'ironair_access';
@@ -81,10 +82,17 @@ export async function updatePasswordWithRecoveryToken(token: string, password: s
   if (!response.ok) throw new Error('Não foi possível redefinir a senha');
 }
 
-async function fetchUser(token: string): Promise<AuthUser | null> {
-  const { url, key } = config();
-  const response = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, authorization: `Bearer ${token}` }, cache: 'no-store' });
-  return response.ok ? response.json() : null;
+const pendingUsers = new Map<string, Promise<AuthUser | null>>();
+function fetchUser(token: string): Promise<AuthUser | null> {
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  let pending = pendingUsers.get(tokenHash);
+  if (!pending) {
+    const { url, key } = config();
+    pending = fetch(`${url}/auth/v1/user`, { headers: { apikey: key, authorization: `Bearer ${token}` }, cache: 'no-store' }).then(response => response.ok ? response.json() : null);
+    pendingUsers.set(tokenHash, pending);
+    void pending.finally(() => { if (pendingUsers.get(tokenHash) === pending) pendingUsers.delete(tokenHash); }).catch(() => undefined);
+  }
+  return pending;
 }
 
 const userCache = new WeakMap<Request, Promise<AuthUser | null>>();
