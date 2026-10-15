@@ -2529,6 +2529,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
 function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) => void }) {
   const [tab, setTab] = useState("Configuração");
   const [show, setShow] = useState(false);
+  const [metaConnected, setMetaConnected] = useState(i.status === "Conectado");
   const [shop, setShop] = useState("");
   const [status, setStatus] = useState<any>(null);
   const statusPath = i.name === "Shopify" ? "/api/integrations/shopify/status" : i.name === "Mercado Livre" ? "/api/integrations/mercadolivre/status" : i.name === "Amazon" ? "/api/integrations/amazon/status" : null;
@@ -2556,20 +2557,20 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
     };
     const disconnectMeta = async () => {
       await apiJson('/api/integrations/meta/self-disconnect', { method: 'POST' });
+      setMetaConnected(false);
       notify('Meta Ads desconectada');
-      reloadStatus();
     };
     return <div>
-      <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Meta Ads</h3><p>Gastos, impressões e cliques por campanha</p></div><span className={i.status === "Conectado" ? "status ok" : "status warn"}>{i.status}</span></div>
+      <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Meta Ads</h3><p>Gastos, impressões e cliques por campanha</p></div><span className={metaConnected ? "status ok" : "status warn"}>{metaConnected ? "Conectado" : "Preparado"}</span></div>
       <div className="detailGrid">
-        <div className="detailBox"><span>Conta de anúncios</span><b>{i.accountId || "Não conectada"}</b></div>
-        <div className="detailBox"><span>Última sincronização</span><b>{i.lastSyncAt ? fmtDate(i.lastSyncAt) : "Nunca"}</b></div>
+        <div className="detailBox"><span>Conta de anúncios</span><b>{metaConnected ? i.accountId || "Não conectada" : "Não conectada"}</b></div>
+        <div className="detailBox"><span>Última sincronização</span><b>{metaConnected && i.lastSyncAt ? fmtDate(i.lastSyncAt) : "Nunca"}</b></div>
       </div>
       {i.lastError && <p className="muted">Erro recente: {i.lastError}</p>}
       <p className="muted">A conexão é separada por empresa. O token fica criptografado no servidor; a sincronização periódica usa somente a conta vinculada a esta empresa.</p>
-      <div className="formActions">
-        <button onClick={connectMeta}>{i.status === "Conectado" ? "Trocar conta Meta" : "Conectar Meta Ads"}</button>
-        {i.status === "Conectado" && <button onClick={disconnectMeta}>Desconectar</button>}
+      <div className="metaConnectionActions">
+        <button type="button" className="primary" onClick={connectMeta}><Link2 size={15} />{metaConnected ? "Trocar conta Meta" : "Conectar Meta Ads"}</button>
+        {metaConnected && <button type="button" className="metaDisconnectButton" onClick={disconnectMeta}><LogOut size={15} />Desconectar</button>}
       </div>
     </div>;
   }
