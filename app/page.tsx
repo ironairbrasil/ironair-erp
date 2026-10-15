@@ -2265,10 +2265,10 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
               <div className="integrationInfo">
                 <b>{i.name}</b>
                 <small>{i.desc}</small>
-                <span className="integrationCategoryBadge">{i.cat}</span>
               </div>
               <div className="integrationActions">
                 <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
+                <span className="integrationCategoryBadge">{i.cat}</span>
                 <button
                   className="mini danger"
                   type="button"
