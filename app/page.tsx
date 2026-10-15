@@ -20,6 +20,9 @@ const menu = [
   ["Configurações", Settings],
 ] as const;
 const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
+const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
+const integrationCategory = (name: string) => /ads|meta|pixel|tiktok/i.test(name) ? "ADS" : /shopify|mercado livre|amazon|shopee|kiwify/i.test(name) ? "Plataforma de vendas" : /banco|bank|nubank|inter|itaú|bradesco|santander|mercado pago/i.test(name) ? "Banco" : "Outros";
+const salesAndStockOptions = (connected: Set<string>) => ["Manual", ...(connected.has("Shopify") ? ["Shopify"] : []), ...(connected.has("Mercado Livre") ? ["Mercado Livre", "Mercado Livre Full"] : []), ...(connected.has("Amazon") ? ["Amazon", "Amazon FBA"] : []), ...(connected.has("Shopee") ? ["Shopee"] : [])];
 const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
 const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
 const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
@@ -49,7 +52,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Meta Ads",
     status: "Conectado",
-    cat: "Marketing",
+    cat: "ADS",
     desc: "Pixel, CAPI, campanhas, conjuntos e anúncios",
     logo: "∞",
     accent: "#1877F2",
@@ -59,7 +62,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Google Ads",
     status: "Preparado",
-    cat: "Marketing",
+    cat: "ADS",
     desc: "Campanhas, custo, cliques e ROAS",
     logo: "G",
     accent: "#4285F4",
@@ -69,7 +72,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "TikTok Ads",
     status: "Preparado",
-    cat: "Marketing",
+    cat: "ADS",
     desc: "Campanhas, criativos e atribuição",
     logo: "♪",
     accent: "#25F4EE",
@@ -79,7 +82,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Shopify",
     status: "Conectado",
-    cat: "E-commerce",
+    cat: "Plataforma de vendas",
     desc: "Pedidos, produtos, clientes e estoque",
     logo: "S",
     accent: "#95BF47",
@@ -89,7 +92,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Mercado Livre",
     status: "Preparado",
-    cat: "Marketplace",
+    cat: "Plataforma de vendas",
     desc: "Pedidos, anúncios, taxas e Full",
     logo: "ML",
     accent: "#FFE600",
@@ -99,7 +102,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Amazon",
     status: "Preparado",
-    cat: "Marketplace",
+    cat: "Plataforma de vendas",
     desc: "Seller Central, pedidos e FBA",
     logo: "a",
     accent: "#FF9900",
@@ -109,7 +112,7 @@ const integrationsSeed: Integration[] = [
   {
     name: "Kiwify",
     status: "Preparado",
-    cat: "Parcerias",
+    cat: "Plataforma de vendas",
     desc: "Vendas e produtos digitais",
     logo: "K",
     accent: "#6D5DFB",
@@ -156,6 +159,12 @@ export default function Home() {
   const [orderRows, setOrderRows] = useState<any[]>([]);
   const [inventoryRows, setInventoryRows] = useState<any[]>([]);
   const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
+  const [integrationRows, setIntegrationRows] = useState<any[]>([]);
+  const connectedProviders = new Set(integrationRows.filter((row) => row.status === "CONNECTED").map((row) => row.provider));
+  useEffect(() => {
+    if (view !== "Integrações" || modal) return;
+    apiJson("/api/integrations").then((rows) => setIntegrationRows(Array.isArray(rows) ? rows : [])).catch(() => null);
+  }, [view, modal, integrationsRefreshKey]);
   const [sales, setSales] = useState<any[]>([]);
   const [returnRows, setReturnRows] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -258,7 +267,7 @@ export default function Home() {
     const { period: selectedPeriod, range: selectedRange, platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
     const filteredOrders = orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)));
     dashboardCache.current.clear();
-    for (const p of ["Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"]) dashboardCache.current.set(dashboardKey(p, selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, p, selectedRange));
+    for (const p of periodOptions) dashboardCache.current.set(dashboardKey(p, selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, p, selectedRange));
     dashboardCache.current.set(dashboardKey("Personalizado", selectedRange, selectedPlatform, selectedProduct), buildDashboard(filteredOrders, balances, "Personalizado", selectedRange));
     applyDashboard(dashboardCache.current.get(dashboardKey(selectedPeriod, selectedRange, selectedPlatform, selectedProduct)) || dashboardCache.current.get(dashboardKey("Hoje", selectedRange, selectedPlatform, selectedProduct)));
   };
@@ -266,7 +275,8 @@ export default function Home() {
     const retry = async (url: string, fallback: any) => api(url).catch(() => new Promise((r) => setTimeout(r, 350)).then(() => api(url).catch(() => fallback)));
     if (showLoading) setLoading(true);
     try {
-      const [orders, inventory, customerRows, campaignRows, productRows, expenses, returns] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns", []), retry("/api/products", []), retry("/api/expenses", []), retry("/api/returns", [])]);
+      const [orders, inventory, customerRows, campaignRows, productRows, expenses, returns, integrations] = await Promise.all([retry("/api/orders", []), retry("/api/inventory", { balances: [], movements: [] }), retry("/api/customers", []), retry("/api/campaigns", []), retry("/api/products", []), retry("/api/expenses", []), retry("/api/returns", []), retry("/api/integrations", [])]);
+      setIntegrationRows(Array.isArray(integrations) ? integrations : []);
       setOrderRows(orders || []);
       setSales(formatOrders(orders));
       setReturnRows(returns || []);
@@ -494,7 +504,7 @@ export default function Home() {
               </button>
               <div className="dashboardFilter exportMenu"><span>Período</span><button className="filterTrigger" onClick={() => { setDraftRange(period === "Personalizado" ? range : { from: "", to: "" }); setCalendarMonth(todayISO().slice(0, 7)); setSelectingRangeEnd(false); setFilterModal(filterModal === "period" ? null : "period"); }} aria-expanded={filterModal === "period"}>{period}<ChevronDown size={14} /></button>
                 {filterModal === "period" && <div className="exportOptions dashboardOptions periodOptions">
-                  {["Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"].map((x) => <button key={x} onClick={() => choosePeriod(x)}>{x}</button>)}
+                  {periodOptions.map((x) => <button key={x} onClick={() => choosePeriod(x)}>{x}</button>)}
                   <div className="filterCustomDates">
                     <div className="calendarHeader"><button aria-label="Mês anterior" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, -1))}>←</button><b>{calendarMonthTitle(calendarMonth)}</b><button aria-label="Próximo mês" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, 1))}>→</button></div>
                     <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((x) => <span key={x}>{x}</span>)}{calendarDays(calendarMonth).map((day, i) => day ? <button key={day} className={`${day === draftRange.from || day === draftRange.to ? "selected" : ""} ${draftRange.from && draftRange.to && day > draftRange.from && day < draftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingRangeEnd || (draftRange.from && day < draftRange.from)) { setDraftRange({ from: day, to: "" }); setSelectingRangeEnd(true); } else { setDraftRange((r) => ({ ...r, to: day })); setSelectingRangeEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${i}`} />)}</div>
@@ -543,7 +553,7 @@ export default function Home() {
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={products} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={products} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -590,7 +600,7 @@ export default function Home() {
         )}{" "}
         {view === "Estoque" && (
           <>
-            <Inventory products={products} onEdit={(p: any) => open("product", p)} />
+            <Inventory products={products} onEdit={(p: any) => open("product", p)} showShopee={connectedProviders.has("Shopee")} />
             <Movements movements={movements} onNew={() => open("movement")} />
           </>
         )}{" "}
@@ -613,6 +623,7 @@ export default function Home() {
           products={products}
           catalogProducts={catalogRows}
           integrations={integrationsSeed}
+          channelOptions={salesAndStockOptions(connectedProviders)}
           onSave={async (kind: any, data: any) => {
             try {
               if (kind === "movement")
@@ -621,8 +632,9 @@ export default function Home() {
                   body: JSON.stringify({
                     ...data,
                     quantity: Number(data.qty || data.quantity || 1),
-                    warehouseCode: warehouseCode(data.from) || "CENTRAL",
+                    warehouseCode: warehouseCode(data.to) || "CENTRAL",
                     reference: data.ref,
+                    note: data.to ? `Destino: ${data.to}` : undefined,
                     date: data.date,
                   }),
                 });
@@ -712,13 +724,17 @@ function warehouseCode(label?: string) {
         Central: "CENTRAL",
         "Amazon FBA": "AMAZON_FBA",
         "Mercado Livre Full": "ML_FULL",
-        Shopee: "SHOPEE",
+        Manual: "CENTRAL",
+        Shopify: "CENTRAL",
+        "Mercado Livre": "CENTRAL",
+        Amazon: "CENTRAL",
+        Shopee: "CENTRAL",
       } as any
     )[label || ""] || label
   );
 }
 function periodDays(period: string) {
-  if (period === "Hoje") return 1;
+  if (period === "Hoje" || period === "Ontem") return 1;
   if (period === "7 dias") return 7;
   if (period === "30 dias") return 30;
   if (period === "Este mês") return Math.max(1, new Date().getDate());
@@ -753,6 +769,7 @@ function firstPaidSaleDay(orders: any[]) {
 }
 function periodRange(period: string, range: { from: string; to: string }, firstSaleDate = todayISO()) {
   const today = todayISO();
+  if (period === "Ontem") { const previous = new Date(`${today}T12:00:00Z`); previous.setUTCDate(previous.getUTCDate() - 1); const day = previous.toISOString().slice(0, 10); return { from: day, to: day }; }
   if (period === "Tempo todo") return { from: firstSaleDate, to: today };
   if (period === "Personalizado") return range;
   if (period === "Este ano") return { from: `${today.slice(0, 4)}-01-01`, to: today };
@@ -1197,9 +1214,11 @@ function formatInventory(rows: any[], movements: any[] = []) {
       status: "Saudável",
       productId: r.variant?.productId,
     };
-    item.physical += r.onHand;
-    item.reserved += r.reserved;
-    item.available += Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0));
+    if (r.warehouse?.code === "CENTRAL") {
+      item.physical += r.onHand;
+      item.reserved += r.reserved;
+      item.available += Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0));
+    }
     const f = fba.get(sku);
     if (f) {
       item.fbaDate = f.date;
@@ -1289,10 +1308,11 @@ function ChannelTable({ rows, onExport, hidden = false }: { rows: any[]; onExpor
     </article>
   );
 }
-function Inventory({ products, onEdit, hidden = false }: any) {
+function Inventory({ products, onEdit, hidden = false, showShopee = false }: any) {
   const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
   const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
   const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
+  const total = (key: string) => products.reduce((sum: number, item: any) => sum + Number(item[key] || 0), 0);
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1326,7 +1346,7 @@ function Inventory({ products, onEdit, hidden = false }: any) {
               <th>Vend. Shopify</th>
               <th>Vend. ML</th>
               <th>Vend. Amazon</th>
-              <th>Vend. Shopee</th>
+              {showShopee && <th>Vend. Shopee</th>}
               <th>Envio FBA</th>
               <th>Status</th>
               <th></th>
@@ -1348,7 +1368,7 @@ function Inventory({ products, onEdit, hidden = false }: any) {
                 <td>{hidden ? "—" : i.shopify}</td>
                 <td>{hidden ? "—" : i.ml}</td>
                 <td>{hidden ? "—" : i.amazon}</td>
-                <td>{hidden ? "—" : i.shopee}</td>
+                {showShopee && <td>{hidden ? "—" : i.shopee}</td>}
                 <td>{hidden ? "—" : i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
                 <td>
                   <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
@@ -1361,6 +1381,7 @@ function Inventory({ products, onEdit, hidden = false }: any) {
               </tr>
             ))}
           </tbody>
+          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td>—</td><td>—</td><td></td></tr></tfoot>
         </table>
       </div>
     </article>
@@ -1609,9 +1630,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
         <div className="salesPeriodControl">
           <button type="button" className="salesPeriodTrigger" aria-expanded={salesPeriodOpen} onClick={() => { setSalesPeriodOpen((open) => !open); setSalesCalendarMonth((from || todayISO()).slice(0, 7)); setSalesDraftRange({ from: salesPeriod === "Personalizado" ? from : "", to: salesPeriod === "Personalizado" ? to : "" }); setSalesSelectingEnd(false); }}><span>Período</span><b>{salesPeriod}</b><ChevronDown size={15} /></button>
           {salesPeriodOpen && <div className="salesPeriodOptions">
-            {[
-              "Hoje", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"
-            ].map((option) => <button type="button" key={option} className={salesPeriod === option ? "active" : ""} onClick={() => { const dates = periodRange(option, { from: "", to: "" }); setSalesPeriod(option); setFrom(option === "Tempo todo" ? "" : dates.from); setTo(option === "Tempo todo" ? "" : dates.to); setSalesPeriodOpen(false); }}>{option}</button>)}
+            {periodOptions.map((option) => <button type="button" key={option} className={salesPeriod === option ? "active" : ""} onClick={() => { const dates = periodRange(option, { from: "", to: "" }); setSalesPeriod(option); setFrom(option === "Tempo todo" ? "" : dates.from); setTo(option === "Tempo todo" ? "" : dates.to); setSalesPeriodOpen(false); }}>{option}</button>)}
             <div className="salesPeriodCalendar">
               <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setSalesCalendarMonth(shiftCalendarMonth(salesCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(salesCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setSalesCalendarMonth(shiftCalendarMonth(salesCalendarMonth, 1))}>→</button></div>
               <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(salesCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === salesDraftRange.from || day === salesDraftRange.to ? "selected" : ""} ${salesDraftRange.from && salesDraftRange.to && day > salesDraftRange.from && day < salesDraftRange.to ? "inRange" : ""}`} onClick={() => { if (!salesSelectingEnd || (salesDraftRange.from && day < salesDraftRange.from)) { setSalesDraftRange({ from: day, to: "" }); setSalesSelectingEnd(true); } else { setSalesDraftRange((range) => ({ ...range, to: day })); setSalesSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div>
@@ -2016,6 +2035,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
     };
     return {
       ...seed,
+      cat: integrationCategory(row.provider),
       status: row.status === "CONNECTED" ? "Conectado" : "Preparado",
     };
   });
@@ -2031,8 +2051,11 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
           Criar nova integração
         </button>
       </div>
-      <div className="integrationGrid">
-        {visible.map((i) => {
+      {(["ADS", "Plataforma de vendas", "Banco", "Outros"] as const).map((category) => {
+        const group = visible.filter((i) => i.cat === category);
+        return <section className="integrationGroup" key={category}><h3>{category}</h3><div className="integrationGrid">
+        {!group.length && <p className="integrationEmpty">Nenhuma integração nesta categoria.</p>}
+        {group.map((i) => {
           const status = i.status;
           return (
             <article className="card integration integrationClickable" key={i.name} onClick={() => onOpen({ ...i, status })}>
@@ -2058,7 +2081,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
             </article>
           );
         })}
-      </div>
+      </div></section>;})}
     </>
   );
 }
@@ -2121,7 +2144,7 @@ function SettingsView({ onEdit }: any) {
     </div>
   );
 }
-function Modal({ kind, data, close, notify, products, catalogProducts, integrations, onSave }: any) {
+function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave }: any) {
   const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date) } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
@@ -2172,8 +2195,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Input label="Quantidade" type="number" value={f.qty} onChange={(v: any) => set("qty", v)} />
               <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
               <Input label="Referência / motivo" value={f.ref} onChange={(v: any) => set("ref", v)} />
-              <Select label="Origem" value={f.from} onChange={(v: any) => set("from", v)} options={["Central", "Amazon FBA", "Mercado Livre Full", "Shopee"]} />
-              <Select label="Destino" value={f.to} onChange={(v: any) => set("to", v)} options={["Central", "Amazon FBA", "Mercado Livre Full", "Shopee"]} />
+              <Select label="Destino" value={f.to} onChange={(v: any) => setF((current: any) => ({ ...current, to: v, type: v === "Amazon FBA" || v === "Mercado Livre Full" ? "Transferência" : current.type === "Transferência" ? "" : current.type }))} options={channelOptions} />
             </FormGrid>
           )}
           {kind === "sale" && (
@@ -2181,7 +2203,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Input label="Cliente" value={f.customer} onChange={(v: any) => set("customer", v)} />
               <Select label="Produto / voltagem" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
               <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
-              <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={["Manual", "Shopify", "Mercado Livre", "Amazon", "Shopee"]} />
+              <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={channelOptions} />
               <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
               <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
             </FormGrid>

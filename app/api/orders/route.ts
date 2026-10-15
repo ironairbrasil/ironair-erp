@@ -56,10 +56,14 @@ export async function POST(req:Request){
     const product=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:String(b.sku||'')}}});
     const quantity=Math.max(1,Math.trunc(Number(b.quantity||1)));
     const grossAmount=Number(b.value||b.grossAmount||product?.salePrice||0);
+    const source=String(b.source||'Manual');
+    const channel=source==='Shopify'?'SHOPIFY':source==='Mercado Livre'||source==='Mercado Livre Full'?'MERCADO_LIVRE':source==='Amazon'||source==='Amazon FBA'?'AMAZON':source==='Shopee'?'SHOPEE':'MANUAL';
+    const warehouseCode=source==='Mercado Livre Full'?'ML_FULL':source==='Amazon FBA'?'AMAZON_FBA':'CENTRAL';
     const order=await ingestOrder({
       tenantId,
       externalId:String(b.externalId||`MANUAL-${Date.now()}`),
-      channel:'MANUAL',
+      channel,
+      warehouseCode,
       status:b.status||'PAID',
       grossAmount,
       currency:'BRL',

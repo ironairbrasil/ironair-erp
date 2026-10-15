@@ -17,3 +17,21 @@ export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode
   return tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,source:String(input.idempotencyKey||'').startsWith('manual')?'MANUAL':'SYNC',createdAt:input.createdAt?new Date(input.createdAt):undefined}})
  })
 }
+export async function transferStock(input:{tenantId:string;sku:string;toWarehouseCode:string;quantity:number;reference?:string;createdAt?:Date|string;idempotencyKey:string}){
+ if(!Number.isInteger(input.quantity)||input.quantity<=0||input.toWarehouseCode==='CENTRAL') throw new Error('Transferência inválida');
+ return db.$transaction(async tx=>{
+  const prior=await tx.inventoryMovement.findUnique({where:{tenantId_idempotencyKey:{tenantId:input.tenantId,idempotencyKey:input.idempotencyKey}}});
+  if(prior) return prior;
+  const variant=await tx.productVariant.findUnique({where:{tenantId_sku:{tenantId:input.tenantId,sku:input.sku}}});
+  const from=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId:input.tenantId,code:'CENTRAL'}}});
+  const to=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId:input.tenantId,code:input.toWarehouseCode}}});
+  if(!variant||!from||!to) throw new Error('Produto ou destino não encontrado');
+  const central=await tx.inventoryBalance.findUnique({where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:variant.id,warehouseId:from.id}}});
+  if(!central||central.onHand-central.reserved<input.quantity) throw new Error(`Estoque central insuficiente para ${input.sku}`);
+  await tx.inventoryBalance.update({where:{id:central.id},data:{onHand:{decrement:input.quantity}}});
+  await tx.inventoryBalance.upsert({where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:variant.id,warehouseId:to.id}},create:{tenantId:input.tenantId,variantId:variant.id,warehouseId:to.id,onHand:input.quantity,reserved:0},update:{onHand:{increment:input.quantity}}});
+  const createdAt=input.createdAt?new Date(input.createdAt):undefined;
+  await tx.inventoryMovement.create({data:{tenantId:input.tenantId,variantId:variant.id,warehouseId:from.id,type:'TRANSFER_OUT',quantity:-input.quantity,reference:input.reference,note:`Destino: ${to.name}`,idempotencyKey:input.idempotencyKey,source:'MANUAL',createdAt}});
+  return tx.inventoryMovement.create({data:{tenantId:input.tenantId,variantId:variant.id,warehouseId:to.id,type:'TRANSFER_IN',quantity:input.quantity,reference:input.reference,note:'Origem: Estoque Central',idempotencyKey:`${input.idempotencyKey}:in`,source:'MANUAL',createdAt}});
+ });
+}

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { moveStock } from '@/lib/inventory';
+import { moveStock, transferStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
 import { auditLog } from '@/lib/audit';
 
@@ -19,16 +19,19 @@ export async function POST(req:Request){
     const type=typeMap[body.type]||body.type;
     const rawQuantity=Math.abs(Math.trunc(Number(body.quantity??body.qty)));
     const quantity=['SALE','TRANSFER_OUT','DAMAGE'].includes(type)||body.type==='Saída manual'?-rawQuantity:rawQuantity;
-    const movement=await moveStock({
+    const destination=String(body.warehouseCode||'CENTRAL').replaceAll(' ','_').toUpperCase();
+    if(type==='TRANSFER_OUT'&&destination==='CENTRAL') throw new Error('Escolha Amazon FBA ou Mercado Livre Full para a transferência');
+    const idempotencyKey=body.idempotencyKey||`manual:${body.sku}:${type}:${body.reference||body.ref||Date.now()}:${quantity}`;
+    const movement=(destination==='AMAZON_FBA'||destination==='ML_FULL')?await transferStock({tenantId,sku:String(body.sku||''),toWarehouseCode:destination,quantity:rawQuantity,reference:body.reference||body.ref,createdAt:body.date||body.createdAt,idempotencyKey}):await moveStock({
       tenantId,
       sku:String(body.sku||''),
-      warehouseCode:String(body.warehouseCode||body.from||'CENTRAL').replaceAll(' ','_').toUpperCase(),
+      warehouseCode:destination,
       quantity,
       type,
       reference:body.reference||body.ref,
       note:body.note,
       createdAt:body.date||body.createdAt,
-      idempotencyKey:body.idempotencyKey||`manual:${body.sku}:${type}:${body.reference||body.ref||Date.now()}:${quantity}`
+      idempotencyKey
     });
     await auditLog({
       tenantId,
@@ -36,7 +39,7 @@ export async function POST(req:Request){
       entityId:movement.id,
       action:'create_manual_movement',
       after:{sku:body.sku,type,quantity,reference:body.reference||body.ref,date:body.date||body.createdAt},
-      metadata:{warehouseCode:body.warehouseCode||body.from||'CENTRAL'}
+      metadata:{warehouseCode:destination}
     });
     return NextResponse.json({ok:true,id:movement.id});
   }catch(e:any){
