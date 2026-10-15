@@ -158,6 +158,7 @@ export default function Home() {
   const rangeEffectReady = useRef(false);
   const [orderRows, setOrderRows] = useState<any[]>([]);
   const [inventoryRows, setInventoryRows] = useState<any[]>([]);
+  const [inventoryMovementRows, setInventoryMovementRows] = useState<any[]>([]);
   const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
   const [integrationRows, setIntegrationRows] = useState<any[]>([]);
   const connectedProviders = new Set(integrationRows.filter((row) => row.status === "CONNECTED").map((row) => row.provider));
@@ -240,6 +241,8 @@ export default function Home() {
   };
   const firstSaleDate = firstPaidSaleDay(scopedOrders(orderRows));
   const allTimeStart = period === "Tempo todo" && dashboard?.periodMode === "all" ? dashboard.periodFrom : firstSaleDate;
+  const inventorySalesRange = period === "Tempo todo" ? null : periodRange(period, range, firstSaleDate);
+  const periodInventoryProducts = formatInventory(inventoryRows, inventoryMovementRows, scopedOrders(orderRows), inventorySalesRange);
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
   const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
@@ -281,6 +284,7 @@ export default function Home() {
       setSales(formatOrders(orders));
       setReturnRows(returns || []);
       setInventoryRows(inventory.balances || []);
+      setInventoryMovementRows(inventory.movements || []);
       setProducts(formatInventory(inventory.balances || [], inventory.movements || []));
       setCatalogRows(productRows || []);
       setExpenseRows(expenses || []);
@@ -553,7 +557,7 @@ export default function Home() {
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={products} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque, tracking e conciliação</p></div><span className="badge">{dashboardHidden ? "—" : alerts.length}</span></div><div className="alerts">{alerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>)}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} onExport={() => exportCsv("performance-canais", channelRows)} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -600,7 +604,7 @@ export default function Home() {
         )}{" "}
         {view === "Estoque" && (
           <>
-            <Inventory products={products} onEdit={(p: any) => open("product", p)} showShopee={connectedProviders.has("Shopee")} />
+            <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} showShopee={connectedProviders.has("Shopee")} />
             <Movements movements={movements} onNew={() => open("movement")} />
           </>
         )}{" "}
@@ -1164,13 +1168,13 @@ function formatOrders(rows: any[]) {
     };
   });
 }
-function formatInventory(rows: any[], movements: any[] = []) {
+function formatInventory(rows: any[], movements: any[] = [], orders?: any[], salesRange?: { from: string; to: string } | null) {
   const bySku = new Map<string, any>();
   const fba = new Map<string, any>();
   const sold = new Map<string, any>();
   for (const m of movements || []) {
     if (m.warehouseCode === "AMAZON_FBA" && Number(m.quantity) > 0 && !fba.has(m.sku)) fba.set(m.sku, { date: fmtDate(m.createdAt), qty: m.quantity });
-    if (m.type === "SALE" && Number(m.quantity) < 0) {
+    if (!orders && m.type === "SALE" && Number(m.quantity) < 0) {
       const bucket = sold.get(m.sku) || {
         shopify: 0,
         ml: 0,
@@ -1186,6 +1190,24 @@ function formatInventory(rows: any[], movements: any[] = []) {
       else if (ch === "SHOPEE") bucket.shopee += qty;
       else bucket.manual += qty;
       sold.set(m.sku, bucket);
+    }
+  }
+  if (orders) for (const order of orders) {
+    if (order.status !== "PAID") continue;
+    const paidDay = dateKey(order.paidAt);
+    if (!paidDay || (salesRange && (paidDay < salesRange.from || paidDay > salesRange.to))) continue;
+    for (const item of order.items || []) {
+      const sku = String(item.sku || item.variant?.sku || "");
+      if (!sku) continue;
+      const bucket = sold.get(sku) || { shopify: 0, ml: 0, amazon: 0, shopee: 0, manual: 0 };
+      const quantity = Number(item.quantity || 0);
+      const channel = String(order.channel || "").toUpperCase();
+      if (channel === "SHOPIFY") bucket.shopify += quantity;
+      else if (channel === "MERCADO_LIVRE") bucket.ml += quantity;
+      else if (channel === "AMAZON") bucket.amazon += quantity;
+      else if (channel === "SHOPEE") bucket.shopee += quantity;
+      else bucket.manual += quantity;
+      sold.set(sku, bucket);
     }
   }
   for (const r of rows || []) {
@@ -1308,7 +1330,7 @@ function ChannelTable({ rows, onExport, hidden = false }: { rows: any[]; onExpor
     </article>
   );
 }
-function Inventory({ products, onEdit, hidden = false, showShopee = false }: any) {
+function Inventory({ products, onEdit, hidden = false, showShopee = false, salesPeriod = "Tempo todo" }: any) {
   const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
   const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
   const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
@@ -1319,7 +1341,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false }: any
       <div className="sectionHead">
         <div>
           <h2>Estoque central</h2>
-          <p>Saldo físico e vendidos por plataforma</p>
+          <p>Saldo físico atual · vendas: {salesPeriod}</p>
         </div>
         <div className="inventorySummary">
           <span>
