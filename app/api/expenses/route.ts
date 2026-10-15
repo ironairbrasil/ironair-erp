@@ -19,7 +19,7 @@ export async function POST(req:Request){
     if(!String(b.desc||b.description||'').trim()) return NextResponse.json({ok:false,error:'Descrição obrigatória'},{status:400});
     if(kind==='FIXED'&&(!Number.isFinite(amount)||amount<=0)) return NextResponse.json({ok:false,error:'Informe um valor fixo maior que zero'},{status:400});
     if(kind==='PERCENT'&&(!Number.isFinite(rate)||rate<=0||rate>100)) return NextResponse.json({ok:false,error:'Informe um percentual entre 0 e 100'},{status:400});
-    if(schedule==='CUSTOM'&&!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date||''))) return NextResponse.json({ok:false,error:'Escolha uma data personalizada'},{status:400});
+    if(['FIXED','CUSTOM'].includes(schedule)&&!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date||''))) return NextResponse.json({ok:false,error:'Escolha a data da despesa única'},{status:400});
     const expense=await db.expense.create({data:{
       tenantId,
       date:b.date?new Date(`${b.date}T12:00:00.000-03:00`):new Date(),

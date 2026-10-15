@@ -1313,6 +1313,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false }: any
   const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
   const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
   const total = (key: string) => products.reduce((sum: number, item: any) => sum + Number(item[key] || 0), 0);
+  const totalSales = total("shopify") + total("ml") + total("amazon") + total("shopee") + total("manual");
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1347,6 +1348,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false }: any
               <th>Vend. ML</th>
               <th>Vend. Amazon</th>
               {showShopee && <th>Vend. Shopee</th>}
+              <th>Total vendas</th>
               <th>Envio FBA</th>
               <th>Status</th>
               <th></th>
@@ -1369,6 +1371,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false }: any
                 <td>{hidden ? "—" : i.ml}</td>
                 <td>{hidden ? "—" : i.amazon}</td>
                 {showShopee && <td>{hidden ? "—" : i.shopee}</td>}
+                <td><b>{hidden ? "—" : Number(i.shopify || 0) + Number(i.ml || 0) + Number(i.amazon || 0) + Number(i.shopee || 0) + Number(i.manual || 0)}</b></td>
                 <td>{hidden ? "—" : i.fbaQty ? `${i.fbaQty} · ${i.fbaDate}` : "—"}</td>
                 <td>
                   <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
@@ -1381,7 +1384,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false }: any
               </tr>
             ))}
           </tbody>
-          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td>—</td><td>—</td><td></td></tr></tfoot>
+          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>—</td><td>—</td><td></td></tr></tfoot>
         </table>
       </div>
     </article>
@@ -1995,7 +1998,7 @@ function Expenses({ rows, data, onNew, onEdit, onDelete }: any) {
   return <article className="card tableCard">
     <div className="sectionHead"><div><h2>Despesas</h2><p>Valores fixos e percentuais que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
     <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{money(data?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
-    <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id}><td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Fixa", CUSTOM: "Personalizada" }[expense.schedule as string] || "Personalizada"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={() => onEdit(expense)}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={() => onDelete(expense)}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
+    <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id}><td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={() => onEdit(expense)}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={() => onDelete(expense)}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
     {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
   </article>;
 }
@@ -2145,7 +2148,7 @@ function SettingsView({ onEdit }: any) {
   );
 }
 function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave }: any) {
-  const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date) } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
+  const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const title: any = {
@@ -2253,10 +2256,10 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Select label="Categoria" value={f.category} onChange={(v: any) => set("category", v)} options={["Frete", "Mídia", "Taxa", "Imposto", "Software", "Operacional", "Outro"]} />
               <Input label="Descrição" value={f.desc} onChange={(v: any) => set("desc", v)} />
               {f.kind === "PERCENT" ? <Input label="Percentual (%)" type="number" value={f.rate} onChange={(v: any) => set("rate", v)} /> : <Input label="Valor (R$)" type="number" value={f.value} onChange={(v: any) => set("value", v)} />}
-              <AnchoredSelect label="Frequência / data" value={f.schedule || "FIXED"} onChange={(v) => setF((current: any) => ({ ...current, schedule: v, date: v === "CUSTOM" ? "" : todayISO() }))} options={[{ value: "FIXED", label: "Fixa" }, { value: "MONTHLY", label: "Mensal" }, { value: "QUARTERLY", label: "Trimestral" }, { value: "SEMIANNUAL", label: "Semestral" }, { value: "YEARLY", label: "Anual" }, { value: "CUSTOM", label: "Personalizada" }]} />
-              {f.schedule === "CUSTOM" && <CalendarDateField label="Escolher data" value={f.date || ""} onChange={(value) => set("date", value)} />}
+              <AnchoredSelect label="Frequência / data" value={f.schedule || "FIXED"} onChange={(v) => setF((current: any) => ({ ...current, schedule: v, date: current.date || todayISO() }))} options={[{ value: "FIXED", label: "Única" }, { value: "MONTHLY", label: "Mensal" }, { value: "QUARTERLY", label: "Trimestral" }, { value: "SEMIANNUAL", label: "Semestral" }, { value: "YEARLY", label: "Anual" }]} />
+              {f.schedule === "FIXED" && <CalendarDateField label="Data da despesa" value={f.date || ""} onChange={(value) => set("date", value)} />}
               {["MONTHLY", "QUARTERLY", "SEMIANNUAL", "YEARLY"].includes(f.schedule) && <p className="expenseScheduleHint">{{ MONTHLY: "Mês civil: dia 01 ao último dia.", QUARTERLY: "Trimestres civis: jan–mar, abr–jun, jul–set e out–dez.", SEMIANNUAL: "Semestres civis: 01/01–30/06 e 01/07–31/12.", YEARLY: "Ano civil: 01/01–31/12." }[f.schedule as "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "YEARLY"]} {f.kind === "PERCENT" ? "O percentual incide sobre o faturamento acumulado do período." : "O valor é lançado uma vez por período."}</p>}
-              {f.schedule === "FIXED" && <p className="expenseScheduleHint">{f.kind === "PERCENT" ? "Aplica o percentual ao faturamento a partir de hoje." : "Lançamento único na data de hoje."}</p>}
+              {f.schedule === "FIXED" && <p className="expenseScheduleHint">{f.kind === "PERCENT" ? "Percentual aplicado uma vez sobre o faturamento da data escolhida." : "Lançamento único na data escolhida; aparece nos períodos que incluem esse dia."}</p>}
             </FormGrid>
           )}
           {kind === "integration" && (
@@ -2294,7 +2297,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
             <button className="ghost clickable" onClick={close} disabled={saving}>
               Cancelar
             </button>
-            <button className="primary" onClick={save} disabled={saving || (kind === "sale" && !f.sku) || (kind === "expense" && f.schedule === "CUSTOM" && !f.date)}>
+            <button className="primary" onClick={save} disabled={saving || (kind === "sale" && !f.sku) || (kind === "expense" && f.schedule === "FIXED" && !f.date)}>
               <Save size={15} />
               {saving ? "Salvando..." : kind === "integration" ? "Adicionar" : "Salvar"}
             </button>

@@ -16,7 +16,9 @@ export async function GET(req:Request){
   const product=u.searchParams.get('product');
   const firstSale=allTime?await db.order.findFirst({where:{tenantId,status:'PAID',paidAt:{not:null},...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},orderBy:{paidAt:'asc'},select:{paidAt:true}}):null;
   const firstSaleDay=firstSale?.paidAt?localDay(firstSale.paidAt):localDay(new Date());
-  const since=allTime?new Date(`${firstSaleDay}T00:00:00.000-03:00`):from?new Date(`${from}T00:00:00.000-03:00`):new Date(Date.now()-days*864e5);
+  const firstUniqueExpense=allTime&&!product?await db.expense.findFirst({where:{tenantId,schedule:{in:['FIXED','CUSTOM']},...(platform?{OR:[{channel:null},{channel:platform as any}]}:{})},orderBy:{date:'asc'},select:{date:true}}):null;
+  const allTimeStart=firstUniqueExpense?firstSaleDay<localDay(firstUniqueExpense.date)?firstSaleDay:localDay(firstUniqueExpense.date):firstSaleDay;
+  const since=allTime?new Date(`${allTimeStart}T00:00:00.000-03:00`):from?new Date(`${from}T00:00:00.000-03:00`):new Date(Date.now()-days*864e5);
   const until=allTime?new Date(`${localDay(new Date())}T23:59:59.999-03:00`):to?new Date(`${to}T23:59:59.999-03:00`):undefined;
   const range=until?{gte:since,lte:until}:{gte:since};
   const recurringSchedules=Object.keys(CALENDAR_SCHEDULE_MONTHS);
@@ -25,7 +27,7 @@ export async function GET(req:Request){
     product?Promise.resolve([]):db.adSpendDaily.findMany({where:{tenantId,date:range,...(platform?{platform:platform as any}:{})}}),
     db.inventoryBalance.findMany({where:{tenantId},include:{variant:true}}),
     db.trackingEvent.groupBy({by:['type'],_count:{_all:true},where:{tenantId,occurredAt:range}}),
-    db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:{lte:until||new Date()}},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
+    db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
     db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}})
   ]);
   const costBySku=new Map(variants.map(v=>[v.sku,Number(v.unitCost)]));
@@ -84,7 +86,7 @@ export async function GET(req:Request){
       return sum+amount;
     }
     const effective=localDay(e.date);
-    const basis=[...daily.values()].filter(d=>periods||d.date>=effective).reduce((total,d)=>total+d.revenue,0);
+    const basis=[...daily.values()].filter(d=>periods||d.date===effective).reduce((total,d)=>total+d.revenue,0);
     const amount=Math.round(basis*Number(e.rate||0))/100;
     expenseBreakdown.push({id:e.id,amount,basis});
     return sum+amount;
