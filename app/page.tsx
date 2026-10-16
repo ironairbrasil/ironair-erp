@@ -1,7 +1,9 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, ArrowUpRight, MousePointerClick, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
+import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
+import PerformanceView from "./performance-view";
+import SalesChart, { ChartStyleToggle, type SalesChartMode } from "./sales-chart";
 import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 const menu = [
   ["Visão Geral", LayoutDashboard],
@@ -14,7 +16,6 @@ const menu = [
   ["Despesas", WalletCards],
   ["Campanhas", Megaphone],
   ["Criativos", Tag],
-  ["Jornada", ArrowUpRight],
   ["Financeiro", CircleDollarSign],
   ["Integrações", PlugZap],
   ["Configurações", Settings],
@@ -148,6 +149,7 @@ export default function Home() {
   const [dashboardEditing, setDashboardEditing] = useState(false);
   const [dashboardHidden, setDashboardHidden] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const [dashboardChartMode, setDashboardChartMode] = useState<SalesChartMode>("line");
   const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
   const [dashboardLayoutReady, setDashboardLayoutReady] = useState(false);
   const [dashboardLayoutLoaded, setDashboardLayoutLoaded] = useState(false);
@@ -203,7 +205,20 @@ export default function Home() {
   const [products, setProducts] = useState<any[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notificationTab, setNotificationTab] = useState<"Vendas" | "Alertas">("Vendas");
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushSupported, setPushSupported] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!sessionInfo || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+    setPushSupported(true);
+    navigator.serviceWorker.register('/sw.js').then(async registration => {
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) return;
+      const response = await fetch(`/api/push/subscription?endpoint=${encodeURIComponent(subscription.endpoint)}`, { cache: 'no-store' });
+      if (response.ok) setPushEnabled(Boolean((await response.json()).enabled));
+    }).catch(() => undefined);
+  }, [sessionInfo]);
   const [catalogRows, setCatalogRows] = useState<any[]>([]);
   const [expenseRows, setExpenseRows] = useState<any[]>([]);
   const [campaigns, setCampaigns] = useState<any[]>([]);
@@ -313,6 +328,33 @@ export default function Home() {
     setToast(m);
     setTimeout(() => setToast(""), m.length > 90 ? 8000 : 3000);
   };
+  const togglePush = async () => {
+    setPushBusy(true);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      if (pushEnabled) {
+        if (existing) {
+          await apiJson('/api/push/subscription', { method: 'DELETE', body: JSON.stringify({ endpoint: existing.endpoint }) });
+          await existing.unsubscribe();
+        }
+        setPushEnabled(false);
+        notify('Notificações do iPhone desativadas.');
+      } else {
+        if (Notification.permission === 'denied') throw new Error('Permissão bloqueada. Ative as notificações nos Ajustes do iPhone.');
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') throw new Error('Permissão de notificações não concedida.');
+        const config = await apiJson('/api/push/subscription');
+        if (!config.publicKey) throw new Error('Notificações ainda não configuradas no servidor.');
+        const key = Uint8Array.from(atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
+        const subscription = existing || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        await apiJson('/api/push/subscription', { method: 'POST', body: JSON.stringify(subscription.toJSON()) });
+        setPushEnabled(true);
+        notify('Notificações ativadas neste aparelho.');
+      }
+    } catch (error) { notify(error instanceof Error ? error.message : 'Não foi possível configurar as notificações.'); }
+    finally { setPushBusy(false); }
+  };
   const api = apiJson;
   const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product) => `${todayISO()}:${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}`;
   const dashboardStorageKey = (key: string) => `ironair-dashboard-cache-v1:${sessionInfo?.activeTenantId}:${key}`;
@@ -381,7 +423,6 @@ export default function Home() {
       "Financeiro": ["expenses"],
       "Integrações": [],
       "Configurações": [],
-      "Jornada": [],
     };
     try {
       // Render the dashboard before competing with secondary page data for DB connections.
@@ -572,11 +613,7 @@ export default function Home() {
       {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <aside className={`sidebar ${mobileMenuOpen ? "mobileOpen" : ""}`} id="main-navigation">
         <div className="brand">
-          <span className="brandmark">IA</span>
-          <div>
-            <b>Iron Air Hub</b>
-            <small>ERP + Tracking</small>
-          </div>
+          <span className="brandLogo"><img src={theme === "light" ? "/iron-seller-black.png" : "/iron-seller-white.png"} alt="Iron Seller" /></span>
           <button className="mobileMenuClose" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button>
         </div>
         <nav>
@@ -604,7 +641,7 @@ export default function Home() {
       <section className="content">
         <header className="topbar">
           <button className="mobileMenuToggle" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} aria-controls="main-navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={22} /></button>
-          <span className="mobileAppName">Iron Air Hub</span>
+          <span className="mobileAppName">Iron Seller</span>
           <div className="desktopPageTitle">
             <h1>{title}</h1>
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
@@ -615,6 +652,7 @@ export default function Home() {
               <button type="button" className="notificationTrigger" aria-label="Notificações" aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={17} />{stockAlerts.length > 0 && <span className="notificationCount">{stockAlerts.length}</span>}</button>
               {notificationOpen && <div className="notificationPopover">
                 <div className="notificationHeading"><b>Notificações</b><button type="button" aria-label="Fechar notificações" onClick={() => setNotificationOpen(false)}><X size={16} /></button></div>
+                <div className="pushControls">{pushSupported ? <button type="button" disabled={pushBusy} onClick={togglePush}>{pushBusy ? 'Aguarde...' : pushEnabled ? 'Desativar avisos neste aparelho' : 'Ativar avisos neste aparelho'}</button> : <small>Para receber avisos no iPhone, abra este site pelo atalho na Tela de Início (iOS 16.4 ou superior).</small>}</div>
                 <div className="notificationTabs"><button type="button" className={notificationTab === "Vendas" ? "active" : ""} onClick={() => setNotificationTab("Vendas")}>Vendas</button><button type="button" className={notificationTab === "Alertas" ? "active" : ""} onClick={() => setNotificationTab("Alertas")}>Alertas {stockAlerts.length > 0 ? `(${stockAlerts.length})` : ""}</button></div>
                 <div className="notificationList">{notificationTab === "Vendas" ? recentSales.length ? recentSales.map((order) => <div className="notificationItem" key={order.id}><ShoppingCart size={16} /><div><b>Venda aprovada · {money(Number(order.grossAmount || 0) - Number(order.discountAmount || 0))}</b><small>{order.customer?.name || order.externalId} · {fmtDate(order.paidAt || order.createdAt)}</small></div></div>) : <p className="notificationEmpty">Nenhuma venda aprovada.</p> : stockAlerts.length ? stockAlerts.map((alert) => <div className="notificationItem" key={alert}><Boxes size={16} /><div><b>Estoque de atenção</b><small>{alert}</small></div></div>) : <p className="notificationEmpty">Nenhum alerta de estoque.</p>}</div>
               </div>}
@@ -680,11 +718,11 @@ export default function Home() {
                   {dashboardEditing && <div className="dashboardDragControls">
                     <span draggable onDragStart={(event) => { dashboardDragSource.current = blockId; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", blockId); }} onDragEnd={() => { dashboardDragSource.current = null; setDashboardDropTarget(null); }} title="Arraste para reorganizar" aria-label="Arraste para reorganizar"><GripVertical size={18} /></span>
                     <button type="button" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.max(0, index - dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para cima`}><ArrowUp size={16} /></button>
-                    <button type="button" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index - 1])} aria-label={`Mover ${kpi?.label || blockId} para a esquerda`}><ArrowLeft size={16} /></button>
-                    <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
+                    <button type="button" className="dashboardHorizontalMove" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index - 1])} aria-label={`Mover ${kpi?.label || blockId} para a esquerda`}><ArrowLeft size={16} /></button>
+                    <button type="button" className="dashboardHorizontalMove" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><span className="pill">Banco</span></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={kpi.label === "Lucro líquido" && !dashboardHidden ? Number(dashboard?.profit || 0) > 0 ? "dashboardProfitPositive" : Number(dashboard?.profit || 0) < 0 ? "dashboardProfitNegative" : "dashboardProfitZero" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -737,13 +775,8 @@ export default function Home() {
         )}{" "}
         {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} />}
         {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
-        {view === "Performance" && (
-          <>
-            <Campaigns campaigns={campaigns} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />
-            <ChannelTable rows={channelRows} />
-          </>
-        )}{" "}
-        {view === "Jornada" && <Journey />} {view === "Financeiro" && <Finance data={dashboard} onNew={() => open("expense")} />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
+        {view === "Performance" && <PerformanceView />}{" "}
+        {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
       {modal && (
         <Modal
@@ -1164,7 +1197,7 @@ function dashboardKpis(d: any) {
     },
     {
       label: "ROAS total",
-      value: Number(d?.media || 0) > 0 ? multiplier(revenue / Number(d.media)) : "—",
+      value: Number(d?.media || 0) > 0 ? `${(revenue / Number(d.media)).toFixed(2)}x` : "—",
       delta: "Faturamento / investimento em anúncios",
     },
   ].map((card) => d ? card : { ...card, value: "—", delta: "Carregando dados..." });
@@ -1230,63 +1263,10 @@ function salesTimeline(rows: any[] = [], period: string, range: { from: string; 
   if (!points.length) points.push({ date: r.to, revenue: 0, orders: 0 });
   return points;
 }
-function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false }: any) {
-  const [hovered, setHovered] = useState<number | null>(null);
+function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false, mode = "line" }: any) {
   const points = salesTimeline(rows, period, range, firstSaleDate);
-  const max = Math.max(...points.map((p: any) => Number(p.revenue || 0)), 1) * 1.3;
-  const w = 1000,
-    h = 210,
-    pad = 18;
-  const xy = (p: any, i: number) => {
-    const x = points.length === 1 ? w / 2 : pad + (i / (points.length - 1)) * (w - pad * 2);
-    const y = h - pad - (Number(p.revenue || 0) / max) * (h - pad * 2);
-    return { x, y };
-  };
-  const coordinates = points.map(xy);
-  const line = points.length === 1
-    ? `M ${pad} ${coordinates[0].y} L ${w - pad} ${coordinates[0].y}`
-    : coordinates.slice(1).reduce((path: string, current: any, i: number) => {
-        const previous = coordinates[i];
-        const before = coordinates[Math.max(0, i - 1)];
-        const after = coordinates[Math.min(coordinates.length - 1, i + 2)];
-        const dx = (current.x - previous.x) / 3;
-        const control1 = previous.y + (current.y - before.y) / 6;
-        const control2 = current.y - (after.y - previous.y) / 6;
-        return `${path} C ${previous.x + dx} ${control1}, ${current.x - dx} ${control2}, ${current.x} ${current.y}`;
-      }, `M ${coordinates[0].x} ${coordinates[0].y}`);
-  const area = `${line} L ${w - pad} ${h - pad} L ${pad} ${h - pad} Z`;
-  const totalOrders = points.reduce((sum: number, p: any) => sum + Number(p.orders || 0), 0);
-  return (
-    <div className="lineChart">
-      <div className="chartTopMetric">
-        <span>{hidden ? "—" : totalOrders} vendas</span>
-        <b>{hidden ? "—" : money(points.reduce((sum: number, p: any) => sum + Number(p.revenue || 0), 0))}</b>
-      </div>
-      {!hidden && hovered !== null && points[hovered] && <div className="chartTooltip" style={{ left: `${Math.max(10, Math.min(90, (coordinates[hovered].x / w) * 100))}%` }}><b>{formatDashboardDate(points[hovered].date)}</b><span>{points[hovered].orders} {points[hovered].orders === 1 ? "venda" : "vendas"} · {money(points[hovered].revenue)}</span></div>}
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label="Vendas no período">
-        <defs>
-          <linearGradient id="salesArea" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--accent2)" stopOpacity=".12" />
-            <stop offset="100%" stopColor="var(--accent2)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path className="lineArea" d={area} />
-        <path className="linePath" d={line} />
-        {points.map((p: any, i: number) => {
-          const { x, y } = xy(p, i);
-          return (
-            <g key={`${p.date}-${i}`} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)} onFocus={() => setHovered(i)} onBlur={() => setHovered(null)} tabIndex={hidden ? -1 : 0} aria-label={hidden ? "Dados ocultos" : `${formatDashboardDate(p.date)}: ${p.orders} ${p.orders === 1 ? "venda" : "vendas"}, ${money(p.revenue)}`}>
-              <circle className="linePointHit" cx={x} cy={y} r={14} />
-              <circle className="linePoint" cx={x} cy={y} r={hovered === i ? 3.5 : 2.5} />
-            </g>
-          );
-        })}
-      </svg>
-      <div className={`lineAxis ${points.length <= 14 ? "lineAxisAll" : ""}`}>
-        {(points.length <= 14 ? points : [{ date: periodRange(period, range, firstSaleDate).from }, points[Math.floor(points.length / 2)], { date: periodRange(period, range, firstSaleDate).to }]).map((p: any, i: number) => <span key={`${p.date}-${i}`}>{compactDay(p.date)}</span>)}
-      </div>
-    </div>
-  );
+  const dates = periodRange(period, range, firstSaleDate);
+  return <SalesChart points={points} from={dates.from} to={dates.to} hidden={hidden} mode={mode} />;
 }
 function formatOrders(rows: any[]) {
   return (rows || []).map((o) => {
@@ -1542,7 +1522,7 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
         </div>
       </div>
       <div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div>
-      <div className="tableWrap">
+      <div className="tableWrap inventoryTableWrap">
         <table className="inventoryTable">
           <thead>
             <tr>
@@ -2019,7 +1999,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<string[]>([]);
   const [selectedAdsetKeys, setSelectedAdsetKeys] = useState<string[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"all" | "active">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "selected">("all");
   const [metaMetrics, setMetaMetrics] = useState<any>(null);
   const [metricsError, setMetricsError] = useState("");
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
@@ -2074,7 +2054,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
     return { campaignId: accountId, accountId, name: accountId === "manual" ? "Campanhas manuais" : accountId, status: rows.some((c: any) => c.status === "ACTIVE") ? "ACTIVE" : null, spendValue: rows.reduce((sum: number, c: any) => sum + c.spendValue, 0), recentSpend: rows.reduce((sum: number, c: any) => sum + c.recentSpend, 0), revenueValue: rows.reduce((sum: number, c: any) => sum + c.revenueValue, 0), sales: rows.reduce((sum: number, c: any) => sum + c.sales, 0), clicks: rows.reduce((sum: number, c: any) => sum + c.clicks, 0), impressions: rows.reduce((sum: number, c: any) => sum + c.impressions, 0), children: rows.length };
   });
   const levelRows = level === "Conjuntos" ? adsets : level === "Anúncios" ? ads : campaigns;
-  const visibleRows = (manager ? level === "Contas" ? accountRows : level === "Campanhas" ? platformRows : levelRows.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase())) : campaigns).filter((c: any) => (!manager || statusFilter === "all" || c.status === "ACTIVE") && (level !== "Conjuntos" && level !== "Anúncios" || !selectedCampaignKeys.length || selectedCampaignKeys.includes(campaignKey(c))) && (level !== "Anúncios" || !selectedAdsetKeys.length || selectedAdsetKeys.includes(adsetKey(c))) && `${c.name} ${c.accountId || ""} ${c.campaignName || ""} ${c.campaignId || ""} ${c.adsetName || ""} ${c.adsetId || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const visibleRows = (manager ? level === "Contas" ? accountRows : level === "Campanhas" ? platformRows : levelRows.filter((c: any) => String(c.platform).toLowerCase().includes(selectedPlatform.toLowerCase())) : campaigns).filter((c: any) => (!manager || statusFilter === "all" || statusFilter === "active" && c.status === "ACTIVE" || statusFilter === "selected" && selectedIds.includes([level, c.platform || selectedPlatform, c.accountId, c.campaignId, c.adsetId, c.adId].join(":"))) && (level !== "Conjuntos" && level !== "Anúncios" || !selectedCampaignKeys.length || selectedCampaignKeys.includes(campaignKey(c))) && (level !== "Anúncios" || !selectedAdsetKeys.length || selectedAdsetKeys.includes(adsetKey(c))) && `${c.name} ${c.accountId || ""} ${c.campaignName || ""} ${c.campaignId || ""} ${c.adsetName || ""} ${c.adsetId || ""}`.toLowerCase().includes(search.toLowerCase()));
   const rowIdFor = (c: any, rowLevel: string) => [rowLevel, c.platform || selectedPlatform, c.accountId, c.campaignId, c.adsetId, c.adId].join(":");
   const rowId = (c: any) => rowIdFor(c, level);
   const updateSelection = (nextIds: string[]) => {
@@ -2088,6 +2068,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
   };
   const changeLevel = (nextLevel: string) => {
     setLevel(nextLevel);
+    setStatusFilter("all");
     setSearch("");
     setSelectedIds(nextLevel === "Campanhas" ? platformRows.filter((c: any) => selectedCampaignKeys.includes(campaignKey(c))).map((c: any) => rowIdFor(c, nextLevel)) : nextLevel === "Conjuntos" ? adsets.filter((c: any) => selectedAdsetKeys.includes(adsetKey(c))).map((c: any) => rowIdFor(c, nextLevel)) : []);
   };
@@ -2097,12 +2078,51 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
   const showActions = visibleRows.some((c: any) => c.manual);
   const totalSpend = platformRows.reduce((sum: number, c: any) => sum + c.spendValue, 0);
   const totalRevenue = platformRows.reduce((sum: number, c: any) => sum + c.revenueValue, 0);
+  const metaPurchaseRevenue = platformRows.reduce((sum: number, c: any) => sum + Number(metaMetrics?.campaigns?.[c.campaignId]?.purchaseValue || 0), 0);
+  const summaryRevenue = selectedPlatform === "Meta" ? metaPurchaseRevenue : totalRevenue;
+  const summaryReady = Boolean(scopedData && (selectedPlatform !== "Meta" || metaMetrics));
   const statusLabels: Record<string, string> = { ACTIVE: "Ativa", PAUSED: "Pausada", CAMPAIGN_PAUSED: "Campanha pausada", ADSET_PAUSED: "Conjunto pausado", DISAPPROVED: "Reprovado", PENDING_REVIEW: "Em análise", WITH_ISSUES: "Com problemas", IN_PROCESS: "Processando", ARCHIVED: "Arquivada" };
   const metric = (c: any) => selectedPlatform === "Meta" ? metaMetrics?.[level === "Contas" ? "accounts" : level === "Conjuntos" ? "adsets" : level === "Anúncios" ? "ads" : "campaigns"]?.[level === "Contas" ? c.accountId : level === "Conjuntos" ? c.adsetId : level === "Anúncios" ? c.adId : c.campaignId] : undefined;
   const count = (value: number | undefined) => value == null ? "—" : value.toLocaleString("pt-BR");
   const amount = (value: number | undefined) => value == null ? "—" : money(value);
   const percent = (value: number | undefined) => value == null ? "—" : `${value.toFixed(2)}%`;
-  const ratio = (value: number | undefined) => value == null ? "—" : `${value.toFixed(2)}x`;
+  const ratio = (value: number | undefined) => value == null ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+  const sumRows = (key: string) => visibleRows.reduce((sum: number, row: any) => sum + Number(row[key] || 0), 0);
+  const sumMeta = (key: string) => visibleRows.reduce((sum: number, row: any) => sum + Number(metric(row)?.[key] || 0), 0);
+  const hasMeta = visibleRows.some((row: any) => Boolean(metric(row)));
+  const totalCell = (key: string) => {
+    const spend = sumRows("spendValue");
+    const impressions = sumRows("impressions");
+    const clicks = sumRows("clicks");
+    const linkClicks = sumMeta("linkClicks");
+    const purchases = sumMeta("purchases");
+    const sales = sumRows("sales");
+    switch (key) {
+      case "name": return `Resultados de ${visibleRows.length} ${visibleCountLabel[visibleRows.length === 1 ? 0 : 1]}`;
+      case "related": return level === "Contas" ? count(sumRows("children")) : "";
+      case "spend": return money(spend);
+      case "impressions": return count(impressions);
+      case "clicks": return count(clicks);
+      case "cpm": return impressions ? money(spend / impressions * 1000) : "—";
+      case "ctr": return impressions ? percent(clicks / impressions * 100) : "—";
+      case "cpc": return clicks ? money(spend / clicks) : "—";
+      case "linkClicks": return hasMeta ? count(linkClicks) : "—";
+      case "linkCtr": return hasMeta && impressions ? percent(linkClicks / impressions * 100) : "—";
+      case "linkCpc": return hasMeta && linkClicks ? money(spend / linkClicks) : "—";
+      case "landingViews": return hasMeta ? count(sumMeta("landingViews")) : "—";
+      case "checkouts": return hasMeta ? count(sumMeta("checkouts")) : "—";
+      case "checkoutValue": return hasMeta ? money(sumMeta("checkoutValue")) : "—";
+      case "purchases": return hasMeta ? count(purchases) : "—";
+      case "purchaseValue": return hasMeta ? money(sumMeta("purchaseValue")) : "—";
+      case "costPerPurchase": return hasMeta && purchases ? money(spend / purchases) : "—";
+      case "purchaseRoas": return hasMeta && spend ? ratio(sumMeta("purchaseValue") / spend) : "—";
+      case "erpSales": return count(sales);
+      case "erpRevenue": return money(sumRows("revenueValue"));
+      case "erpCpa": return sales ? money(spend / sales) : "—";
+      case "erpRoas": return spend ? ratio(sumRows("revenueValue") / spend) : "—";
+      default: return "";
+    }
+  };
   const metricColumns = [
     { key: "select", title: "", width: 38, render: (c: any) => <input type="checkbox" aria-label={`Selecionar ${c.name}`} checked={selectedIds.includes(rowId(c))} onChange={(event) => updateSelection(event.target.checked ? [...selectedIds, rowId(c)] : selectedIds.filter((id) => id !== rowId(c)))} /> },
     { key: "name", title: level === "Contas" ? "Conta de anúncios" : level === "Conjuntos" ? "Conjunto de anúncios" : level === "Anúncios" ? "Anúncio" : "Campanha", width: 290, render: (c: any) => level !== "Anúncios" ? <button className="adAccountLink" title={c.name} onClick={() => { if (level === "Campanhas") { setSelectedCampaignKeys([campaignKey(c)]); setSelectedAdsetKeys([]); } else if (level === "Conjuntos") setSelectedAdsetKeys([adsetKey(c)]); changeLevel(level === "Contas" ? "Campanhas" : level === "Campanhas" ? "Conjuntos" : "Anúncios"); setSelectedIds([]); if (level === "Contas") setSearch(c.accountId); }}>{c.name}</button> : <span className="adNameWithThumb"><AdThumbnail url={thumbnails[c.adId]} small platform={c.platform} /><b title={c.name}>{c.name}</b></span> },
@@ -2159,7 +2179,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
         <div className="adPlatformTabs" role="tablist" aria-label="Plataforma de anúncios">
           {platforms.map((name) => <button key={name} role="tab" aria-selected={selectedPlatform === name} className={selectedPlatform === name ? "active" : ""} onClick={() => { setSelectedPlatform(name); setLevel("Campanhas"); setSearch(""); setSelectedIds([]); setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); }}><span className="adPlatformIcon"><img src={`/integration-logos/${name.toLowerCase()}-ads.webp`} alt="" /></span>{name} Ads<span className="adPlatformCount">{campaigns.filter((c: any) => String(c.platform).toLowerCase().includes(name.toLowerCase())).length}</span></button>)}
         </div>
-        <div className="adManagerMetrics"><div><small>Investimento</small><strong>{scopedData ? money(totalSpend) : "—"}</strong></div><div><small>Receita atribuída</small><strong>{scopedData ? money(totalRevenue) : "—"}</strong></div><div><small>ROAS</small><strong>{scopedData && totalSpend ? `${(totalRevenue / totalSpend).toFixed(2)}x` : "—"}</strong></div><div><small>Campanhas</small><strong>{scopedData ? platformRows.length : "—"}</strong></div></div>
+        <div className="adManagerMetrics"><div><small>Investimento</small><strong>{scopedData ? money(totalSpend) : "—"}</strong></div><div><small>{selectedPlatform === "Meta" ? "Valor de compras Meta" : "Receita atribuída"}</small><strong>{summaryReady ? money(summaryRevenue) : "—"}</strong></div><div><small>{selectedPlatform === "Meta" ? "ROAS Meta" : "ROAS"}</small><strong>{summaryReady && totalSpend ? ratio(summaryRevenue / totalSpend) : "—"}</strong></div><div><small>Campanhas</small><strong>{scopedData ? platformRows.length : "—"}</strong></div></div>
         <div className="adLevelBar"><div className="adLevelTabs" role="tablist" aria-label="Nível de anúncios">{levels.map((name) => <button key={name} role="tab" aria-selected={level === name} className={level === name ? "active" : ""} onClick={() => changeLevel(name)}>{name}{name === "Campanhas" && selectedCampaignKeys.length > 0 && <span className="adPlatformCount">{selectedCampaignKeys.length}</span>}{name === "Conjuntos" && selectedAdsetKeys.length > 0 && <span className="adPlatformCount">{selectedAdsetKeys.length}</span>}</button>)}</div>
           <div className="adDateFilter" ref={adPeriodRef}>
             <button type="button" className="adDateTrigger" aria-label="Filtrar campanhas por data" aria-expanded={adPeriodOpen} onClick={() => { setDraftAdRange(adPeriod === "Personalizado" ? adRange : { from: "", to: "" }); setAdCalendarMonth((selectedDates?.from || todayISO()).slice(0, 7)); setAdSelectingEnd(false); setAdPeriodOpen((open) => !open); }}><CalendarDays size={15} /><span>{adPeriod === "Tempo todo" ? "Tempo todo" : `${adPeriod}: ${formatDashboardDate(selectedDates!.from)} a ${formatDashboardDate(selectedDates!.to)}`}</span><ChevronDown size={14} /></button>
@@ -2167,7 +2187,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
           </div>
         </div>
       </>}
-      <div className="adManagerToolbar"><div className="adToolbarFilters"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : `Buscar ${level.toLowerCase()}`} value={search} onChange={(event) => setSearch(event.target.value)} /></label>{manager && <div className="adStatusFilter" role="group" aria-label="Filtrar por veiculação"><button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>Todos</button><button type="button" className={statusFilter === "active" ? "active" : ""} aria-pressed={statusFilter === "active"} onClick={() => setStatusFilter("active")}>Ativos</button></div>}</div><div className="adSelectionInfo">{manager && selectedVisible.length > 0 && <><b>{selectedVisible.length} selecionados</b><button type="button" onClick={() => updateSelection([])}>Limpar</button></>}{manager && (level === "Conjuntos" || level === "Anúncios") && selectedCampaignKeys.length > 0 && <button type="button" onClick={() => { setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar campanhas</button>}{manager && level === "Anúncios" && selectedAdsetKeys.length > 0 && <button type="button" onClick={() => { setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar conjuntos</button>}<span>{visibleRows.length} {visibleCountLabel[visibleRows.length === 1 ? 0 : 1]}</span></div></div>
+      <div className="adManagerToolbar"><div className="adToolbarFilters"><label className="adManagerSearch"><Search size={15} /><input aria-label="Buscar no gerenciador" placeholder={level === "Contas" ? "Buscar conta" : `Buscar ${level.toLowerCase()}`} value={search} onChange={(event) => setSearch(event.target.value)} /></label>{manager && <div className="adStatusFilter" role="group" aria-label="Filtrar linhas"><button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>Todos</button><button type="button" className={statusFilter === "active" ? "active" : ""} aria-pressed={statusFilter === "active"} onClick={() => setStatusFilter("active")}>Ativos</button><button type="button" className={statusFilter === "selected" ? "active" : ""} aria-pressed={statusFilter === "selected"} onClick={() => setStatusFilter("selected")}>Selecionados</button></div>}</div><div className="adSelectionInfo">{manager && selectedIds.length > 0 && <><b>{selectedIds.length} selecionados</b><button type="button" onClick={() => updateSelection([])}>Limpar</button></>}{manager && (level === "Conjuntos" || level === "Anúncios") && selectedCampaignKeys.length > 0 && <button type="button" onClick={() => { setSelectedCampaignKeys([]); setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar campanhas</button>}{manager && level === "Anúncios" && selectedAdsetKeys.length > 0 && <button type="button" onClick={() => { setSelectedAdsetKeys([]); setSelectedIds([]); }}>Limpar conjuntos</button>}<span>{visibleRows.length} {visibleCountLabel[visibleRows.length === 1 ? 0 : 1]}</span></div></div>
       {manager && <>
         <div className="adMetricsNote">{metricsError ? `Métricas da Meta indisponíveis: ${metricsError}` : !metaMetrics && selectedPlatform === "Meta" ? "Carregando métricas detalhadas da Meta…" : "Métricas da Meta e atribuições do ERP exibidas em colunas separadas."} Arraste a borda do cabeçalho para ajustar a coluna.</div>
         <div className="tableWrap adWideTable">
@@ -2175,8 +2195,9 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
             <colgroup>{metricColumns.map((col) => <col key={col.key} style={{ width: columnWidths[col.key] || col.width }} />)}</colgroup>
             <thead><tr>{metricColumns.map((col) => <th key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={col.title}>{col.key === "select" ? <input type="checkbox" aria-label="Selecionar todos os itens visíveis" checked={visibleIds.length > 0 && selectedVisible.length === visibleIds.length} onChange={(event) => updateSelection(event.target.checked ? [...new Set([...selectedIds, ...visibleIds])] : selectedIds.filter((id) => !visibleIds.includes(id)))} /> : col.title}{col.key !== "select" && <span className="adResizeHandle" role="separator" aria-label={`Ajustar largura: ${col.title}`} onPointerDown={(event) => beginResize(event, col.key, col.width)} />}</th>)}</tr></thead>
             <tbody>{visibleRows.map((c: any) => <tr key={rowId(c)} className={selectedIds.includes(rowId(c)) ? "adRowSelected" : ""}>{metricColumns.map((col) => <td key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""} title={typeof col.render(c) === "string" ? col.render(c) : undefined}>{col.render(c)}</td>)}</tr>)}
-              {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={metricColumns.length}>{scopedError || (!scopedData ? "Carregando dados do período…" : search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`)}</td></tr>}
+              {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={metricColumns.length}>{scopedError || (!scopedData ? "Carregando dados do período…" : statusFilter === "selected" && !selectedIds.length ? "Selecione itens na aba Todos para vê-los aqui." : search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`)}</td></tr>}
             </tbody>
+            {visibleRows.length > 0 && <tfoot><tr className="adTotalsRow">{metricColumns.map((col) => <td key={col.key} className={col.key === "select" ? "adSelectCell" : col.key === "name" ? "adStickyName" : ""}>{totalCell(col.key)}</td>)}</tr></tfoot>}
           </table>
         </div>
       </>}
@@ -2221,7 +2242,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
                 <td>{c.sales}</td>
                 <td>{money(c.revenueValue)}</td>
                 <td>{c.sales ? money(c.spendValue / c.sales) : "—"}</td>
-                <td>{c.spendValue ? `${(c.revenueValue / c.spendValue).toFixed(2)}x` : "—"}</td>
+                <td>{c.spendValue ? ratio(c.revenueValue / c.spendValue) : "—"}</td>
                 {showActions && <td>
                   {c.manual && <button className="mini danger" aria-label={`Excluir ${c.name}`} onClick={() => onDelete(c)}>
                     <Trash2 size={14} />
@@ -2322,70 +2343,91 @@ function Movements({ movements, onNew, onEdit }: any) {
     </article>
   );
 }
-function Journey() {
-  return (
-    <section className="journey">
-      <div className="funnel">
-        {[
-          ["Visitas", "8.412"],
-          ["ViewContent", "6.980"],
-          ["Checkout", "742"],
-          ["Pagamento criado", "128"],
-          ["Purchase", "94"],
-        ].map(([a, b], i) => (
-          <div className="funnelStep" key={a}>
-            <span>{a}</span>
-            <b>{b}</b>
-            {i < 4 && <ArrowUpRight size={16} />}
-          </div>
-        ))}
-      </div>
-      <article className="card pad">
-        <h2>Última jornada atribuída</h2>
-        <div className="timeline">
-          <p>
-            <MousePointerClick /> Meta Ads • fbclid capturado
-          </p>
-          <p>UTM: facebook / paid_social / IA Outubro</p>
-          <p>Checkout iniciado • Iron Air 127V</p>
-          <p>Asaas CONFIRMED • R$ 1.349,10</p>
-          <p className="positive">Purchase CAPI + Pixel deduplicado</p>
-        </div>
-      </article>
-    </section>
-  );
-}
-function Finance({ data, onNew }: any) {
+function Finance() {
+  const [data, setData] = useState<any>(null);
+  const [mpToken, setMpToken] = useState('');
+  const [mpSaving, setMpSaving] = useState(false);
+  const [mpError, setMpError] = useState('');
+  useEffect(() => { apiJson("/api/dashboard?all=1").then(setData).catch(() => setData(null)); }, []);
+  const [transfers, setTransfers] = useState<any>(null);
+  const [transferError, setTransferError] = useState("");
+  const [loadingTransfers, setLoadingTransfers] = useState(false);
+  const loadTransfers = (fresh = false) => {
+    setLoadingTransfers(true);
+    setTransferError("");
+    apiJson(`/api/finance/transfers${fresh ? "?fresh=1" : ""}`)
+      .then(setTransfers)
+      .catch((error) => setTransferError(error?.message || "Falha ao consultar repasses"))
+      .finally(() => setLoadingTransfers(false));
+  };
+  useEffect(() => { loadTransfers(true); }, []);
+  useEffect(() => {
+    if (transfers?.mercadoPago?.status !== 'processing' && !transfers?.receivables?.sources?.some((source: any) => source.name === 'Mercado Pago' && source.status === 'processing')) return;
+    const timer = window.setTimeout(() => loadTransfers(true), 8000);
+    return () => window.clearTimeout(timer);
+  }, [transfers?.mercadoPago?.status, transfers?.receivables?.sources, transfers?.updatedAt]);
+  const amazonRows = transfers?.amazon?.rows || [];
+  const mpRows = transfers?.mercadoPago?.rows || [];
+  const payoutRows = [
+    ...amazonRows.map((row: any) => ({ source: 'Amazon', id: row.id, date: row.transferDate, amount: row.amount, currency: row.currency || 'BRL', status: row.transferStatus, account: row.accountTail ? `Final ${row.accountTail}` : '—', period: `${row.periodStart ? new Date(row.periodStart).toLocaleDateString('pt-BR') : '—'} – ${row.periodEnd ? new Date(row.periodEnd).toLocaleDateString('pt-BR') : '—'}` })),
+    ...mpRows.map((row: any) => ({ source: 'Mercado Pago', id: row.id, date: row.date, amount: row.amount, currency: 'BRL', status: row.status, account: row.account || '—', period: '—' })),
+  ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const saveMpToken = async () => {
+    setMpSaving(true); setMpError('');
+    try {
+      await apiJson('/api/integrations/mercado-pago', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: mpToken }) });
+      setMpToken(''); loadTransfers(true);
+    } catch (error: any) { setMpError(error?.message || 'Não foi possível conectar o Mercado Pago.'); }
+    finally { setMpSaving(false); }
+  };
+  const transferStatus = (value: string) => {
+    const normalized = value.toUpperCase();
+    if (/TRANSFER|DONE|SUCCESS|SUCCEEDED/.test(normalized)) return "Transferência informada";
+    if (/CLOSE|PROCESS/.test(normalized)) return "Fechado pela Amazon";
+    if (/OPEN|PEND/.test(normalized)) return "Em processamento";
+    return value || "Status indisponível";
+  };
   return (
     <>
+      <section className="financeHeroGrid">
+        <article className="card pad financeHeroCard financeCashCard">
+          <span>Caixa da empresa</span>
+          <strong>{transfers?.amazon?.status === "connected" ? money(transfers.companyCash?.amount || 0) : "—"}</strong>
+          <small>{transfers?.companyCash?.transfers || 0} repasses e saques informados · tempo todo</small>
+          {!transfers?.companyCash?.complete && <p>Valor parcial: histórico completo de saques do Mercado Pago em preparação.</p>}
+        </article>
+        <article className="card pad financeHeroCard financeExpectedCard">
+          <span>Lucro esperado</span>
+          <strong>{data ? money(data.profit || 0) : "—"}</strong>
+          <small>Resultado estimado · tempo todo</small>
+        </article>
+      </section>
       <section className="kpiGrid">
         {[
           ["Receita", data?.revenue || 0],
-          ["CMV", data?.cogs || 0],
+          ["A receber nas plataformas", transfers?.receivables?.amount],
           ["Mídia", data?.media || 0],
           ["Despesas", data?.expenses || 0],
         ].map(([a, b]: any) => (
           <article className="card kpi" key={a}>
             <span>{a}</span>
-            <strong>{money(b)}</strong>
+            <strong>{b == null ? '—' : money(b)}</strong>
           </article>
         ))}
       </section>
-      <article className="card pad">
+      <article className="card pad financeTransfers">
         <div className="sectionHead">
-          <div>
-            <h2>Resultado estimado</h2>
-            <p>DRE operacional simplificada</p>
-          </div>
-          <button className="primary" onClick={onNew}>
-            <Plus size={14} />
-            Lançar despesa
-          </button>
+          <div><h2>Repasses e saques</h2><p>Histórico completo · mais recentes primeiro</p></div>
+          <button className="mini" type="button" onClick={() => loadTransfers(true)} disabled={loadingTransfers} aria-label="Atualizar repasses"><RefreshCw size={16} /></button>
         </div>
-        <div className="bigProfit">
-          {money(data?.profit || 0)} <small>lucro líquido estimado</small>
+        <div className="financeTransferSources">
+          <div><strong>Amazon</strong><span>{loadingTransfers ? "Consultando…" : transfers?.amazon?.status === "connected" ? `${amazonRows.length} repasses encontrados` : transfers?.amazon?.error || "Aguardando consulta"}</span></div>
+          <div><strong>Mercado Livre / Mercado Pago</strong><span>{transfers?.mercadoPago?.message || "É necessária a credencial de produção do Mercado Pago para consultar saques."}</span></div>
         </div>
-        <div className="formula">Receita − CMV − mídia − taxas − frete − despesas = lucro. Impostos podem ser adicionados por regra fiscal.</div>
+        {transfers?.mercadoPago?.status === 'credential_required' && <div className="financeTokenConnect"><label htmlFor="mp-access-token">Access Token de produção do Mercado Pago</label><div><input id="mp-access-token" type="password" autoComplete="off" spellCheck={false} value={mpToken} onChange={event => setMpToken(event.target.value)} placeholder="APP_USR-…" /><button className="primary" type="button" disabled={!mpToken || mpSaving} onClick={saveMpToken}>{mpSaving ? 'Conectando…' : 'Conectar'}</button></div><small>Salvo criptografado no servidor. O token não aparece novamente na tela.</small>{mpError && <p className="financeTransferNote">{mpError}</p>}</div>}
+        {transferError && <p className="financeTransferNote">{transferError}</p>}
+        {payoutRows.length > 0 && <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Plataforma</th><th>Período</th><th>Data da transferência</th><th>Valor</th><th>Status</th><th>Conta</th></tr></thead><tbody>{payoutRows.map((row: any) => <tr key={`${row.source}-${row.id}`}><td><strong>{row.source}</strong><small>{row.id}</small></td><td>{row.period}</td><td>{row.date ? new Date(row.date).toLocaleDateString('pt-BR') : '—'}</td><td>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: row.currency }).format(row.amount)}</td><td>{row.source === 'Amazon' ? transferStatus(row.status) : row.status === 'approved' ? 'Aprovado' : row.status}</td><td>{row.account}</td></tr>)}</tbody></table></div>}
+        <p className="financeTransferNote">A transferência informada pela plataforma não confirma o crédito na sua conta bancária. Esse saldo não entra novamente na receita nem no lucro.</p>
       </article>
     </>
   );
@@ -2409,7 +2451,6 @@ function Returns({ rows }: { rows: any[] }) {
   const statusLabel: Record<string, string> = { IN_TRANSIT: "Devolução a caminho", DELIVERED: "Reembolsada", REFUNDED: "Reembolsada" };
   return <article className="card tableCard">
     <div className="sectionHead"><div><h2>Devoluções do Mercado Livre</h2><p>{rows.length} pedidos REFUNDED · {rows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {rows.filter((row) => row.refundAmount !== null).length} reembolsos confirmados</p></div></div>
-    <div className="formula">Os quatro pedidos aparecem como REFUNDED em Vendas, com lucro zero. Dois valores de reembolso ainda estão pendentes no Mercado Livre. O estoque só aumenta após o recebimento físico no estoque central.</div>
     <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th>Motivo</th><th>Situação</th><th>Reembolso</th><th>Vendas</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>
       <td><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">Pacote #{row.externalOrderId}</a></td>
       <td>{row.customerName || "—"}</td>
@@ -2922,7 +2963,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
             <h3>Mercado Livre</h3>
             <p>OAuth por tenant com tokens server-side</p>
           </div>
-          <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
+          <span className={connected && !status?.requiresReconnect ? "status ok" : "status warn"}>{status?.requiresReconnect ? "Reconectar" : connected ? "Conectado" : "Preparado"}</span>
         </div>
         <div className="tabs">
           {["Configuração", "Webhooks", "Sincronização"].map((t) => (
@@ -2948,7 +2989,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
               </div>
               <div className="detailBox">
                 <span>Status</span>
-                <b>{connected ? "Ativa" : "Aguardando"}</b>
+                <b>{status?.requiresReconnect ? "Reconexão necessária" : connected ? "Ativa" : "Aguardando"}</b>
               </div>
               <div className="detailBox">
                 <span>Refresh token</span>
@@ -2959,7 +3000,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                 <b>{status?.expiresAt ? fmtDate(status.expiresAt) : "—"}</b>
               </div>
             </div>
-            <p className="muted">Tokens ficam criptografados no servidor. Se o refresh token estiver ausente, reconecte o Mercado Livre uma vez para ativar a renovação automática.</p>
+            {status?.requiresReconnect && <p className="negative">A conexão não tem token de renovação. Ative “Refresh Token” no aplicativo do Mercado Livre Developer e conecte a conta novamente para retomar a sincronização automática.</p>}
+            <p className="muted">Tokens ficam criptografados no servidor. Com “Refresh Token” ativo no aplicativo, a conexão se renova automaticamente.</p>
             <div className="syncOptions">
               <button onClick={() => (location.href = "/api/integrations/mercadolivre/connect")}>
                 <Link2 />

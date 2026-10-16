@@ -29,7 +29,7 @@ export default function LoginPage() {
   };
   return <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#08121a', color: '#e8f0f3', padding: 20 }}>
     <form onSubmit={submit} style={{ width: 'min(100%, 390px)', background: '#101d27', border: '1px solid #2b404d', borderRadius: 16, padding: 28, display: 'grid', gap: 14 }}>
-      <h1 style={{ margin: 0, fontSize: 24 }}>Iron Air ERP</h1>
+      <h1 style={{ margin: 0 }}><img src="/iron-seller-white.png" alt="Iron Seller" style={{ display: 'block', width: 260, maxWidth: '100%', height: 'auto' }} /></h1>
       <p style={{ margin: 0, color: '#a9bdc7' }}>{mode === 'login' ? 'Entre na sua empresa' : 'Crie sua conta'}</p>
       {mode === 'signup' && <label style={{ display: 'grid', gap: 6 }}>Nome da empresa<input autoComplete="organization" required minLength={2} maxLength={100} value={companyName} onChange={event => setCompanyName(event.target.value)} style={{ padding: 12, borderRadius: 8, border: '1px solid #3a5664', background: '#07131b', color: 'white' }} /></label>}
       <label style={{ display: 'grid', gap: 6 }}>E-mail<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} style={{ padding: 12, borderRadius: 8, border: '1px solid #3a5664', background: '#07131b', color: 'white' }} /></label>

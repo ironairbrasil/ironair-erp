@@ -219,6 +219,50 @@ async function amazonRequest<T = any>(path: string, options: { method?: string; 
   return json as T;
 }
 
+export async function listAmazonTransfers(tenantId: string) {
+  const firstOrder = await db.order.findFirst({
+    where: { tenantId, channel: 'AMAZON' },
+    orderBy: { createdAt: 'asc' },
+    select: { createdAt: true }
+  });
+  const retentionStart = Date.now() - 3650 * 86400000;
+  const start = Math.max(retentionStart, (firstOrder?.createdAt.getTime() || Date.now()) - 180 * 86400000);
+  const end = Date.now() - 5 * 60000;
+  const groups: any[] = [];
+  for (let windowStart = start; windowStart < end; windowStart += 179 * 86400000) {
+    const windowEnd = Math.min(end, windowStart + 179 * 86400000);
+    const query = {
+      FinancialEventGroupStartedAfter: new Date(windowStart).toISOString(),
+      FinancialEventGroupStartedBefore: new Date(windowEnd).toISOString(),
+      MaxResultsPerPage: '100'
+    };
+    let nextToken: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const result: any = await amazonRequest('/finances/v0/financialEventGroups', {
+        query: { ...query, ...(nextToken ? { NextToken: nextToken } : {}) }
+      }, tenantId);
+      groups.push(...(result?.payload?.FinancialEventGroupList || []));
+      nextToken = result?.payload?.NextToken;
+      if (!nextToken) break;
+    }
+    if (nextToken) throw new Error('Histórico de repasses incompleto; atualize para tentar novamente.');
+  }
+  return [...new Map(groups.filter((group) => group.FinancialEventGroupId).map((group) => [group.FinancialEventGroupId, group])).values()].map((group) => ({
+    id: String(group.FinancialEventGroupId || ''),
+    platform: 'Amazon',
+    amount: Number(group.ConvertedTotal?.CurrencyAmount ?? group.OriginalTotal?.CurrencyAmount ?? 0),
+    currency: String(group.ConvertedTotal?.CurrencyCode || group.OriginalTotal?.CurrencyCode || 'BRL'),
+    periodStart: group.FinancialEventGroupStart || null,
+    periodEnd: group.FinancialEventGroupEnd || null,
+    transferDate: group.FundTransferDate || null,
+    transferStatus: String(group.FundTransferStatus || group.ProcessingStatus || 'UNKNOWN'),
+    accountTail: group.AccountTail ? String(group.AccountTail) : null,
+    traceId: group.TraceId ? String(group.TraceId) : null,
+  })).filter((group) => group.id).sort((a, b) =>
+    String(b.transferDate || b.periodEnd || b.periodStart || '').localeCompare(String(a.transferDate || a.periodEnd || a.periodStart || ''))
+  );
+}
+
 async function amazonRestrictedDataToken(path: string, method = 'GET', tenantId?: string){
   const response: any = await amazonRequest('/tokens/2021-03-01/restrictedDataToken', {
     method: 'POST',

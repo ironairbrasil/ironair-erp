@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { db } from './db';
 import { decryptSecret, encryptSecret } from './crypto-secrets';
 import { ingestOrder, type IngestOrder } from './orders';
+import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
 
 const PROVIDER = 'Mercado Livre';
@@ -87,30 +88,42 @@ export async function exchangeMercadoLivreCode(code: string, redirectUri: string
   return postToken({ grant_type: 'authorization_code', client_id: id, client_secret: secret, code, redirect_uri: redirectUri });
 }
 
-export async function refreshMercadoLivreConnection(integration: { id: string; tenantId: string; refreshTokenEncrypted: string | null; metadata: unknown }){
-  if(!integration.refreshTokenEncrypted) throw new Error('Mercado Livre sem refresh token');
+export async function refreshMercadoLivreConnection(integration: { id: string; tenantId: string; refreshTokenEncrypted: string | null; metadata: unknown }, attemptedAccessToken?: string){
   const id = clientId();
   const secret = clientSecret();
   if(!id || !secret) throw new Error('Credenciais OAuth Mercado Livre ausentes no servidor');
-  const token = await postToken({
-    grant_type: 'refresh_token',
-    client_id: id,
-    client_secret: secret,
-    refresh_token: decryptSecret(integration.refreshTokenEncrypted)
-  });
-  const metadata = { ...((integration.metadata as Record<string, unknown>) || {}), expiresAt: tokenExpiresAt(token.expires_in), tokenType: token.token_type, refreshTokenAvailable: true, refreshedAt: new Date().toISOString() };
-  const updated = await db.integration.update({
-    where: { id: integration.id },
-    data: {
-      accessTokenEncrypted: encryptSecret(token.access_token),
-      refreshTokenEncrypted: encryptSecret(token.refresh_token || decryptSecret(integration.refreshTokenEncrypted)),
-      scopes: token.scope || undefined,
-      metadata,
-      status: 'CONNECTED',
-      lastError: null
+  // Mercado Livre rotates refresh tokens. Serialize refreshes across server instances
+  // so concurrent webhooks cannot spend the same token twice.
+  return db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(94127, hashtext(${integration.id}))) AS token_lock`;
+    const current = await tx.integration.findUnique({ where: { id: integration.id } });
+    if(!current?.refreshTokenEncrypted) throw new Error('Mercado Livre sem refresh token; ative Refresh Token no Developer e reconecte a conta');
+    const currentExpiry = (current.metadata as any)?.expiresAt;
+    if(attemptedAccessToken){
+      if(current.accessTokenEncrypted && decryptSecret(current.accessTokenEncrypted) !== attemptedAccessToken) return current;
+    }else if(currentExpiry && new Date(currentExpiry).getTime() - Date.now() >= 5 * 60 * 1000){
+      return current;
     }
-  });
-  return updated;
+    const token = await postToken({
+      grant_type: 'refresh_token',
+      client_id: id,
+      client_secret: secret,
+      refresh_token: decryptSecret(current.refreshTokenEncrypted)
+    });
+    if(!token.refresh_token) throw new Error('Mercado Livre não devolveu refresh token na renovação; verifique o fluxo Refresh Token no Developer');
+    const metadata = { ...((current.metadata as Record<string, unknown>) || {}), expiresAt: tokenExpiresAt(token.expires_in), tokenType: token.token_type, refreshTokenAvailable: true, refreshedAt: new Date().toISOString() };
+    return tx.integration.update({
+      where: { id: integration.id },
+      data: {
+        accessTokenEncrypted: encryptSecret(token.access_token),
+        refreshTokenEncrypted: encryptSecret(token.refresh_token),
+        scopes: token.scope || undefined,
+        metadata,
+        status: 'CONNECTED',
+        lastError: null
+      }
+    });
+  }, { maxWait: 20000, timeout: 20000 });
 }
 
 export async function refreshMercadoLivreTenant(tenantId?: string){
@@ -138,6 +151,9 @@ export async function getMercadoLivreConnection(tenantId?: string): Promise<Merc
     throw new Error('Mercado Livre não conectado');
   }
   const expiresAt = (integration.metadata as any)?.expiresAt as string | undefined;
+  if(!integration.refreshTokenEncrypted && expiresAt && new Date(expiresAt).getTime() <= Date.now()){
+    throw new Error('Mercado Livre expirado sem token de renovação; ative Refresh Token no Developer e reconecte a conta');
+  }
   if(integration.refreshTokenEncrypted && expiresAt && new Date(expiresAt).getTime() - Date.now() < 5 * 60 * 1000){
     integration = await refreshMercadoLivreConnection(integration);
   }
@@ -166,7 +182,7 @@ export async function mercadoLivreApi<T = any>(path: string, init: RequestInit =
       await db.integration.update({ where: { id: conn.integrationId }, data: { lastError: 'Access token expirado e refresh token indisponível. Reconecte Mercado Livre uma vez para autorizar offline_access.' } });
       throw new Error('Mercado Livre access token expirado e refresh token indisponível; reconecte a conta');
     }
-    const refreshed = await refreshMercadoLivreConnection({ id: conn.integrationId, tenantId: conn.tenantId, refreshTokenEncrypted: encryptSecret(conn.refreshToken), metadata: { expiresAt: conn.expiresAt } });
+    const refreshed = await refreshMercadoLivreConnection({ id: conn.integrationId, tenantId: conn.tenantId, refreshTokenEncrypted: null, metadata: null }, conn.accessToken);
     r = await request(decryptSecret(refreshed.accessTokenEncrypted!));
   }
   const json = await r.json().catch(() => ({}));
@@ -212,7 +228,11 @@ export async function registerMercadoLivreWebhookReceipt(input: { tenantId: stri
       data: { tenantId: input.tenantId, integrationId: input.integrationId, provider: WEBHOOK_PROVIDER, eventId: input.eventId, topic: input.topic, payload: input.payload, status: 'PROCESSING' }
     });
   }catch(e: any){
-    if(e?.code === 'P2002') return null;
+    if(e?.code === 'P2002'){
+      const where = { tenantId: input.tenantId, provider: WEBHOOK_PROVIDER, eventId: input.eventId };
+      const retry = await db.webhookEvent.updateMany({ where: { ...where, status: 'FAILED' }, data: { status: 'PROCESSING', processedAt: null, error: null } });
+      return retry.count ? db.webhookEvent.findUnique({ where: { tenantId_provider_eventId: where } }) : null;
+    }
     throw e;
   }
 }
@@ -347,12 +367,90 @@ async function mercadoLivreOrderExtra(order: any, tenantId: string): Promise<Mer
 export async function processMercadoLivreNotification(payload: any, tenantId: string){
   const topic = String(payload?.topic || '').toLowerCase();
   const resource = String(payload?.resource || '');
+  const claimId = resource.match(/\/claims\/(\d+)/)?.[1];
+  if(claimId){
+    const result = await syncMercadoLivreReturns(tenantId, claimId);
+    return { ok: true, ...result };
+  }
   if(!topic.includes('order') && !resource.includes('/orders/')) return { ignored: true };
   const order = await mercadoLivreApi(resource, {}, tenantId);
   const extra = await mercadoLivreOrderExtra(order, tenantId);
   await ingestOrder(await mapMercadoLivreOrderWithReturns(order, tenantId, extra));
+  await syncMercadoLivreReturnsForOrder(tenantId, String(order.id));
   await db.integration.updateMany({ where: { tenantId, provider: PROVIDER }, data: { lastSyncAt: new Date(), lastError: null } });
   return { ok: true, orderId: order.id };
+}
+
+async function syncMercadoLivreReturnCase(returnCase: { id: string; tenantId: string; claimId: string | null; sku: string | null; quantity: number; status: string; orderExternalId: string | null }){
+  if(!returnCase.claimId) return { checked: 0, delivered: 0, restocked: 0 };
+  const response: any = await mercadoLivreApi(`/post-purchase/v2/claims/${encodeURIComponent(returnCase.claimId)}/returns`, {}, returnCase.tenantId);
+  const result = Array.isArray(response) ? response[0] : response;
+  const status = String(result?.status || '').toLowerCase();
+  if(!status) throw new Error(`Status da devolução ${returnCase.claimId} indisponível`);
+  const delivered = status === 'delivered';
+  let sku = returnCase.sku;
+  let quantity = returnCase.quantity;
+  if(!sku && returnCase.orderExternalId){
+    const order = await db.order.findUnique({ where: { tenantId_channel_externalId: { tenantId: returnCase.tenantId, channel: 'MERCADO_LIVRE', externalId: returnCase.orderExternalId } }, include: { items: true } });
+    if(order?.items.length === 1){ sku = order.items[0].sku; quantity = order.items[0].quantity; }
+  }
+  await db.returnCase.update({ where: { id: returnCase.id }, data: { status: delivered ? 'DELIVERED' : status === 'shipped' ? 'IN_TRANSIT' : status.toUpperCase(), observedAt: new Date(), sku: sku || undefined, quantity } });
+  if(!delivered || !sku || quantity <= 0) return { checked: 1, delivered: Number(delivered), restocked: 0 };
+  const idempotencyKey = `mercadolivre-return:${returnCase.id}:${sku}`;
+  const previous = await db.inventoryMovement.findUnique({ where: { tenantId_idempotencyKey: { tenantId: returnCase.tenantId, idempotencyKey } } });
+  if(previous) return { checked: 1, delivered: 1, restocked: 0 };
+  const manualReturn = await db.inventoryMovement.findFirst({ where: { tenantId: returnCase.tenantId, type: 'RETURN', variant: { sku }, reference: { in: [returnCase.orderExternalId, returnCase.claimId].filter((value): value is string => Boolean(value)) }, source: 'MANUAL' }, select: { id: true } });
+  if(manualReturn) return { checked: 1, delivered: 1, restocked: 0 };
+  try{
+    await moveStock({ tenantId: returnCase.tenantId, sku, warehouseCode: 'CENTRAL', quantity, type: 'RETURN', reference: returnCase.orderExternalId || returnCase.claimId, note: `Devolução Mercado Livre entregue · claim ${returnCase.claimId}`, idempotencyKey });
+  }catch(error: any){
+    if(error?.code !== 'P2002') throw error;
+  }
+  return { checked: 1, delivered: 1, restocked: 1 };
+}
+
+export async function syncMercadoLivreReturns(tenantId: string, claimId?: string){
+  if(claimId) await discoverMercadoLivreReturn(tenantId, claimId);
+  const cases = await db.returnCase.findMany({ where: { tenantId, channel: 'MERCADO_LIVRE', claimId: claimId || { not: null } }, select: { id: true, tenantId: true, claimId: true, sku: true, quantity: true, status: true, orderExternalId: true } });
+  const summary = { checked: 0, delivered: 0, restocked: 0 };
+  let firstError: unknown;
+  for(const returnCase of cases){
+    try{
+      const result = await syncMercadoLivreReturnCase(returnCase);
+      summary.checked += result.checked;
+      summary.delivered += result.delivered;
+      summary.restocked += result.restocked;
+    }catch(error){
+      firstError ||= error;
+    }
+  }
+  if(firstError) throw firstError;
+  return summary;
+}
+
+async function discoverMercadoLivreReturn(tenantId: string, claimId: string){
+  const existing = await db.returnCase.findFirst({ where: { tenantId, channel: 'MERCADO_LIVRE', claimId }, select: { id: true } });
+  if(existing) return;
+  const claim: any = await mercadoLivreApi(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}`, {}, tenantId);
+  const related = Array.isArray(claim?.related_entities) ? claim.related_entities.map(String) : [];
+  if(!related.some((entity: string) => entity.toLowerCase().includes('return'))) return;
+  const response: any = await mercadoLivreApi(`/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, {}, tenantId);
+  const returned = Array.isArray(response) ? response[0] : response;
+  const orderExternalId = claim?.resource === 'order' && claim?.resource_id ? String(claim.resource_id) : null;
+  const order = orderExternalId ? await db.order.findUnique({ where: { tenantId_channel_externalId: { tenantId, channel: 'MERCADO_LIVRE', externalId: orderExternalId } }, include: { items: true } }) : null;
+  const item = order?.items.length === 1 ? order.items[0] : null;
+  await db.returnCase.upsert({
+    where: { tenantId_channel_externalOrderId: { tenantId, channel: 'MERCADO_LIVRE', externalOrderId: String(returned?.id || claimId) } },
+    create: { tenantId, channel: 'MERCADO_LIVRE', externalOrderId: String(returned?.id || claimId), orderExternalId, claimId, status: String(returned?.status || 'PENDING').toUpperCase(), sku: item?.sku || null, quantity: item?.quantity || 1, sourceUrl: orderExternalId ? `https://vendedores.mercadolivre.com.br/vendas/${orderExternalId}/detalhe` : null },
+    update: { claimId, orderExternalId, sku: item?.sku || undefined, quantity: item?.quantity || undefined }
+  });
+}
+
+async function syncMercadoLivreReturnsForOrder(tenantId: string, orderExternalId: string){
+  const cases = await db.returnCase.findMany({ where: { tenantId, channel: 'MERCADO_LIVRE', orderExternalId }, select: { claimId: true } });
+  for(const returnCase of cases){
+    if(returnCase.claimId) await syncMercadoLivreReturns(tenantId, returnCase.claimId);
+  }
 }
 
 function isoDaysAgo(days: number){
@@ -380,6 +478,7 @@ export async function syncMercadoLivreOrders(days = 365, tenantId?: string){
     offset += results.length;
     if(!results.length || offset >= Number(search.paging?.total || 0)) break;
   }while(offset < 1000);
+  await syncMercadoLivreReturns(conn.tenantId);
   await db.integration.update({ where: { id: conn.integrationId }, data: { lastSyncAt: new Date(), lastError: null } });
   return count;
 }

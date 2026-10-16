@@ -19,8 +19,11 @@ export async function GET(req: Request){
     if(!code) return NextResponse.json({ ok: false, error: 'code ausente' }, { status: 400 });
     const tenantId = readMercadoLivreState(url.searchParams.get('state')).tenantId;
     const token = await exchangeMercadoLivreCode(code, getMercadoLivreRedirectUri(req));
+    if(!token.refresh_token){
+      throw new Error('Mercado Livre não forneceu refresh token. Ative o fluxo Refresh Token no aplicativo do Developer e reconecte a conta.');
+    }
     const existing = await db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Mercado Livre' } } });
-    const refreshTokenEncrypted = token.refresh_token ? encryptSecret(token.refresh_token) : existing?.refreshTokenEncrypted || null;
+    const refreshTokenEncrypted = encryptSecret(token.refresh_token);
     const metadata = { ...((existing?.metadata as Record<string, unknown>) || {}), expiresAt: expiresAt(token.expires_in), tokenType: token.token_type, userId: token.user_id, refreshTokenAvailable: Boolean(refreshTokenEncrypted), connectedAt: new Date().toISOString() };
     const integration = await db.integration.upsert({
       where: { tenantId_provider: { tenantId, provider: 'Mercado Livre' } },
