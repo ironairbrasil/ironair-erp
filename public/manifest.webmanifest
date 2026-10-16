@@ -6,7 +6,7 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#101820",
-  "theme_color": "#101820",
-  "icons": [{ "src": "/iron-seller-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+  "background_color": "#0B3D2E",
+  "theme_color": "#0B3D2E",
+  "icons": [{ "src": "/iron-seller-app-icon-v2.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
 }
