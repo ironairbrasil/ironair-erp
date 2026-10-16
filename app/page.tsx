@@ -1131,7 +1131,7 @@ function dashboardKpis(d: any) {
       delta: "Aprovados",
     },
     {
-      label: "Lucro vendas",
+      label: "Líq. do Marktplace",
       value: money(d?.salesProfit || 0),
       delta: "Faturamento − taxas e frete − anúncios",
     },

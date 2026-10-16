@@ -8,5 +8,5 @@
   "display": "standalone",
   "background_color": "#0B3D2E",
   "theme_color": "#0B3D2E",
-  "icons": [{ "src": "/iron-seller-app-icon-v3.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+  "icons": [{ "src": "/iron-seller-app-icon-v8.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
 }
