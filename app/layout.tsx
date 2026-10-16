@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: 'Gestão de vendas, estoque e desempenho multicanal',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, title: 'Iron Seller', statusBarStyle: 'black-translucent' },
-  icons: { apple: '/iron-seller-app-icon-v2.png', icon: '/iron-seller-app-icon-v2.png' }
+  icons: { apple: '/iron-seller-app-icon-v3.png', icon: '/iron-seller-app-icon-v3.png' }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
