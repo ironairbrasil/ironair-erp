@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: 'Iron Air Seller | Gestão multicanal',
   description: 'Gestão de vendas, estoque e desempenho multicanal',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'Iron Air Seller', statusBarStyle: 'black-translucent' },
+  appleWebApp: { capable: true, title: 'Iron Air Seller | Gestão multicanal', statusBarStyle: 'black-translucent' },
   icons: { apple: '/apple-icon.png', icon: '/icon.png' }
 };
 
