@@ -936,6 +936,17 @@ function localISODate(d = new Date()) {
 function todayISO() {
   return localISODate();
 }
+function saoPauloDateTimeLocal(d = new Date()) {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d).replace(" ", "T");
+}
 function startOfYearISO() {
   const d = new Date();
   return `${localISODate(d).slice(0, 4)}-01-01`;
@@ -2722,7 +2733,11 @@ function SettingsView({ onEdit }: any) {
   );
 }
 function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave, onDeleteIntegration }: any) {
-  const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
+  const [f, setF] = useState<any>(() => {
+    if (kind === "expense") return data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() };
+    if (kind === "sale") return data ? { ...data, _edit: data.sku } : { source: "Manual", paidAt: saoPauloDateTimeLocal(), feeAmount: 0, shippingAmount: 0 };
+    return data ? { ...data, _edit: data.sku } : {};
+  });
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const title: any = {
@@ -2798,6 +2813,9 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Select label="Produto / voltagem" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
               <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
               <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={channelOptions} />
+              <label className="field"><span>Data e hora da venda</span><input type="datetime-local" value={f.paidAt || ""} onChange={(e) => set("paidAt", e.target.value)} /></label>
+              <Input label="Taxas" type="number" value={f.feeAmount} onChange={(v: any) => set("feeAmount", v)} />
+              <Input label="Frete" type="number" value={f.shippingAmount} onChange={(v: any) => set("shippingAmount", v)} />
               <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
               <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
             </FormGrid>

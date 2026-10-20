@@ -56,6 +56,9 @@ export async function POST(req:Request){
     const product=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:String(b.sku||'')}}});
     const quantity=Math.max(1,Math.trunc(Number(b.quantity||1)));
     const grossAmount=Number(b.value||b.grossAmount||product?.salePrice||0);
+    const paidAtInput=String(b.paidAt||b.date||'').trim();
+    const paidAt=paidAtInput ? new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(paidAtInput)?paidAtInput:`${paidAtInput}:00-03:00`) : new Date();
+    if(Number.isNaN(paidAt.getTime())) throw new Error('Data da venda inválida');
     const source=String(b.source||'Manual');
     const channel=source==='Shopify'?'SHOPIFY':source==='Mercado Livre'||source==='Mercado Livre Full'?'MERCADO_LIVRE':source==='Amazon'||source==='Amazon FBA'?'AMAZON':source==='Shopee'?'SHOPEE':'MANUAL';
     const warehouseCode=source==='Mercado Livre Full'?'ML_FULL':source==='Amazon FBA'?'AMAZON_FBA':'CENTRAL';
@@ -66,9 +69,11 @@ export async function POST(req:Request){
       warehouseCode,
       status:b.status||'PAID',
       grossAmount,
+      feeAmount:Number(b.feeAmount||b.fee||0),
+      shippingAmount:Number(b.shippingAmount||b.freight||0),
       currency:'BRL',
       paymentMethod:b.paymentMethod||'Manual',
-      paidAt:new Date().toISOString(),
+      paidAt:paidAt.toISOString(),
       customer:{name:b.customer||'Cliente manual',externalId:b.email||undefined},
       items:[{
         sku:String(b.sku||product?.sku||''),
