@@ -280,7 +280,7 @@ nav button,.filters button,.ghost,.iconBtn,.primary,.tabs button{font-size:13px}
 .inventoryTableWrap .inventoryTotalRow td:first-child{color:var(--text)}
 .theme-light .inventoryTableWrap .inventoryTotalRow td{background:#e8f7ee;color:#173829}
 
-.brandLogo{display:block;width:114.7px;max-width:100%;line-height:0}.brandLogo img{display:block;width:100%;height:auto;object-fit:contain;filter:drop-shadow(0 7px 5px #00b65b99)}.theme-light .brandLogo img{filter:drop-shadow(0 7px 5px #009e5780)}.sidebar .brand{min-height:68px;justify-content:center;margin:0 0 24px}.sidebar .brand .mobileMenuClose{margin-left:auto}
+.brandLogo{display:block;width:114.7px;max-width:100%;line-height:0}.brandLogo img{display:block;width:100%;height:auto;object-fit:contain;filter:none}.theme-light .brandLogo img{filter:drop-shadow(0 7px 5px #009e5780)}.sidebar .brand{min-height:68px;justify-content:center;margin:0 0 24px}.sidebar .brand .mobileMenuClose{margin-left:auto}
 @media(max-width:650px){.topbar{grid-template-columns:1fr auto}.topbar .topbarActions{grid-column:2}.sidebar.mobileOpen .brand{position:relative;justify-content:center;margin:0 8px 28px}.sidebar.mobileOpen .brand .mobileMenuClose{position:absolute;right:0;margin:0}}
 .pushControls{padding:10px 14px;border-bottom:1px solid var(--border)}.pushControls button{width:100%;padding:9px 12px;border:1px solid var(--accent);border-radius:8px;background:transparent;color:var(--accent);font-weight:700;cursor:pointer}.pushControls button:disabled{opacity:.6;cursor:wait}.pushControls small{color:var(--muted);line-height:1.5}
  .notificationBackdrop{display:none}

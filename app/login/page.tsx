@@ -48,7 +48,7 @@ export default function LoginPage() {
       <Moon size={16} className={!light ? 'active' : ''} />
     </button>
     <form onSubmit={submit} style={{ width: 'min(100%, 390px)', background: light ? '#ffffff' : '#101d27', border: `1px solid ${light ? '#dbe4ea' : '#2b404d'}`, borderRadius: 16, padding: 28, display: 'grid', gap: 14 }}>
-      <h1 style={{ margin: 0, display: 'flex', justifyContent: 'center' }}><img src={light ? '/iron-seller-black.png' : '/iron-seller-white.png'} alt="Iron Seller" style={{ display: 'block', width: 140, maxWidth: '100%', height: 'auto', filter: 'drop-shadow(0 8px 6px rgba(0, 175, 91, .55))' }} /></h1>
+      <h1 style={{ margin: 0, display: 'flex', justifyContent: 'center' }}><img src={light ? '/iron-seller-black.png' : '/iron-seller-white.png'} alt="Iron Seller" style={{ display: 'block', width: 140, maxWidth: '100%', height: 'auto', filter: light ? 'drop-shadow(0 8px 6px rgba(0, 175, 91, .55))' : 'none' }} /></h1>
       {mode === 'signup' && <p style={{ margin: 0, color: muted }}>Crie sua conta</p>}
       {mode === 'signup' && <label style={{ display: 'grid', gap: 6 }}>Nome da empresa<input autoComplete="organization" required minLength={2} maxLength={100} value={companyName} onChange={event => setCompanyName(event.target.value)} style={{ padding: 12, borderRadius: 8, border: `1px solid ${border}`, background: input, color: text }} /></label>}
       <label style={{ display: 'grid', gap: 6 }}>E-mail<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} style={{ padding: 12, borderRadius: 8, border: `1px solid ${border}`, background: input, color: text }} /></label>
