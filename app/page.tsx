@@ -334,7 +334,7 @@ export default function Home() {
       const date = new Date(order.paidAt || order.createdAt);
       return date.getFullYear() === notificationMonth.getFullYear() && date.getMonth() === notificationMonth.getMonth();
     })
-    .sort((a, b) => new Date(a.paidAt || a.createdAt).getTime() - new Date(b.paidAt || b.createdAt).getTime());
+    .sort((a, b) => new Date(b.paidAt || b.createdAt).getTime() - new Date(a.paidAt || a.createdAt).getTime());
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
   const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
