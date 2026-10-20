@@ -4,11 +4,11 @@ import type { Metadata, Viewport } from 'next';
 export const viewport: Viewport = { themeColor: '#0B3D2E' };
 
 export const metadata: Metadata = {
-  title: 'Iron Seller | Gestão multicanal',
+  title: 'Iron Air Seller | Gestão multicanal',
   description: 'Gestão de vendas, estoque e desempenho multicanal',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'Iron Seller', statusBarStyle: 'black-translucent' },
-  icons: { apple: '/iron-seller-app-icon-v8.png', icon: '/iron-seller-app-icon-v8.png' }
+  appleWebApp: { capable: true, title: 'Iron Air Seller', statusBarStyle: 'black-translucent' },
+  icons: { apple: '/apple-icon.png', icon: '/icon.png' }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

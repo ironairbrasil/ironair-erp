@@ -627,7 +627,7 @@ export default function Home() {
       {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <aside className={`sidebar ${mobileMenuOpen ? "mobileOpen" : ""}`} id="main-navigation">
         <div className="brand">
-          <span className="brandLogo"><img src={theme === "light" ? "/iron-seller-black.png" : "/iron-seller-white.png"} alt="Iron Seller" /></span>
+          <span className="brandLogo"><img src={theme === "light" ? "/iron-seller-black.png" : "/iron-seller-white.png"} alt="Iron Air Seller" /></span>
           <button className="mobileMenuClose" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button>
         </div>
         <nav>

@@ -1,6 +1,6 @@
 {
-  "name": "Iron Seller",
-  "short_name": "Iron Seller",
+  "name": "Iron Air Seller",
+  "short_name": "Iron Air Seller",
   "id": "/",
   "description": "Gestão de vendas e estoque",
   "start_url": "/",
@@ -8,5 +8,5 @@
   "display": "standalone",
   "background_color": "#0B3D2E",
   "theme_color": "#0B3D2E",
-  "icons": [{ "src": "/iron-seller-app-icon-v8.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+  "icons": [{ "src": "/iron-air-seller-app-icon-v1.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
 }

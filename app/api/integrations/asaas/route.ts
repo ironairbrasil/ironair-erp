@@ -40,7 +40,7 @@ export async function PUT(req: Request) {
     const token = decryptSecret(integration.accessTokenEncrypted);
     const existing = integration.webhooks.find(w => w.topic === 'transfers');
     const authToken = existing && integration.webhookSecretEncrypted ? decryptSecret(integration.webhookSecretEncrypted) : crypto.randomBytes(32).toString('hex');
-    const payload = { name: 'Iron Seller - Saques', url: url.toString(), email: String(email), enabled: true, interrupted: false, apiVersion: 3, authToken, sendType: 'SEQUENTIALLY', events: ASAAS_EVENTS };
+    const payload = { name: 'Iron Air Seller - Saques', url: url.toString(), email: String(email), enabled: true, interrupted: false, apiVersion: 3, authToken, sendType: 'SEQUENTIALLY', events: ASAAS_EVENTS };
     const remote = existing?.externalWebhookId ? await asaasRequest(token, `/webhooks/${encodeURIComponent(existing.externalWebhookId)}`, { method: 'PUT', body: JSON.stringify(payload) }) : await asaasRequest(token, '/webhooks', { method: 'POST', body: JSON.stringify(payload) });
     await db.integration.update({ where: { id: integration.id }, data: { webhookSecretEncrypted: encryptSecret(authToken) } });
     await db.integrationWebhook.upsert({ where: { integrationId_topic: { integrationId: integration.id, topic: 'transfers' } }, create: { tenantId, integrationId: integration.id, provider: 'Asaas', topic: 'transfers', callbackUrl: url.toString(), externalWebhookId: String(remote.id), status: 'ACTIVE', lastRegisteredAt: new Date() }, update: { callbackUrl: url.toString(), externalWebhookId: String(remote.id), status: 'ACTIVE', lastRegisteredAt: new Date(), lastError: null } });
