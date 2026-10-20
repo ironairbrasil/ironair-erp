@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { ingestOrder } from '@/lib/orders';
 import { moveStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
+import { normalizePaymentMethod } from '@/lib/payment-method';
 import { auditLog, mergeManualOverrides } from '@/lib/audit';
 
 async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;externalId:string;sku:string;variantId:string;quantity:number;date:Date}){
@@ -72,7 +73,7 @@ export async function POST(req:Request){
       feeAmount:Number(b.feeAmount||b.fee||0),
       shippingAmount:Number(b.shippingAmount||b.freight||0),
       currency:'BRL',
-      paymentMethod:b.paymentMethod||'Manual',
+      paymentMethod:normalizePaymentMethod(b.paymentMethod)||'Manual',
       paidAt:paidAt.toISOString(),
       customer:{name:b.customer||'Cliente manual',externalId:b.email||undefined},
       items:[{
@@ -111,7 +112,7 @@ export async function PATCH(req:Request){
         shippingAmount:Number(b.shippingAmount||b.freight||0),
         grossAmount:Number(b.grossAmount??existing.grossAmount),
         paidAt,
-        paymentMethod:String(b.paymentMethod??existing.paymentMethod??'').trim()||null,
+        paymentMethod:normalizePaymentMethod(b.paymentMethod??existing.paymentMethod)||null,
         manualOverrides:mergeManualOverrides(existing.manualOverrides,editedFields) as any
       }
     });

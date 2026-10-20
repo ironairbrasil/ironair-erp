@@ -1,6 +1,7 @@
 import { db } from './db';
 import { decryptSecret, encryptSecret } from './crypto-secrets';
 import { ingestOrder, type IngestOrder } from './orders';
+import { normalizePaymentMethod } from './payment-method';
 import { getTenantId } from './tenant';
 
 const PROVIDER = 'Amazon';
@@ -414,6 +415,7 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     shippingAmount: v2026Money.shippingAmount || financials.shippingAmount,
     feeAmount: financials.feeAmount || v2026Money.feeAmount || (mapAmazonStatus(order) === 'PAID' && amount ? estimateAmazonFee(amount) : 0),
     taxAmount: 0,
+    paymentMethod: normalizePaymentMethod(firstOf(v2026?.payment?.paymentMethod, v2026?.paymentMethod, ...(order?.PaymentMethodDetails || []), order?.PaymentMethod)) || undefined,
     paidAt: order.PurchaseDate,
     customer: {
       externalId: orderId,

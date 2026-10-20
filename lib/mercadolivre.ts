@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { db } from './db';
 import { decryptSecret, encryptSecret } from './crypto-secrets';
 import { ingestOrder, type IngestOrder } from './orders';
+import { normalizePaymentMethod } from './payment-method';
 import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
 
@@ -288,7 +289,7 @@ export function mapMercadoLivreOrder(o: any, tenantId: string, extra: MercadoLiv
     shippingAmount: extra.shippingAmount ?? num(o.shipping?.cost || o.shipping?.base_cost),
     feeAmount: num((o.order_items || []).reduce((sum: number, entry: any) => sum + num(entry.sale_fee), 0)),
     taxAmount: 0,
-    paymentMethod: (o.payments || []).map((p: any) => p.payment_method_id).filter(Boolean).join(', ') || undefined,
+    paymentMethod: normalizePaymentMethod((o.payments || []).map((p: any) => p.payment_method_id).filter(Boolean).join(', ')) || undefined,
     paidAt: o.date_closed || o.date_created,
     customer: {
       externalId: buyer.id ? String(buyer.id) : undefined,

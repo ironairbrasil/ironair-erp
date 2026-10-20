@@ -5,6 +5,7 @@ import { BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Mega
 import PerformanceView from "./performance-view";
 import SalesChart, { ChartStyleToggle, type SalesChartMode } from "./sales-chart";
 import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
+import { normalizePaymentMethod } from "@/lib/payment-method";
 const menu = [
   ["Visão Geral", LayoutDashboard],
   ["Performance", BarChart3],
@@ -144,6 +145,7 @@ export default function Home() {
   const [period, setPeriod] = useState("Hoje");
   const [platform, setPlatform] = useState("");
   const [product, setProduct] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<ModalKind>(null);
   const [selected, setSelected] = useState<any>(null);
@@ -169,13 +171,13 @@ export default function Home() {
     from: startOfYearISO(),
     to: todayISO(),
   }));
-  const dashboardSelection = useRef({ period, range, platform, product });
-  dashboardSelection.current = { period, range, platform, product };
+  const dashboardSelection = useRef({ period, range, platform, product, paymentMethod });
+  dashboardSelection.current = { period, range, platform, product, paymentMethod };
   const [draftRange, setDraftRange] = useState(() => ({
     from: startOfYearISO(),
     to: todayISO(),
   }));
-  const [filterModal, setFilterModal] = useState<"period" | "platform" | "product" | null>(null);
+  const [filterModal, setFilterModal] = useState<"period" | "platform" | "product" | "payment" | null>(null);
   useEffect(() => {
     if (!filterModal) return;
     const dismiss = (event: PointerEvent) => {
@@ -318,9 +320,10 @@ export default function Home() {
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
   const dashboardPlatforms = useMemo(() => [...new Set(orderRows.map((o) => String(o.channel || "")))].filter(Boolean).sort(), [orderRows]);
   const dashboardProducts = useMemo(() => catalogRows.map((p) => [p.sku, p.name || p.product || p.sku] as [string, string]).sort((a, b) => a[1].localeCompare(b[1])), [catalogRows]);
+  const dashboardPaymentMethods = useMemo(() => [...new Set(orderRows.map((o) => normalizePaymentMethod(o.paymentMethod)).filter(Boolean))].sort(), [orderRows]);
   const scopedOrders = (orders: any[]) => {
-    const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
-    return orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)));
+    const { platform: selectedPlatform, product: selectedProduct, paymentMethod: selectedPaymentMethod } = dashboardSelection.current;
+    return orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)) && (!selectedPaymentMethod || normalizePaymentMethod(o.paymentMethod) === selectedPaymentMethod));
   };
   const firstSaleDate = firstPaidSaleDay(scopedOrders(orderRows));
   const allTimeStart = period === "Tempo todo" && dashboard?.periodMode === "all" ? dashboard.periodFrom : firstSaleDate;
@@ -365,7 +368,7 @@ export default function Home() {
     finally { setPushBusy(false); }
   };
   const api = apiJson;
-  const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product) => `${todayISO()}:${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}`;
+  const dashboardKey = (p = dashboardSelection.current.period, r = dashboardSelection.current.range, selectedPlatform = dashboardSelection.current.platform, selectedProduct = dashboardSelection.current.product, selectedPaymentMethod = dashboardSelection.current.paymentMethod) => `${todayISO()}:${p === "Personalizado" ? `custom:${r.from}:${r.to}` : p}:${selectedPlatform}:${selectedProduct}:${selectedPaymentMethod}`;
   const dashboardStorageKey = (key: string) => `ironair-dashboard-cache-v1:${sessionInfo?.activeTenantId}:${key}`;
   const applyDashboard = (dash: any) => {
     setDashboard(dash);
@@ -380,13 +383,13 @@ export default function Home() {
   }, [sessionInfo?.activeTenantId]);
   const loadDashboardFromApi = async (p = dashboardSelection.current.period, r = dashboardSelection.current.range, fresh = false) => {
     const request = ++dashboardRequest.current;
-    const { platform: selectedPlatform, product: selectedProduct } = dashboardSelection.current;
-    const key = dashboardKey(p, r, selectedPlatform, selectedProduct);
+    const { platform: selectedPlatform, product: selectedProduct, paymentMethod: selectedPaymentMethod } = dashboardSelection.current;
+    const key = dashboardKey(p, r, selectedPlatform, selectedProduct, selectedPaymentMethod);
     const pendingKey = fresh ? `${key}:fresh` : key;
     const pr = periodRange(p, r, firstSaleDate);
     let pending = dashboardPending.current.get(pendingKey);
     if (!pending) {
-      pending = api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}${p === "Tempo todo" ? "&all=1" : ""}${fresh ? "&fresh=1" : ""}`);
+      pending = api(`/api/dashboard?from=${encodeURIComponent(pr.from)}&to=${encodeURIComponent(pr.to)}&platform=${encodeURIComponent(selectedPlatform)}&product=${encodeURIComponent(selectedProduct)}&paymentMethod=${encodeURIComponent(selectedPaymentMethod)}${p === "Tempo todo" ? "&all=1" : ""}${fresh ? "&fresh=1" : ""}`);
       dashboardPending.current.set(pendingKey, pending);
       void pending.finally(() => { if (dashboardPending.current.get(pendingKey) === pending) dashboardPending.current.delete(pendingKey); }).catch(() => undefined);
     }
@@ -581,7 +584,7 @@ export default function Home() {
     const cached = dashboardCache.current.get(key);
     if (cached) applyDashboard(cached);
     loadDashboardFromApi(period, range).catch(() => notify("Não foi possível atualizar o dashboard"));
-  }, [period, range.from, range.to, platform, product]);
+  }, [period, range.from, range.to, platform, product, paymentMethod]);
   const open = (kind: ModalKind, data?: any) => {
     setSelected(data || null);
     setModal(kind);
@@ -701,6 +704,9 @@ export default function Home() {
               </div>
               <div className="dashboardFilter exportMenu"><span>Produto</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "product" ? null : "product")} aria-expanded={filterModal === "product"}>{product ? String(dashboardProducts.find(([sku]) => sku === product)?.[1] || product) : "Todos"}<ChevronDown size={14} /></button>
                 {filterModal === "product" && <div className="exportOptions dashboardOptions">{[["", "Todos"], ...dashboardProducts].map(([sku, name]) => <button key={String(sku) || "all"} onClick={() => { setProduct(String(sku)); setFilterModal(null); }}>{String(name)}</button>)}</div>}
+              </div>
+              <div className="dashboardFilter exportMenu"><span>Pagamento</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "payment" ? null : "payment")} aria-expanded={filterModal === "payment"}>{paymentMethod || "Todos"}<ChevronDown size={14} /></button>
+                {filterModal === "payment" && <div className="exportOptions dashboardOptions">{["", ...dashboardPaymentMethods].map((method) => <button key={method || "all"} onClick={() => { setPaymentMethod(method); setFilterModal(null); }}>{method || "Todos"}</button>)}</div>}
               </div>
             </div>
             {dashboardLayoutReady && <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
@@ -1324,6 +1330,7 @@ function formatOrders(rows: any[]) {
       itemSku: firstItem?.sku || "",
       orderItemId: firstItem?.id || "",
       source: o.sourceSnapshot?.fulfillmentOrigin === "AMAZON_FBA" || o.sourceSnapshot?.warehouseCode === "AMAZON_FBA" ? "Amazon FBA" : o.sourceSnapshot?.fulfillmentOrigin === "ML_FULL" || o.sourceSnapshot?.warehouseCode === "ML_FULL" ? "Mercado Livre Full" : o.channel,
+      paymentMethod: normalizePaymentMethod(o.paymentMethod) || "",
       campaign: o.attribution?.campaign || o.attribution?.source || "—",
       value: money(Number(o.grossAmount || 0)),
       fee,
@@ -1839,6 +1846,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const [status, setStatus] = useState("PAID");
   const [source, setSource] = useState("Todas");
   const [product, setProduct] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [salesPeriod, setSalesPeriod] = useState("Tempo todo");
@@ -1874,14 +1882,15 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const keyOf = (s: any) => String(s.raw?.id || s.id);
   const sources = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((s: any) => s.source).filter(Boolean)))], [rows]);
   const products = useMemo(() => [...new Map<string, string>(rows.flatMap((sale: any) => sale.raw?.items || []).map((item: any) => [String(item.sku || item.name), String(item.name || item.sku)] as [string, string])).entries()].sort((a, b) => a[1].localeCompare(b[1])), [rows]);
+  const paymentMethods = useMemo(() => [...new Set<string>(rows.map((sale: any) => normalizePaymentMethod(sale.paymentMethod)).filter(Boolean))].sort(), [rows]);
   const filtered = useMemo(
     () =>
       rows.filter((s: any) => {
         const key = s.raw?.paidAt || s.raw?.createdAt;
         const day = key ? dateKey(key) : "";
-        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!product || (s.raw?.items || []).some((item: any) => String(item.sku || item.name) === product)) && (!from || day >= from) && (!to || day <= to);
+        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!product || (s.raw?.items || []).some((item: any) => String(item.sku || item.name) === product)) && (!paymentMethod || normalizePaymentMethod(s.paymentMethod) === paymentMethod) && (!from || day >= from) && (!to || day <= to);
       }),
-    [rows, status, source, product, from, to],
+    [rows, status, source, product, paymentMethod, from, to],
   );
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -1892,7 +1901,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     setPage(1);
     setSelected(new Set());
     setExportOpen(false);
-  }, [q, status, source, product, from, to, pageSize]);
+  }, [q, status, source, product, paymentMethod, from, to, pageSize]);
   const selectedRows = filtered.filter((s: any) => selected.has(keyOf(s)));
   const exportRows = (selectedRows.length ? selectedRows : filtered).map(({ raw, ...rest }: any) => rest);
   const salesRevenue = filtered.reduce((total: number, sale: any) => sale.status === "PAID" ? total + Number(sale.raw?.grossAmount || 0) - Number(sale.raw?.discountAmount || 0) : total, 0);
@@ -2000,12 +2009,14 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
         </div>
         <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
         <div className="salesSelectField"><span>Produto</span><AnchoredSelect value={product} onChange={setProduct} options={[{ value: "", label: "Todos" }, ...products.map(([sku, name]) => ({ value: sku, label: name }))]} compact /></div>
+        <div className="salesSelectField"><span>Pagamento</span><AnchoredSelect value={paymentMethod} onChange={setPaymentMethod} options={[{ value: "", label: "Todos" }, ...paymentMethods]} compact /></div>
         <button
           className="ghost clickable"
           onClick={() => {
             setStatus("Todos");
             setSource("Todas");
             setProduct("");
+            setPaymentMethod("");
             setFrom("");
             setTo("");
             setSalesPeriod("Tempo todo");
@@ -2040,6 +2051,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
               <th>Cliente</th>
               <th>Origem</th>
               <th>Voltagem</th>
+              <th>Pagamento</th>
               <th>Valor</th>
               <th>Taxa</th>
               <th>Frete</th>
@@ -2061,6 +2073,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                 <td>{s.customer}</td>
                 <td>{s.source}</td>
                 <td>{s.voltage}</td>
+                <td>{s.paymentMethod || "—"}</td>
                 <td className={isNegativeDisplay(s.value) ? "negative" : undefined}>{s.value}</td>
                 <td className={Number(s.fee || 0) !== 0 ? "negative" : undefined}>{money(Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
                 <td className={Number(s.freight || 0) !== 0 ? "negative" : undefined}>{money(Number(s.freight || 0) ? -Math.abs(Number(s.freight || 0)) : 0)}</td>
@@ -2817,9 +2830,10 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Select label="Produto / voltagem" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
               <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
               <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={channelOptions} />
-              <label className="field"><span>Data e hora da venda</span><input type="datetime-local" value={f.paidAt || ""} onChange={(e) => set("paidAt", e.target.value)} /></label>
+              <CalendarDateTimeField label="Data e hora da venda" value={f.paidAt || ""} onChange={(value) => set("paidAt", value)} />
               <Input label="Taxas" type="number" value={f.feeAmount} onChange={(v: any) => set("feeAmount", v)} />
               <Input label="Frete" type="number" value={f.shippingAmount} onChange={(v: any) => set("shippingAmount", v)} />
+              <Input label="Método de pagamento" value={f.paymentMethod} onChange={(v: any) => set("paymentMethod", v)} />
               <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
             </FormGrid>
           )}
@@ -3451,7 +3465,7 @@ function SaleDetail({ s, set, products }: any) {
       <AnchoredSelect label="Produto / voltagem" value={selectedSku} onChange={(v) => set("itemSku", v)} options={[{ value: "", label: `Sem atribuir${originalSku ? ` (${originalSku})` : ""}` }, ...assignable.map((p: any) => ({ value: p.sku, label: `${p.sku} · ${p.product}` }))]} />
       <label className="field"><span>Valor</span><input type="number" value={Number(s.grossAmount ?? s.raw?.grossAmount ?? 0)} onChange={(e) => set("grossAmount", e.target.value)} /></label>
       <label className="field"><span>Custo dos produtos</span><input type="number" value={cogs} onChange={(e) => set("cogs", e.target.value)} /></label>
-      <label className="field"><span>Data e hora da venda</span><input type="datetime-local" value={paidAt} onChange={(e) => set("paidAt", e.target.value)} /></label>
+      <CalendarDateTimeField label="Data e hora da venda" value={paidAt} onChange={(value) => set("paidAt", value)} />
       <label className="field"><span>Método de pagamento</span><input value={paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} placeholder="Informado pela plataforma" /></label>
       <label className="field">
         <span>Taxa da plataforma</span>
@@ -3503,6 +3517,12 @@ function CalendarDateField({ label, value, onChange, compact = false }: { label:
       {value && <button type="button" className="clearDate" onClick={() => { onChange(""); setOpen(false); }}>Limpar data</button>}
     </div>, document.querySelector(".shell") || document.body)}
   </div>;
+}
+function CalendarDateTimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const date = String(value || "").slice(0, 10);
+  const time = String(value || "").slice(11, 16) || "00:00";
+  const update = (nextDate: string, nextTime: string) => onChange(nextDate ? `${nextDate}T${nextTime || "00:00"}` : "");
+  return <div className="field calendarDateTimeField"><span>{label}</span><div><CalendarDateField label="Data" value={date} onChange={(next) => update(next, time)} /><label><span>Hora</span><input type="time" value={time} onChange={(event) => update(date || todayISO(), event.target.value)} /></label></div></div>;
 }
 function Input({ label, value, onChange, type = "text" }: any) {
   if (type === "date") return <CalendarDateField label={label} value={value || ""} onChange={onChange} />;

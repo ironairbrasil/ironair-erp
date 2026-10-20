@@ -3,6 +3,8 @@ import { db } from './db';
 import { decryptSecret } from './crypto-secrets';
 import { ingestOrder, type IngestOrder } from './orders';
 import { getTenantId } from './tenant';
+import { findAsaasPaymentMethod } from './asaas';
+import { normalizePaymentMethod } from './payment-method';
 
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-10';
 const DEV_SHOP = process.env.SHOPIFY_SHOP_DOMAIN?.replace(/^https?:\/\//,'').replace(/\/$/,'');
@@ -111,7 +113,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
     shippingAmount:shipping,
     feeAmount:SHOPIFY_ORDER_FEE,
     taxAmount:num(o.total_tax ?? o.totalTaxSet?.shopMoney?.amount),
-    paymentMethod:(o.payment_gateway_names||o.paymentGatewayNames||[]).join(', ')||undefined,
+    paymentMethod:normalizePaymentMethod((o.payment_gateway_names||o.paymentGatewayNames||[]).join(', '))||undefined,
     paidAt:o.processed_at||o.processedAt||o.created_at||o.createdAt,
     customer:{externalId:customer.id?String(customer.id):undefined,name:[customer.first_name||customer.firstName,customer.last_name||customer.lastName].filter(Boolean).join(' ')||address.name||undefined,city:address.city,state:address.province_code||address.province,zip:address.zip},
     items:lineItems(o),
@@ -126,7 +128,12 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
   };
 }
 
-export async function processShopifyOrder(o:any, tenantId?:string){return ingestOrder(mapShopifyOrder(o,tenantId));}
+export async function processShopifyOrder(o:any, tenantId?:string){
+  const scopedTenantId=tenantId||await getTenantId();
+  const mapped=mapShopifyOrder(o,scopedTenantId);
+  mapped.paymentMethod=await findAsaasPaymentMethod(scopedTenantId,o)||mapped.paymentMethod;
+  return ingestOrder(mapped);
+}
 
 export async function registerWebhookReceipt(input:{tenantId:string;integrationId?:string;webhookId:string;topic:string;shopDomain?:string|null,payload:any}){
   try{return await db.webhookEvent.create({data:{tenantId:input.tenantId,integrationId:input.integrationId,provider:'SHOPIFY',eventId:input.webhookId,topic:input.topic,shopDomain:input.shopDomain||null,payload:input.payload,status:'PROCESSING'}})}

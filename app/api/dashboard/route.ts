@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 import { CALENDAR_SCHEDULE_MONTHS, calendarPeriods } from '@/lib/expense-schedule';
+import { paymentMethodMatches } from '@/lib/payment-method';
 
 const localDay=(value:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(value);
 const dashboardCache = new Map<string, { expires: number; data: unknown }>();
@@ -39,7 +40,9 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const to=u.searchParams.get('to');
   const platform=u.searchParams.get('platform');
   const product=u.searchParams.get('product');
-  const firstSale=allTime?await db.order.findFirst({where:{tenantId,status:'PAID',paidAt:{not:null},...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},orderBy:{paidAt:'asc'},select:{paidAt:true}}):null;
+  const paymentMethod=u.searchParams.get('paymentMethod')||'';
+  const firstSales=allTime?await db.order.findMany({where:{tenantId,status:'PAID',paidAt:{not:null},...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},orderBy:{paidAt:'asc'},select:{paidAt:true,paymentMethod:true}}):[];
+  const firstSale=paymentMethod?firstSales.find(order=>paymentMethodMatches(order.paymentMethod,paymentMethod)):firstSales[0];
   const firstSaleDay=firstSale?.paidAt?localDay(firstSale.paidAt):localDay(new Date());
   const firstUniqueExpense=allTime&&!product?await db.expense.findFirst({where:{tenantId,schedule:{in:['FIXED','CUSTOM']},...(platform?{OR:[{channel:null},{channel:platform as any}]}:{})},orderBy:{date:'asc'},select:{date:true}}):null;
   const allTimeStart=firstUniqueExpense?firstSaleDay<localDay(firstUniqueExpense.date)?firstSaleDay:localDay(firstUniqueExpense.date):firstSaleDay;
@@ -47,7 +50,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const until=allTime?new Date(`${localDay(new Date())}T23:59:59.999-03:00`):to?new Date(`${to}T23:59:59.999-03:00`):undefined;
   const range=until?{gte:since,lte:until}:{gte:since};
   const recurringSchedules=Object.keys(CALENDAR_SCHEDULE_MONTHS);
-  const [paid,spend,inventory,tracking,expenses,variants]=await Promise.all([
+  const [paidRows,spend,inventory,tracking,expenses,variants]=await Promise.all([
     db.order.findMany({where:{tenantId,status:'PAID',paidAt:range,...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},include:{items:true,attribution:true}}),
     product?Promise.resolve([]):db.adSpendDaily.findMany({where:{tenantId,date:range,...(platform?{platform:platform as any}:{})}}),
     db.inventoryBalance.findMany({where:{tenantId},include:{variant:true}}),
@@ -55,6 +58,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
     db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
     db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}})
   ]);
+  const paid=paymentMethod?paidRows.filter(order=>paymentMethodMatches(order.paymentMethod,paymentMethod)):paidRows;
   const costBySku=new Map(variants.map(v=>[v.sku,Number(v.unitCost)]));
   const ironAirCosts=variants.filter(v=>/^IRON-AIR-/i.test(v.sku)).map(v=>Number(v.unitCost)).filter(cost=>cost>0);
   const sharedIronAirCost=ironAirCosts.length&&ironAirCosts.every(cost=>cost===ironAirCosts[0])?ironAirCosts[0]:0;

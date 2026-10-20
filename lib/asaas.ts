@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { decryptSecret } from '@/lib/crypto-secrets';
+import { normalizePaymentMethod } from '@/lib/payment-method';
 
 export const ASAAS_EVENTS = ['TRANSFER_CREATED', 'TRANSFER_PENDING', 'TRANSFER_IN_BANK_PROCESSING', 'TRANSFER_BLOCKED', 'TRANSFER_DONE', 'TRANSFER_FAILED', 'TRANSFER_CANCELLED'];
 export type AsaasTransfer = { id: string; date: string | null; amount: number; status: string; account: string; type: string };
@@ -38,5 +39,27 @@ export async function listAsaasTransfers(tenantId: string) {
     return { status: 'connected', rows, message: `${rows.length} saques encontrados` };
   } catch (error) {
     return { status: 'unavailable', rows: [] as AsaasTransfer[], message: error instanceof Error ? error.message : 'Consulta indisponível' };
+  }
+}
+
+export async function findAsaasPaymentMethod(tenantId: string, order: { id?: unknown; name?: unknown; order_number?: unknown; total_price?: unknown; processed_at?: unknown; created_at?: unknown }) {
+  const integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Asaas' } } });
+  if (!integration?.accessTokenEncrypted) return '';
+  try {
+    const token = decryptSecret(integration.accessTokenEncrypted);
+    const references = [order.id, order.name, order.order_number].filter(Boolean).map(String);
+    for (const reference of references) {
+      const page = await asaasRequest(token, `/payments?limit=10&externalReference=${encodeURIComponent(reference)}`);
+      const match = page.data?.[0];
+      if (match) return normalizePaymentMethod(match.billingType);
+    }
+    const date = String(order.processed_at || order.created_at || '').slice(0, 10);
+    const amount = Number(order.total_price || 0);
+    if (!date || !amount) return '';
+    const page = await asaasRequest(token, `/payments?limit=100&dateCreated[ge]=${date}&dateCreated[le]=${date}`);
+    const matches = (page.data || []).filter((payment: any) => Math.abs(Number(payment.value || 0) - amount) < 0.01);
+    return matches.length === 1 ? normalizePaymentMethod(matches[0].billingType) : '';
+  } catch {
+    return '';
   }
 }
