@@ -58,7 +58,11 @@ export async function ingestOrder(input:IngestOrder){
  if(input.attribution) await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...mapAttribution(input.attribution)},update:mapAttribution(input.attribution)});
  // Inventory is deducted exactly once on the first transition into PAID. Refunds do NOT auto-restock: physical returns require an explicit RETURN movement.
  if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') for(const item of prepared.filter(i=>i.variantId)) await moveStock({tenantId,sku:item.sku,warehouseCode:input.warehouseCode||'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
- if(input.status==='PAID'&&existing?.status!=='PAID'&&(!input.paidAt||Date.now()-new Date(input.paidAt).getTime()<15*60*1000)) await sendTenantPush(tenantId, {title:'Venda aprovada',body:`Pedido ${input.externalId} · ${new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(input.grossAmount-(input.discountAmount||0))}`,tag:`sale:${order.id}`,url:'/'}).catch(error=>console.error('Push sale failed',error));
+ if(input.status==='PAID'&&existing?.status!=='PAID'&&(!input.paidAt||Date.now()-new Date(input.paidAt).getTime()<15*60*1000)) {
+  const amount=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(input.grossAmount-(input.discountAmount||0));
+  const paidAt=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(order.paidAt||order.createdAt);
+  await sendTenantPush(tenantId,{title:`Venda aprovada · ${amount}`,body:`${input.customer?.name||`Pedido ${input.externalId}`} · ${paidAt}`,tag:`sale:${order.id}`,url:'/'}).catch(error=>console.error('Push sale failed',error));
+ }
  return order;
 }
 function mapAttribution(a:Record<string,any>){return{sessionId:a.sessionId,visitorId:a.visitorId,source:a.utm_source||a.source,medium:a.utm_medium||a.medium,campaign:a.utm_campaign||a.campaign,content:a.utm_content||a.content,term:a.utm_term||a.term,fbclid:a.fbclid,fbp:a._fbp||a.fbp,fbc:a._fbc||a.fbc,gclid:a.gclid,campaignId:a.campaign_id||a.campaignId,adsetId:a.adset_id||a.adsetId,adId:a.ad_id||a.adId,landingPage:a.landingPage,referrer:a.referrer,firstTouch:a.firstTouch,lastTouch:a.lastTouch}}
