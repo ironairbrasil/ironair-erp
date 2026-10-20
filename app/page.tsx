@@ -2817,7 +2817,6 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               <Input label="Taxas" type="number" value={f.feeAmount} onChange={(v: any) => set("feeAmount", v)} />
               <Input label="Frete" type="number" value={f.shippingAmount} onChange={(v: any) => set("shippingAmount", v)} />
               <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
-              <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
             </FormGrid>
           )}
           {kind === "customer" && (
@@ -3431,7 +3430,6 @@ function SaleDetail({ s, set, products }: any) {
   const fee = Number(s.feeAmount ?? s.fee ?? 0),
     freight = Number(s.shippingAmount ?? s.freight ?? 0),
     gross = Number(s.raw?.grossAmount || 0),
-    discount = Number(s.raw?.discountAmount || 0),
     rawItem = s.raw?.items?.[0] || {},
     originalSku = rawItem.sku || s.itemSku || "";
   const assignable = products.filter((p: any) => String(p.sku || "").match(/(127|220)/i));
@@ -3439,7 +3437,6 @@ function SaleDetail({ s, set, products }: any) {
   const selectedProduct = products.find((p: any) => p.sku === selectedSku);
   const qty = Number(rawItem.quantity || 1);
   const cogs = selectedProduct ? Number(selectedProduct.unitCost ?? selectedProduct.cost ?? 0) * qty : Number(s.cogs || 0);
-  const profit = s.status === "REFUNDED" || s.status === "CANCELLED" ? 0 : gross - discount - cogs - fee - freight;
   return (
     <div className="detailGrid">
       <label className="field">
@@ -3456,8 +3453,8 @@ function SaleDetail({ s, set, products }: any) {
         <b>{money(cogs)}</b>
       </div>
       <div className="detailBox">
-        <span>Lucro líquido</span>
-        <b className={profit < 0 || s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : undefined}>{money(profit)}</b>
+        <span>Data da venda</span>
+        <b>{fmtDate(s.raw?.paidAt || s.raw?.createdAt)}</b>
       </div>
       <div className="detailBox">
         <span>SKU atual</span>
@@ -3471,10 +3468,6 @@ function SaleDetail({ s, set, products }: any) {
         <span>Custo do frete</span>
         <input type="number" value={freight} onChange={(e) => set("shippingAmount", e.target.value)} />
       </label>
-      <div className="detailWide">
-        <h3>{s.source}</h3>
-        <p>{s.product}</p>
-      </div>
     </div>
   );
 }
