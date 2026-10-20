@@ -21,8 +21,9 @@ const menu = [
   ["Configurações", Settings],
 ] as const;
 const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
+const isNegativeDisplay = (value: string | number) => typeof value === "number" ? value < 0 : /^\s*[-−]/.test(value);
 const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
-const integrationCategory = (name: string) => /ads|meta|pixel|tiktok/i.test(name) ? "ADS" : /shopify|mercado livre|amazon|shopee|kiwify/i.test(name) ? "Plataforma de vendas" : /banco|bank|nubank|inter|itaú|bradesco|santander|mercado pago/i.test(name) ? "Banco" : "Outros";
+const integrationCategory = (name: string) => /ads|meta|pixel|tiktok/i.test(name) ? "ADS" : /shopify|mercado livre|amazon|shopee|kiwify/i.test(name) ? "Plataforma de vendas" : /banco|bank|nubank|inter|itaú|bradesco|santander|mercado pago|asaas/i.test(name) ? "Banco" : "Outros";
 const salesAndStockOptions = (connected: Set<string>) => ["Manual", ...(connected.has("Shopify") ? ["Shopify"] : []), ...(connected.has("Mercado Livre") ? ["Mercado Livre", "Mercado Livre Full"] : []), ...(connected.has("Amazon") ? ["Amazon", "Amazon FBA"] : []), ...(connected.has("Shopee") ? ["Shopee"] : [])];
 const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
 const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
@@ -42,7 +43,7 @@ const apiJson = async (url: string, init?: RequestInit) => {
 type ModalKind = "movement" | "movementEdit" | "sale" | "customer" | "product" | "campaign" | "creative" | "expense" | "integration" | "integrationDetail" | "settings" | "saleDetail" | null;
 type Integration = {
   name: string;
-  status: "Conectado" | "Preparado";
+  status: "Conectado" | "Preparado" | "Atenção";
   cat: string;
   desc: string;
   logo: string;
@@ -115,6 +116,9 @@ const integrationsSeed: Integration[] = [
     fields: ["AMAZON_SPAPI_APP_ID", "AMAZON_SPAPI_CLIENT_ID", "AMAZON_SPAPI_CLIENT_SECRET", "AMAZON_SPAPI_REFRESH_TOKEN", "AMAZON_SPAPI_MARKETPLACE_ID"],
   },
   {
+    name: "Asaas", status: "Preparado", cat: "Banco", desc: "Saques e transferências da Shopify", logo: "A", accent: "#006DFF", webhook: "/api/webhooks/asaas", fields: [],
+  },
+  {
     name: "Kiwify",
     status: "Preparado",
     cat: "Plataforma de vendas",
@@ -146,6 +150,9 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  useEffect(() => {
+    if (localStorage.getItem("ironair-theme") === "light") setTheme("light");
+  }, []);
   const [dashboardEditing, setDashboardEditing] = useState(false);
   const [dashboardHidden, setDashboardHidden] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
@@ -503,11 +510,11 @@ export default function Home() {
       return false;
     }
   };
-  const removeMany = async (url: string, ids: string[]) => {
+  const removeMany = async (url: string, ids: string[], entity = "pedidos", field = "ids") => {
     try {
-      await apiJson(url, { method: "DELETE", body: JSON.stringify({ ids }) });
+      await apiJson(url, { method: "DELETE", body: JSON.stringify({ [field]: ids }) });
       await loadData();
-      notify(`${ids.length} pedidos excluídos`);
+      notify(`${ids.length} ${entity} excluídos`);
       return true;
     } catch (e: any) {
       notify(e.message || "Erro ao excluir");
@@ -520,11 +527,14 @@ export default function Home() {
   }, [view]);
   useEffect(() => {
     if (!notificationOpen) return;
+    const mobile = window.matchMedia('(max-width: 650px)').matches;
+    const previousOverflow = document.body.style.overflow;
+    if (mobile) document.body.style.overflow = 'hidden';
     const dismiss = (event: PointerEvent) => { if (!notificationRef.current?.contains(event.target as Node)) setNotificationOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setNotificationOpen(false); };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
   }, [notificationOpen]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -576,7 +586,7 @@ export default function Home() {
   };
   const exportFile = (name: string, rows: any[], format: "csv" | "xml" = "csv") => {
     if (!rows.length) {
-      notify("Selecione pelo menos um pedido");
+      notify("Nenhum registro para exportar");
       return;
     }
     const clean = rows.map(({ raw, ...rest }: any) => rest);
@@ -592,7 +602,9 @@ export default function Home() {
     let body: string;
     let type: string;
     if (format === "xml") {
-      body = ['<?xml version="1.0" encoding="UTF-8"?>', "<pedidos>", ...clean.map((row) => ["  <pedido>", ...keys.map((k) => `    <${tag(k)}>${escapeXml(row[k])}</${tag(k)}>`), "  </pedido>"].join("\n")), "</pedidos>"].join("\n");
+      const root = name === "clientes" ? "clientes" : "pedidos";
+      const item = name === "clientes" ? "cliente" : "pedido";
+      body = ['<?xml version="1.0" encoding="UTF-8"?>', `<${root}>`, ...clean.map((row) => [`  <${item}>`, ...keys.map((k) => `    <${tag(k)}>${escapeXml(row[k])}</${tag(k)}>`), `  </${item}>`].join("\n")), `</${root}>`].join("\n");
       type = "application/xml";
     } else {
       body = [keys.join(","), ...clean.map((r) => keys.map((k) => `"${String(r[k] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
@@ -641,7 +653,6 @@ export default function Home() {
       <section className="content">
         <header className="topbar">
           <button className="mobileMenuToggle" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} aria-controls="main-navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={22} /></button>
-          <span className="mobileAppName">Iron Seller</span>
           <div className="desktopPageTitle">
             <h1>{title}</h1>
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
@@ -650,6 +661,7 @@ export default function Home() {
           <div className="topbarActions">
             <div className="notificationMenu" ref={notificationRef}>
               <button type="button" className="notificationTrigger" aria-label="Notificações" aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={17} />{stockAlerts.length > 0 && <span className="notificationCount">{stockAlerts.length}</span>}</button>
+              {notificationOpen && <button type="button" className="notificationBackdrop" aria-label="Fechar notificações" onClick={() => setNotificationOpen(false)} />}
               {notificationOpen && <div className="notificationPopover">
                 <div className="notificationHeading"><b>Notificações</b><button type="button" aria-label="Fechar notificações" onClick={() => setNotificationOpen(false)}><X size={16} /></button></div>
                 <div className="pushControls">{pushSupported ? <button type="button" disabled={pushBusy} onClick={togglePush}>{pushBusy ? 'Aguarde...' : pushEnabled ? 'Desativar avisos neste aparelho' : 'Ativar avisos neste aparelho'}</button> : <small>Para receber avisos no iPhone, abra este site pelo atalho na Tela de Início (iOS 16.4 ou superior).</small>}</div>
@@ -657,7 +669,7 @@ export default function Home() {
                 <div className="notificationList">{notificationTab === "Vendas" ? recentSales.length ? recentSales.map((order) => <div className="notificationItem" key={order.id}><ShoppingCart size={16} /><div><b>Venda aprovada · {money(Number(order.grossAmount || 0) - Number(order.discountAmount || 0))}</b><small>{order.customer?.name || order.externalId} · {fmtDate(order.paidAt || order.createdAt)}</small></div></div>) : <p className="notificationEmpty">Nenhuma venda aprovada.</p> : stockAlerts.length ? stockAlerts.map((alert) => <div className="notificationItem" key={alert}><Boxes size={16} /><div><b>Estoque de atenção</b><small>{alert}</small></div></div>) : <p className="notificationEmpty">Nenhum alerta de estoque.</p>}</div>
               </div>}
             </div>
-            <button className="themeToggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Alternar tema" aria-label="Alternar tema">
+            <button className="themeToggle" onClick={() => setTheme(current => { const next = current === "dark" ? "light" : "dark"; localStorage.setItem("ironair-theme", next); return next; })} title="Alternar tema" aria-label="Alternar tema">
               <Sun size={16} className={theme === "light" ? "active" : ""} />
               <Moon size={16} className={theme === "dark" ? "active" : ""} />
             </button>
@@ -700,7 +712,7 @@ export default function Home() {
                       <div className="dashboardExtraCardsInner">
                         {dashboardKpiIds.slice(8).map((id) => {
                           const extra = dashboardCards[Number(id.slice(4))];
-                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.delta) : extra.delta}</small></article></div>;
+                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong className={!dashboardHidden && isNegativeDisplay(extra.value) ? "negative" : extra.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.delta) : extra.delta}</small></article></div>;
                         })}
                       </div>
                     </div>
@@ -722,7 +734,7 @@ export default function Home() {
                     <button type="button" className="dashboardHorizontalMove" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={kpi.label === "Lucro líquido" && !dashboardHidden ? Number(dashboard?.profit || 0) > 0 ? "dashboardProfitPositive" : Number(dashboard?.profit || 0) < 0 ? "dashboardProfitNegative" : "dashboardProfitZero" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -765,18 +777,20 @@ export default function Home() {
               }
             }}
             onDelete={(c: any) => remove(`/api/customers?id=${encodeURIComponent(c.id)}`)}
+            onDeleteMany={(ids: string[]) => removeMany("/api/customers", ids, "clientes")}
+            onExport={(rows: any[], format: "csv" | "xml") => exportFile("clientes", rows, format)}
           />
         )}{" "}
         {view === "Estoque" && (
           <>
-            <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} showShopee={connectedProviders.has("Shopee")} />
+            <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} bulkEnabled showShopee={connectedProviders.has("Shopee")} />
             <Movements movements={movements} onNew={() => open("movement")} onEdit={(movement: any) => open("movementEdit", movement)} />
           </>
         )}{" "}
-        {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} />}
-        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
+        {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} onDeleteMany={(ids: string[]) => removeMany("/api/expenses", ids, "despesas")} />}
+        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
         {view === "Performance" && <PerformanceView />}{" "}
-        {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} onDelete={(i: Integration) => remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
+        {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
       {modal && (
         <Modal
@@ -788,6 +802,7 @@ export default function Home() {
           catalogProducts={catalogRows}
           integrations={integrationsSeed}
           channelOptions={salesAndStockOptions(connectedProviders)}
+          onDeleteIntegration={async (i: Integration) => { const removed = await remove(`/api/integrations?provider=${encodeURIComponent(i.name)}`); if (removed) { setIntegrationsRefreshKey((value) => value + 1); setModal(null); } return removed; }}
           onSave={async (kind: any, data: any) => {
             try {
               if (kind === "movement")
@@ -1115,10 +1130,10 @@ function movementLocalDateTime(movement: any) {
 function dashboardKpis(d: any) {
   const revenue = Number(d?.revenue || 0);
   const cogs = Number(d?.cogs || 0);
-  const unitCost = Number(d?.markupUnitCost || 0);
-  const investment = cogs + Number(d?.fees || 0) + Number(d?.media || 0) + Number(d?.expenses || 0);
-  const multiplier = (value: number) => `${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`;
+  const media = Number(d?.media || 0);
+  const investment = cogs + Number(d?.fees || 0) + media + Number(d?.expenses || 0);
   const ratio = (value: number) => String(Number(value.toFixed(2)));
+  const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
   return [
     {
       label: "Faturamento",
@@ -1131,18 +1146,18 @@ function dashboardKpis(d: any) {
       delta: "Aprovados",
     },
     {
-      label: "Líq. do Marktplace",
-      value: money(d?.salesProfit || 0),
-      delta: "Faturamento − taxas e frete − anúncios",
+      label: "Líq. do Marketplace",
+      value: money(d?.salesProfit ?? (revenue - Number(d?.fees || 0))),
+      delta: "Faturamento − taxas e frete",
     },
     {
       label: "Lucro líquido",
-      value: money(d?.profit || 0),
-      delta: "Faturamento − taxas e frete − anúncios − produtos − despesas",
+      value: money((d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)) - Number(d?.expenses || 0)),
+      delta: "Lucro bruto − despesas",
     },
     {
       label: "Taxas + frete",
-      value: money(d?.fees || 0),
+      value: money(Number(d?.fees || 0) ? -Math.abs(Number(d?.fees || 0)) : 0),
       delta: "Plataforma / logística",
     },
     {
@@ -1166,14 +1181,14 @@ function dashboardKpis(d: any) {
       delta: "% sobre o faturamento",
     },
     {
-      label: "Markup",
-      value: unitCost > 0 ? multiplier(Number(d?.ticket || 0) / unitCost) : "—",
-      delta: unitCost > 0 ? `Ticket médio / custo unitário de ${money(unitCost)}` : "Aguardando custo do produto",
+      label: "Lucro bruto pós Ads",
+      value: money((d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)) - media),
+      delta: "Lucro bruto − anúncios",
     },
     {
-      label: "Meta Ads",
-      value: money(d?.metaAds || 0),
-      delta: "Investimento em anúncios Meta",
+      label: "Valor em Ads",
+      value: money(media),
+      delta: "Total investido em anúncios",
     },
     {
       label: "ROI",
@@ -1181,19 +1196,19 @@ function dashboardKpis(d: any) {
       delta: "Retorno sobre o investimento",
     },
     {
-      label: "Google Ads",
-      value: money(d?.googleAds || 0),
-      delta: "Investimento em anúncios Google",
+      label: "TACOS",
+      value: revenue > 0 ? percent(media / revenue) : "—",
+      delta: "Investimento em anúncios / faturamento",
     },
     {
-      label: "TikTok Ads",
-      value: money(d?.tiktokAds || 0),
-      delta: "Investimento em anúncios TikTok",
+      label: "MPA",
+      value: revenue > 0 ? percent(((d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)) - media) / revenue) : "—",
+      delta: "Lucro bruto pós Ads / faturamento",
     },
     {
       label: "Lucro bruto",
-      value: money(d?.grossProfit ?? (revenue - Number(d?.fees || 0) - Number(d?.media || 0) - cogs)),
-      delta: "Faturamento − taxas e frete − anúncios − produtos",
+      value: money(d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)),
+      delta: "Faturamento − taxas e frete − produtos",
     },
     {
       label: "ROAS total",
@@ -1487,7 +1502,7 @@ function ChannelTable({ rows, hidden = false }: { rows: any[]; hidden?: boolean 
                 <td>{hidden ? "—" : c.revenue}</td>
                 <td>{hidden ? "—" : c.cpa}</td>
                 <td>{hidden ? "—" : c.roas}</td>
-                <td className="positive">{hidden ? "—" : c.profit}</td>
+                <td className={!hidden && isNegativeDisplay(c.profit) ? "negative" : "positive"}>{hidden ? "—" : c.profit}</td>
               </tr>
             ))}
           </tbody>
@@ -1496,7 +1511,27 @@ function ChannelTable({ rows, hidden = false }: { rows: any[]; hidden?: boolean 
     </article>
   );
 }
-function Inventory({ products, onEdit, hidden = false, showShopee = false, salesPeriod = "Tempo todo" }: any) {
+function MobileBulkActions({ ids, selected, setSelected, selecting, setSelecting, onDeleteMany, label }: { ids: string[]; selected: Set<string>; setSelected: React.Dispatch<React.SetStateAction<Set<string>>>; selecting: boolean; setSelecting: React.Dispatch<React.SetStateAction<boolean>>; onDeleteMany: (ids: string[]) => Promise<boolean>; label: string }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const selectedIds = ids.filter((id) => selected.has(id));
+  return <>
+    <div className="mobileBulkActions">
+      <button type="button" className="ghost clickable" disabled={!ids.length && !selecting} onClick={() => { setSelecting(!selecting); setSelected(new Set()); }}>{selecting ? "Cancelar seleção" : "Selecionar"}</button>
+      {selecting && <button type="button" className="ghost clickable salesDeleteButton" disabled={!selectedIds.length} onClick={() => setConfirmOpen(true)}><Trash2 size={14} />Excluir selecionados{selectedIds.length ? ` (${selectedIds.length})` : ""}</button>}
+    </div>
+    {confirmOpen && <div className="salesConfirmBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setConfirmOpen(false); }}>
+      <div className="salesConfirmDialog" role="alertdialog" aria-modal="true" aria-labelledby="bulk-confirm-title" aria-describedby="bulk-confirm-description">
+        <h2 id="bulk-confirm-title">Confirmar exclusão</h2><p id="bulk-confirm-description">Excluir {selectedIds.length} {label} selecionados? Essa ação não pode ser desfeita.</p>
+        <div className="salesConfirmActions"><button className="ghost clickable" disabled={deleting} onClick={() => setConfirmOpen(false)}>Cancelar</button><button className="salesDeleteButton" disabled={deleting} onClick={async () => { setDeleting(true); try { if (await onDeleteMany(selectedIds) !== false) { setSelected(new Set()); setSelecting(false); setConfirmOpen(false); } } finally { setDeleting(false); } }}><Trash2 size={16} />{deleting ? "Excluindo..." : "Excluir"}</button></div>
+      </div>
+    </div>}
+  </>;
+}
+function Inventory({ products, onEdit, onDeleteMany, bulkEnabled = false, hidden = false, showShopee = false, salesPeriod = "Tempo todo" }: any) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const toggleSelected = (sku: string) => setSelected((previous) => { const next = new Set(previous); next.has(sku) ? next.delete(sku) : next.add(sku); return next; });
   const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
   const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
   const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
@@ -1521,11 +1556,13 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
           </span>
         </div>
       </div>
+      {bulkEnabled && <MobileBulkActions ids={products.map((item: any) => String(item.sku))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="produtos" />}
       <div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div>
       <div className="tableWrap inventoryTableWrap">
         <table className="inventoryTable">
           <thead>
             <tr>
+              {bulkEnabled && selecting && <th className="checkCol"><input type="checkbox" checked={products.length > 0 && products.every((item: any) => selected.has(String(item.sku)))} onChange={() => setSelected(products.every((item: any) => selected.has(String(item.sku))) ? new Set() : new Set(products.map((item: any) => String(item.sku))))} aria-label="Selecionar todos os produtos" /></th>}
               <th>Produto</th>
               <th>SKU</th>
               <th>Custo</th>
@@ -1545,7 +1582,8 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
           </thead>
           <tbody>
             {products.map((i: any) => (
-              <tr key={i.sku}>
+              <tr key={i.sku} className={bulkEnabled && selected.has(String(i.sku)) ? "mobileSelectedRow" : undefined} onClick={() => { if (bulkEnabled && window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(i.sku)); else onEdit(i); } }}>
+                {bulkEnabled && selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(i.sku))} onChange={() => toggleSelected(String(i.sku))} aria-label={`Selecionar ${i.product}`} /></td>}
                 <td>
                   <b>{i.product}</b>
                 </td>
@@ -1567,21 +1605,24 @@ function Inventory({ products, onEdit, hidden = false, showShopee = false, sales
                   <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
                 </td>
                 <td>
-                  <button className="mini" onClick={() => onEdit(i)} disabled={hidden}>
+                  <button className="mini" onClick={(event) => { event.stopPropagation(); onEdit(i); }} disabled={hidden}>
                     <Pencil size={14} />
                   </button>
                 </td>
               </tr>
             ))}
           </tbody>
-          <tfoot><tr className="inventoryTotalRow"><td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>{hidden ? "—" : total("fbaQty")}</td><td>{hidden ? "—" : total("fullQty")}</td><td>—</td><td></td></tr></tfoot>
+          <tfoot><tr className="inventoryTotalRow">{bulkEnabled && selecting && <td className="checkCol" />}<td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>{hidden ? "—" : total("fbaQty")}</td><td>{hidden ? "—" : total("fullQty")}</td><td>—</td><td></td></tr></tfoot>
         </table>
       </div>
     </article>
   );
 }
-function Products({ products, inventory, onNew, onEdit, onDelete }: any) {
+function Products({ products, inventory, onNew, onEdit, onDelete, onDeleteMany }: any) {
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const toggleSelected = (sku: string) => setSelected((previous) => { const next = new Set(previous); next.has(sku) ? next.delete(sku) : next.add(sku); return next; });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const rows = products.filter((p: any) => `${p.product} ${p.name} ${p.sku}`.toLowerCase().includes(query.toLowerCase()));
@@ -1601,16 +1642,17 @@ function Products({ products, inventory, onNew, onEdit, onDelete }: any) {
           Novo produto
         </button>
       </div>
+      <MobileBulkActions ids={visible.map((product: any) => String(product.sku))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="produtos" />
       <div className="catalogToolbar">
         <label className="catalogSearch"><Search size={15} /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Pesquisar produto ou SKU..." /></label>
         <div className="catalogPageSize">Itens por página <AnchoredSelect value={String(pageSize)} onChange={(v) => { setPageSize(Number(v)); setPage(1); }} options={["10", "25", "50"]} compact /></div>
       </div>
       <div className="tableWrap">
         <table className="catalogTable">
-          <thead><tr><th>SKU interno</th><th>Imagem</th><th>Produto</th><th>Variante</th><th>Preço</th><th>Custo</th><th>Físico</th><th>Disponível</th><th aria-label="Ações"></th></tr></thead>
-          <tbody>{visible.map((p: any) => <tr key={p.sku}>
-            <td><b>{p.sku}</b></td><td><span className="catalogImage"><PackageCheck size={18} /></span></td><td>{p.product}</td><td>{p.name}</td><td>{money(Number(p.salePrice || 0))}</td><td>{money(Number(p.unitCost || 0))}</td><td>{stockFor(p.sku)?.physical || 0}</td><td>{stockFor(p.sku)?.available || 0}</td>
-            <td><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={() => onEdit(editable(p))}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={() => onDelete(p)}><Trash2 size={15} /></button></div></td>
+          <thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={visible.length > 0 && visible.every((item: any) => selected.has(String(item.sku)))} onChange={() => setSelected(visible.every((item: any) => selected.has(String(item.sku))) ? new Set() : new Set(visible.map((item: any) => String(item.sku))))} aria-label="Selecionar todos os produtos exibidos" /></th>}<th>SKU interno</th><th>Imagem</th><th>Produto</th><th>Variante</th><th>Preço</th><th>Custo</th><th>Físico</th><th>Disponível</th><th aria-label="Ações"></th></tr></thead>
+          <tbody>{visible.map((p: any) => <tr key={p.sku} className={selected.has(String(p.sku)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(p.sku)); else onEdit(editable(p)); } }}>
+            {selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(p.sku))} onChange={() => toggleSelected(String(p.sku))} aria-label={`Selecionar ${p.product}`} /></td>}<td><b>{p.sku}</b></td><td><span className="catalogImage"><PackageCheck size={18} /></span></td><td>{p.product}</td><td>{p.name}</td><td>{money(Number(p.salePrice || 0))}</td><td>{money(Number(p.unitCost || 0))}</td><td>{stockFor(p.sku)?.physical || 0}</td><td>{stockFor(p.sku)?.available || 0}</td>
+            <td><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={(event) => { event.stopPropagation(); onEdit(editable(p)); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={(event) => { event.stopPropagation(); onDelete(p); }}><Trash2 size={15} /></button></div></td>
           </tr>)}</tbody>
         </table>
       </div>
@@ -1619,25 +1661,103 @@ function Products({ products, inventory, onNew, onEdit, onDelete }: any) {
     </article>
   );
 }
-function Customers({ rows, onNew, onEdit, onDelete, onBackfill }: any) {
+function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: any) {
+  const [search, setSearch] = useState("");
+  const [period, setPeriod] = useState("Tempo todo");
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(todayISO().slice(0, 7));
+  const [draftRange, setDraftRange] = useState({ from: "", to: "" });
+  const [selectingEnd, setSelectingEnd] = useState(false);
+  const [origin, setOrigin] = useState("");
+  const [product, setProduct] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const origins = [...new Set(rows.flatMap((customer: any) => (customer.orderHistory || []).map((order: any) => String(order.channel))))].sort() as string[];
+  const products = [...new Map<string, string>(rows.flatMap((customer: any) => (customer.orderHistory || []).flatMap((order: any) => order.items || [])).map((item: any) => [String(item.sku), String(item.name || item.sku)] as [string, string])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const dates = period === "Tempo todo" ? null : periodRange(period, { from, to });
+  const filteredRows = rows.flatMap((customer: any) => {
+    const matchingOrders = (customer.orderHistory || []).filter((order: any) => {
+      const day = dateKey(order.date);
+      return (!dates || (day >= dates.from && day <= dates.to)) && (!origin || order.channel === origin) && (!product || (order.items || []).some((item: any) => item.sku === product));
+    });
+    const text = `${customer.name || ""} ${customer.city || ""} ${customer.state || ""} ${customer.lastChannel || ""}`.toLocaleLowerCase("pt-BR");
+    if ((dates || origin || product) && !matchingOrders.length) return [];
+    if (search.trim() && !text.includes(search.trim().toLocaleLowerCase("pt-BR"))) return [];
+    return [{ ...customer, orders: dates || origin || product ? matchingOrders.length : customer.orders, revenue: dates || origin || product ? matchingOrders.filter((order: any) => order.status === "PAID").reduce((total: number, order: any) => total + Number(order.grossAmount || 0), 0) : customer.revenue, lastChannel: dates || origin || product ? matchingOrders[0]?.channel : customer.lastChannel, lastOrderAt: dates || origin || product ? matchingOrders[0]?.date : customer.lastOrderAt }];
+  });
+  const selectedRows = filteredRows.filter((customer: any) => selected.has(customer.id));
+  const allSelected = filteredRows.length > 0 && filteredRows.every((customer: any) => selected.has(customer.id));
+  const exportRows = (selectedRows.length ? selectedRows : filteredRows).map((customer: any) => ({ data: customer.lastOrderAt ? fmtDate(customer.lastOrderAt) : "", nome: customer.name || "", cidade: customer.city || "", uf: customer.state || "", pedidos: customer.orders, receita: customer.revenue, ultimo_canal: customer.lastChannel || "" }));
+  useEffect(() => { setSelected(new Set()); setExportOpen(false); }, [search, period, from, to, origin, product]);
+  useEffect(() => {
+    if (!exportOpen) return;
+    const dismiss = (event: PointerEvent) => { if (!exportMenuRef.current?.contains(event.target as Node)) setExportOpen(false); };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [exportOpen]);
+  const toggleSelected = (id: string) => setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const deleteSelected = async () => {
+    if (!selectedRows.length || deleting) return;
+    setDeleting(true);
+    try { if (await onDeleteMany(selectedRows.map((customer: any) => customer.id)) !== false) { setSelected(new Set()); setConfirmDelete(false); } }
+    finally { setDeleting(false); }
+  };
   return (
+    <div className={`salesPage ${selecting ? "mobileSelectionActive" : ""}`}>
+      <div className="sectionHead salesPageHeader"><div className="rowActions">
+        <button className="ghost clickable salesDeleteButton" disabled={!selectedRows.length} onClick={() => setConfirmDelete(true)}><Trash2 size={14} />Excluir selecionados</button>
+        <div className="exportMenu" ref={exportMenuRef}>
+          <button className="ghost clickable" disabled={!filteredRows.length} onClick={() => setExportOpen((open) => !open)}><Download size={14} /> Exportar</button>
+          {exportOpen && <div className="exportOptions"><button onClick={() => { onExport(exportRows, "csv"); setExportOpen(false); }}>CSV</button><button onClick={() => { onExport(exportRows, "xml"); setExportOpen(false); }}>XML</button></div>}
+        </div>
+        <button className="primary" onClick={onNew}><Plus size={14} />Novo cliente</button>
+      </div></div>
+      <MobileBulkActions ids={filteredRows.map((customer: any) => customer.id)} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="clientes" />
+      <section className="card salesSearchSection" aria-label="Busca e filtros de clientes">
+      <div className="salesSearchRow">
+        <label className="search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cliente, cidade ou canal..." aria-label="Buscar clientes" /></label>
+        <button type="button" className="mobileSalesFilterButton ghost" onClick={() => setFiltersOpen(true)}><Filter size={16} />Filtros</button>
+      </div>
+      {filtersOpen && <button type="button" className="mobileSalesFilterBackdrop" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)} />}
+      <div className={`salesFilters ${filtersOpen ? "mobileFiltersOpen" : ""}`}>
+        <div className="mobileSalesFilterHead"><b>Filtros</b><button type="button" className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)}><X size={20} /></button></div>
+        <div className="salesPeriodControl">
+          <button type="button" className="salesPeriodTrigger" aria-expanded={periodOpen} onClick={() => { setPeriodOpen((open) => !open); setCalendarMonth((from || todayISO()).slice(0, 7)); setDraftRange(period === "Personalizado" ? { from, to } : { from: "", to: "" }); setSelectingEnd(false); }}><span>Período</span><b>{period}</b><ChevronDown size={15} /></button>
+          {periodOpen && <div className="salesPeriodOptions">
+            {periodOptions.map((option) => <button type="button" key={option} className={period === option ? "active" : ""} onClick={() => { setPeriod(option); setFrom(""); setTo(""); setPeriodOpen(false); }}>{option}</button>)}
+            <div className="salesPeriodCalendar">
+              <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, -1))}>←</button><b>{calendarMonthTitle(calendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, 1))}>→</button></div>
+              <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(calendarMonth).map((day, index) => day ? <button key={day} type="button" className={`${day === draftRange.from || day === draftRange.to ? "selected" : ""} ${draftRange.from && draftRange.to && day > draftRange.from && day < draftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingEnd || (draftRange.from && day < draftRange.from)) { setDraftRange({ from: day, to: "" }); setSelectingEnd(true); } else { setDraftRange((range) => ({ ...range, to: day })); setSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div>
+              <small>{draftRange.from ? `${formatDashboardDate(draftRange.from)} → ${draftRange.to ? formatDashboardDate(draftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small>
+              <button type="button" className="primary" disabled={!draftRange.from || !draftRange.to} onClick={() => { setFrom(draftRange.from); setTo(draftRange.to); setPeriod("Personalizado"); setPeriodOpen(false); }}>Aplicar período</button>
+            </div>
+          </div>}
+        </div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={origin} onChange={setOrigin} options={[{ value: "", label: "Todas" }, ...origins.map((channel) => ({ value: channel, label: channel.replaceAll("_", " ") }))]} compact /></div>
+        <div className="salesSelectField"><span>Produto</span><AnchoredSelect value={product} onChange={setProduct} options={[{ value: "", label: "Todos" }, ...products.map(([sku, name]) => ({ value: sku, label: name }))]} compact /></div>
+        <button type="button" className="ghost" onClick={() => { setPeriod("Tempo todo"); setFrom(""); setTo(""); setPeriodOpen(false); setOrigin(""); setProduct(""); }}>Limpar</button>
+        <button type="button" className="mobileSalesFilterApply primary" onClick={() => setFiltersOpen(false)}>Aplicar</button>
+      </div>
+      </section>
     <article className="card tableCard">
       <div className="sectionHead">
         <div>
-          <h2>Clientes</h2>
-          <p>Clientes persistidos no banco e vinculados aos pedidos</p>
-        </div>
-        <div className="rowActions">
-          <button className="primary" onClick={onNew}>
-            <Plus size={14} />
-            Novo cliente
-          </button>
+          <h2>Lista de clientes</h2>
         </div>
       </div>
       <div className="tableWrap">
         <table>
           <thead>
             <tr>
+              <th className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(filteredRows.map((customer: any) => customer.id)))} aria-label="Selecionar todos os clientes exibidos" /></th>
+              <th className="listDateCell">Data</th>
               <th>Nome</th>
               <th>Cidade</th>
               <th>UF</th>
@@ -1648,8 +1768,10 @@ function Customers({ rows, onNew, onEdit, onDelete, onBackfill }: any) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((c: any) => (
-              <tr key={c.id} className="clickrow" onClick={() => onEdit(c)}>
+            {filteredRows.map((c: any) => (
+              <tr key={c.id} className={`clickrow ${selected.has(c.id) ? "mobileSelectedRow" : ""}`} onClick={() => { if (selecting && window.matchMedia("(max-width: 650px)").matches) toggleSelected(c.id); else onEdit(c); }}>
+                <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelected(c.id)} aria-label={`Selecionar ${c.name || "cliente"}`} /></td>
+                <td className="listDateCell">{c.lastOrderAt ? fmtDate(c.lastOrderAt) : "—"}</td>
                 <td>
                   <b>{c.name || "Cliente sem nome"}</b>
                 </td>
@@ -1686,11 +1808,20 @@ function Customers({ rows, onNew, onEdit, onDelete, onBackfill }: any) {
         </table>
       </div>
     </article>
+      {confirmDelete && <div className="salesConfirmBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setConfirmDelete(false); }}>
+        <div className="salesConfirmDialog" role="alertdialog" aria-modal="true" aria-labelledby="customers-confirm-title" aria-describedby="customers-confirm-description">
+          <h2 id="customers-confirm-title">Confirmar exclusão</h2>
+          <p id="customers-confirm-description">Excluir {selectedRows.length} clientes selecionados? Essa ação não pode ser desfeita.</p>
+          <div className="salesConfirmActions"><button className="ghost clickable" disabled={deleting} onClick={() => setConfirmDelete(false)}>Cancelar</button><button className="salesDeleteButton" disabled={deleting} onClick={deleteSelected}><Trash2 size={16} />{deleting ? "Excluindo..." : "Excluir"}</button></div>
+        </div>
+      </div>}
+    </div>
   );
 }
 function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport }: any) {
   const [status, setStatus] = useState("PAID");
   const [source, setSource] = useState("Todas");
+  const [product, setProduct] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [salesPeriod, setSalesPeriod] = useState("Tempo todo");
@@ -1702,6 +1833,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1724,14 +1856,15 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const statusClass = (status: string) => (status === "CANCELLED" || status === "CHARGEBACK" ? "danger" : status === "PAID" ? "ok" : "warn");
   const keyOf = (s: any) => String(s.raw?.id || s.id);
   const sources = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((s: any) => s.source).filter(Boolean)))], [rows]);
+  const products = useMemo(() => [...new Map<string, string>(rows.flatMap((sale: any) => sale.raw?.items || []).map((item: any) => [String(item.sku || item.name), String(item.name || item.sku)] as [string, string])).entries()].sort((a, b) => a[1].localeCompare(b[1])), [rows]);
   const filtered = useMemo(
     () =>
       rows.filter((s: any) => {
         const key = s.raw?.paidAt || s.raw?.createdAt;
         const day = key ? dateKey(key) : "";
-        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!from || day >= from) && (!to || day <= to);
+        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!product || (s.raw?.items || []).some((item: any) => String(item.sku || item.name) === product)) && (!from || day >= from) && (!to || day <= to);
       }),
-    [rows, status, source, from, to],
+    [rows, status, source, product, from, to],
   );
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -1742,7 +1875,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     setPage(1);
     setSelected(new Set());
     setExportOpen(false);
-  }, [q, status, source, from, to, pageSize]);
+  }, [q, status, source, product, from, to, pageSize]);
   const selectedRows = filtered.filter((s: any) => selected.has(keyOf(s)));
   const exportRows = (selectedRows.length ? selectedRows : filtered).map(({ raw, ...rest }: any) => rest);
   const salesRevenue = filtered.reduce((total: number, sale: any) => sale.status === "PAID" ? total + Number(sale.raw?.grossAmount || 0) - Number(sale.raw?.discountAmount || 0) : total, 0);
@@ -1785,7 +1918,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
     }
   };
   return (
-    <div className="salesPage">
+    <div className={`salesPage ${selecting ? "mobileSelectionActive" : ""}`}>
       <div className="sectionHead salesPageHeader">
         <div className="rowActions">
           <button className="ghost clickable salesDeleteButton" disabled={!selected.size} onClick={() => setPendingDelete({ kind: "many", sales: [...selectedRows] })}>
@@ -1823,6 +1956,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
           </button>
         </div>
       </div>
+      <MobileBulkActions ids={pageRows.map((sale: any) => keyOf(sale))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={(ids) => onDeleteMany(pageRows.filter((sale: any) => ids.includes(keyOf(sale))))} label="pedidos" />
       <section className="card salesSearchSection" aria-label="Busca e filtros de vendas">
       <div className="salesSearchRow">
         <div className="search">
@@ -1835,7 +1969,6 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
       <div className={`salesFilters ${mobileFiltersOpen ? "mobileFiltersOpen" : ""}`}>
         <div className="mobileSalesFilterHead"><b>Filtros</b><button className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setMobileFiltersOpen(false)}><X size={20} /></button></div>
         <div className="salesSelectField"><Filter size={14} /><AnchoredSelect value={status} onChange={setStatus} options={["Todos", "PAID", "CANCELLED", "PENDING", "REFUNDED", "CHARGEBACK"]} compact /></div>
-        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
         <div className="salesPeriodControl" ref={salesPeriodRef}>
           <button type="button" className="salesPeriodTrigger" aria-expanded={salesPeriodOpen} onClick={() => { setSalesPeriodOpen((open) => !open); setSalesCalendarMonth((from || todayISO()).slice(0, 7)); setSalesDraftRange({ from: salesPeriod === "Personalizado" ? from : "", to: salesPeriod === "Personalizado" ? to : "" }); setSalesSelectingEnd(false); }}><span>Período</span><b>{salesPeriod}</b><ChevronDown size={15} /></button>
           {salesPeriodOpen && <div className="salesPeriodOptions">
@@ -1848,12 +1981,14 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
             </div>
           </div>}
         </div>
-        <div className="salesSelectField"><span>Linhas</span><AnchoredSelect value={String(pageSize)} onChange={(v) => setPageSize(Number(v))} options={["10", "25", "50", "100"]} compact /></div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
+        <div className="salesSelectField"><span>Produto</span><AnchoredSelect value={product} onChange={setProduct} options={[{ value: "", label: "Todos" }, ...products.map(([sku, name]) => ({ value: sku, label: name }))]} compact /></div>
         <button
           className="ghost clickable"
           onClick={() => {
             setStatus("Todos");
             setSource("Todas");
+            setProduct("");
             setFrom("");
             setTo("");
             setSalesPeriod("Tempo todo");
@@ -1868,7 +2003,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
       </section>
       <section className="salesSummary" aria-label="Resumo das vendas">
         <div className="card"><span>Vendas encontradas</span><strong>{filtered.length.toLocaleString("pt-BR")}</strong></div>
-        <div className="card"><span>Faturamento</span><strong>{money(salesRevenue)}</strong></div>
+        <div className="card"><span>Faturamento</span><strong className={salesRevenue < 0 ? "negative" : undefined}>{money(salesRevenue)}</strong></div>
       </section>
       <article className="card tableCard salesResultsSection">
       <div className="sectionHead"><h2>Pedidos consolidados</h2></div>
@@ -1883,7 +2018,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
               <th className="checkCol">
                 <input type="checkbox" checked={allPageSelected} onChange={togglePage} aria-label="Selecionar página" />
               </th>
-              <th>Data</th>
+              <th className="listDateCell">Data</th>
               <th>Pedido</th>
               <th>Cliente</th>
               <th>Origem</th>
@@ -1898,21 +2033,21 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
           </thead>
           <tbody>
             {pageRows.map((s: any) => (
-              <tr key={keyOf(s)} className="clickrow" onClick={() => onOpen(s)}>
+              <tr key={keyOf(s)} className={`clickrow ${selected.has(keyOf(s)) ? "mobileSelectedRow" : ""}`} onClick={() => { if (selecting && window.matchMedia("(max-width: 650px)").matches) toggleOne(keyOf(s)); else onOpen(s); }}>
                 <td className="checkCol" onClick={(e) => e.stopPropagation()}>
                   <input type="checkbox" checked={selected.has(keyOf(s))} onChange={() => toggleOne(keyOf(s))} aria-label={`Selecionar ${s.id}`} />
                 </td>
-                <td>{s.date}</td>
+                <td className="listDateCell">{s.date}</td>
                 <td>
                   <b>{s.id}</b>
                 </td>
                 <td>{s.customer}</td>
                 <td>{s.source}</td>
                 <td>{s.voltage}</td>
-                <td>{s.value}</td>
-                <td>{money(s.fee || 0)}</td>
-                <td>{money(s.freight || 0)}</td>
-                <td className={s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : s.profit >= 0 ? "positive" : "negative"}>{money(s.profit || 0)}</td>
+                <td className={isNegativeDisplay(s.value) ? "negative" : undefined}>{s.value}</td>
+                <td className={Number(s.fee || 0) !== 0 ? "negative" : undefined}>{money(Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
+                <td className={Number(s.freight || 0) !== 0 ? "negative" : undefined}>{money(Number(s.freight || 0) ? -Math.abs(Number(s.freight || 0)) : 0)}</td>
+                <td className={Number(s.profit || 0) < 0 || s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : "positive"}>{money(s.profit || 0)}</td>
                 <td>
                   <span className={`status ${statusClass(s.status)}`}>{s.status}</span>
                 </td>
@@ -2362,14 +2497,15 @@ function Finance() {
   };
   useEffect(() => { loadTransfers(true); }, []);
   useEffect(() => {
-    if (transfers?.mercadoPago?.status !== 'processing' && !transfers?.receivables?.sources?.some((source: any) => source.name === 'Mercado Pago' && source.status === 'processing')) return;
+    if (transfers?.mercadoPago?.status !== 'processing') return;
     const timer = window.setTimeout(() => loadTransfers(true), 8000);
     return () => window.clearTimeout(timer);
-  }, [transfers?.mercadoPago?.status, transfers?.receivables?.sources, transfers?.updatedAt]);
+  }, [transfers?.mercadoPago?.status, transfers?.updatedAt]);
   const amazonRows = transfers?.amazon?.rows || [];
   const mpRows = transfers?.mercadoPago?.rows || [];
   const payoutRows = [
     ...amazonRows.map((row: any) => ({ source: 'Amazon', id: row.id, date: row.transferDate, amount: row.amount, currency: row.currency || 'BRL', status: row.transferStatus, account: row.accountTail ? `Final ${row.accountTail}` : '—', period: `${row.periodStart ? new Date(row.periodStart).toLocaleDateString('pt-BR') : '—'} – ${row.periodEnd ? new Date(row.periodEnd).toLocaleDateString('pt-BR') : '—'}` })),
+    ...(transfers?.asaas?.rows || []).map((row: any) => ({ source: 'Asaas', id: row.id, date: row.date, amount: row.amount, currency: 'BRL', status: row.status, account: row.account, period: '—' })),
     ...mpRows.map((row: any) => ({ source: 'Mercado Pago', id: row.id, date: row.date, amount: row.amount, currency: 'BRL', status: row.status, account: row.account || '—', period: '—' })),
   ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const saveMpToken = async () => {
@@ -2392,26 +2528,26 @@ function Finance() {
       <section className="financeHeroGrid">
         <article className="card pad financeHeroCard financeCashCard">
           <span>Caixa da empresa</span>
-          <strong>{transfers?.amazon?.status === "connected" ? money(transfers.companyCash?.amount || 0) : "—"}</strong>
+          <strong className={Number(transfers?.companyCash?.amount || 0) < 0 ? "negative" : undefined}>{transfers?.companyCash ? money(transfers.companyCash.amount || 0) : "—"}</strong>
           <small>{transfers?.companyCash?.transfers || 0} repasses e saques informados · tempo todo</small>
-          {!transfers?.companyCash?.complete && <p>Valor parcial: histórico completo de saques do Mercado Pago em preparação.</p>}
+          {transfers?.companyCash && !transfers.companyCash.complete && <p>Valor parcial: uma ou mais fontes de saques ainda não foram consultadas por completo.</p>}
         </article>
         <article className="card pad financeHeroCard financeExpectedCard">
           <span>Lucro esperado</span>
-          <strong>{data ? money(data.profit || 0) : "—"}</strong>
+          <strong className={Number(data?.profit || 0) < 0 ? "negative" : undefined}>{data ? money(data.profit || 0) : "—"}</strong>
           <small>Resultado estimado · tempo todo</small>
         </article>
       </section>
       <section className="kpiGrid">
         {[
           ["Receita", data?.revenue || 0],
-          ["A receber nas plataformas", transfers?.receivables?.amount],
-          ["Mídia", data?.media || 0],
+          ["A receber nas plataformas", data && transfers?.companyCash ? Number(data.salesProfit || 0) - Number(transfers.companyCash.amount || 0) : null],
+          ["Ads", data?.media || 0],
           ["Despesas", data?.expenses || 0],
         ].map(([a, b]: any) => (
           <article className="card kpi" key={a}>
             <span>{a}</span>
-            <strong>{b == null ? '—' : money(b)}</strong>
+            <strong className={b != null && Number(b) < 0 ? "negative" : undefined}>{b == null ? '—' : money(b)}</strong>
           </article>
         ))}
       </section>
@@ -2420,19 +2556,18 @@ function Finance() {
           <div><h2>Repasses e saques</h2><p>Histórico completo · mais recentes primeiro</p></div>
           <button className="mini" type="button" onClick={() => loadTransfers(true)} disabled={loadingTransfers} aria-label="Atualizar repasses"><RefreshCw size={16} /></button>
         </div>
-        <div className="financeTransferSources">
-          <div><strong>Amazon</strong><span>{loadingTransfers ? "Consultando…" : transfers?.amazon?.status === "connected" ? `${amazonRows.length} repasses encontrados` : transfers?.amazon?.error || "Aguardando consulta"}</span></div>
-          <div><strong>Mercado Livre / Mercado Pago</strong><span>{transfers?.mercadoPago?.message || "É necessária a credencial de produção do Mercado Pago para consultar saques."}</span></div>
-        </div>
         {transfers?.mercadoPago?.status === 'credential_required' && <div className="financeTokenConnect"><label htmlFor="mp-access-token">Access Token de produção do Mercado Pago</label><div><input id="mp-access-token" type="password" autoComplete="off" spellCheck={false} value={mpToken} onChange={event => setMpToken(event.target.value)} placeholder="APP_USR-…" /><button className="primary" type="button" disabled={!mpToken || mpSaving} onClick={saveMpToken}>{mpSaving ? 'Conectando…' : 'Conectar'}</button></div><small>Salvo criptografado no servidor. O token não aparece novamente na tela.</small>{mpError && <p className="financeTransferNote">{mpError}</p>}</div>}
         {transferError && <p className="financeTransferNote">{transferError}</p>}
-        {payoutRows.length > 0 && <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Plataforma</th><th>Período</th><th>Data da transferência</th><th>Valor</th><th>Status</th><th>Conta</th></tr></thead><tbody>{payoutRows.map((row: any) => <tr key={`${row.source}-${row.id}`}><td><strong>{row.source}</strong><small>{row.id}</small></td><td>{row.period}</td><td>{row.date ? new Date(row.date).toLocaleDateString('pt-BR') : '—'}</td><td>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: row.currency }).format(row.amount)}</td><td>{row.source === 'Amazon' ? transferStatus(row.status) : row.status === 'approved' ? 'Aprovado' : row.status}</td><td>{row.account}</td></tr>)}</tbody></table></div>}
+        {payoutRows.length > 0 && <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Plataforma</th><th>Período</th><th>Data da transferência</th><th>Valor</th><th>Status</th><th>Conta</th></tr></thead><tbody>{payoutRows.map((row: any) => <tr key={`${row.source}-${row.id}`}><td><strong>{row.source}</strong><small>{row.id}</small></td><td>{row.period}</td><td>{row.date ? new Date(row.date).toLocaleDateString('pt-BR') : '—'}</td><td className={Number(row.amount) < 0 ? "negative" : undefined}>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: row.currency }).format(row.amount)}</td><td>{row.source === 'Amazon' ? transferStatus(row.status) : row.status === 'approved' ? 'Aprovado' : row.status}</td><td>{row.account}</td></tr>)}</tbody></table></div>}
         <p className="financeTransferNote">A transferência informada pela plataforma não confirma o crédito na sua conta bancária. Esse saldo não entra novamente na receita nem no lucro.</p>
       </article>
     </>
   );
 }
-function Expenses({ rows, data, onNew, onEdit, onDelete }: any) {
+function Expenses({ rows, data, onNew, onEdit, onDelete, onDeleteMany }: any) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const toggleSelected = (id: string) => setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const annualCycles: Record<string, number> = { MONTHLY: 12, QUARTERLY: 4, SEMIANNUAL: 2, YEARLY: 1 };
   const periodLabel: Record<string, string> = {
     MONTHLY: "Dia 01 ao último dia do mês",
@@ -2442,8 +2577,9 @@ function Expenses({ rows, data, onNew, onEdit, onDelete }: any) {
   };
   return <article className="card tableCard">
     <div className="sectionHead"><div><h2>Despesas</h2><p>Valores fixos e percentuais que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
+    <MobileBulkActions ids={rows.map((expense: any) => String(expense.id))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="despesas" />
     <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{money(data?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
-    <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id}><td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={() => onEdit(expense)}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={() => onDelete(expense)}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
+    <div className="tableWrap"><table className="expenseTable"><thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={rows.length > 0 && rows.every((item: any) => selected.has(String(item.id)))} onChange={() => setSelected(rows.every((item: any) => selected.has(String(item.id))) ? new Set() : new Set(rows.map((item: any) => String(item.id))))} aria-label="Selecionar todas as despesas" /></th>}<th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id} className={selected.has(String(expense.id)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(expense.id)); else onEdit(expense); } }}>{selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(expense.id))} onChange={() => toggleSelected(String(expense.id))} aria-label={`Selecionar ${expense.description}`} /></td>}<td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={(event) => { event.stopPropagation(); onEdit(expense); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={(event) => { event.stopPropagation(); onDelete(expense); }}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
     {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
   </article>;
 }
@@ -2459,7 +2595,7 @@ function Returns({ rows }: { rows: any[] }) {
     </tr>)}</tbody></table></div>
   </article>;
 }
-function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
+function Integrations({ refreshKey, onNew, onOpen }: any) {
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
     fetch("/api/integrations", { cache: "no-store" })
@@ -2483,7 +2619,7 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
     return {
       ...seed,
       cat: integrationCategory(row.provider),
-      status: row.status === "CONNECTED" ? "Conectado" : "Preparado",
+      status: row.status === "CONNECTED" ? "Conectado" : row.status === "ERROR" ? "Atenção" : "Preparado",
       accountId: row.externalAccountId || undefined,
       lastSyncAt: row.lastSyncAt || undefined,
       lastError: row.lastError || undefined,
@@ -2514,19 +2650,6 @@ function Integrations({ refreshKey, onNew, onOpen, onDelete }: any) {
               <div className="integrationActions">
                 <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
                 <span className="integrationCategoryBadge">{i.cat}</span>
-                <button
-                  className="mini danger"
-                  type="button"
-                  title={`Excluir ${i.name}`}
-                  aria-label={`Excluir ${i.name}`}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (i.name === "Meta Ads" && !window.confirm("Excluir Meta Ads? A conta será desconectada e precisará ser conectada novamente.")) return;
-                    if (await onDelete(i)) setRows((v) => (v || []).filter((r: any) => r.provider !== i.name));
-                  }}
-                >
-                  <Trash2 size={14} />
-                </button>
               </div>
             </article>
           );
@@ -2543,6 +2666,8 @@ const integrationLogoSrc: Record<string, string> = {
   "Mercado Livre": "/integration-logos/mercado-livre.webp",
   Amazon: "/integration-logos/amazon.webp",
   Kiwify: "/integration-logos/kiwify.webp",
+  Asaas: "/integration-logos/asaas.png",
+  "Mercado Pago": "/integration-logos/mercado-pago.png",
 };
 function PlatformLogo({ i }: { i: Integration }) {
   const src = integrationLogoSrc[i.name];
@@ -2594,7 +2719,7 @@ function SettingsView({ onEdit }: any) {
     </div>
   );
 }
-function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave }: any) {
+function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave, onDeleteIntegration }: any) {
   const [f, setF] = useState<any>(kind === "expense" ? data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() } : data ? { ...data, _edit: data.sku } : {});
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
@@ -2756,6 +2881,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
             </FormGrid>
           )}
         </div>
+        {kind === "integrationDetail" && <div className="modalFoot"><button type="button" className="ghost clickable integrationDeleteButton" onClick={() => { if (window.confirm(`Excluir ${data.name}? A integração será desconectada.`)) onDeleteIntegration(data); }}>Excluir integração</button></div>}
         {kind !== "integrationDetail" && (
           <div className="modalFoot">
             <button className="ghost clickable" onClick={close} disabled={saving}>
@@ -2770,6 +2896,40 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
       </div>
     </div>
   );
+}
+function AsaasIntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) => void }) {
+  const [state, setState] = useState<any>(null);
+  const [token, setToken] = useState('');
+  const [url, setUrl] = useState('');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const reload = () => apiJson('/api/integrations/asaas').then(setState).catch((e: any) => setError(e.message));
+  useEffect(() => { reload(); }, []);
+  const save = async (method: 'POST' | 'PUT') => {
+    setBusy(true); setError('');
+    try {
+      await apiJson('/api/integrations/asaas', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(method === 'POST' ? { accessToken: token } : { callbackUrl: url, email }) });
+      setToken(''); await reload(); notify(method === 'POST' ? 'Asaas conectado' : 'Webhook de transferências cadastrado');
+    } catch (e: any) { setError(e.message || 'Falha ao configurar Asaas'); }
+    finally { setBusy(false); }
+  };
+  return <div>
+    <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Asaas</h3><p>Saques e transferências da Shopify</p></div><span className={state?.status === 'CONNECTED' ? 'status ok' : 'status warn'}>{state?.status === 'CONNECTED' ? 'Conectado' : state?.status === 'ERROR' ? 'Permissão pendente' : 'Preparado'}</span></div>
+    <div className="credentials">
+      <p className="muted">A chave fica criptografada no servidor. O financeiro consulta o histórico de transferências diretamente no Asaas.</p>
+      <label><span>Chave API de produção</span><input className="fullInput" type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} placeholder="$aact_prod_…" /></label>
+      <button className="primary" type="button" disabled={busy || !token} onClick={() => save('POST')}>Conectar Asaas</button>
+      <h4>Webhook de saques</h4>
+      <p className="muted">Eventos TRANSFER_* com token de autenticação e envio sequencial. A URL precisa ser HTTPS pública e executar esta versão do projeto.</p>
+      <label><span>URL pública</span><input className="fullInput" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://seu-dominio/api/webhooks/asaas" /></label>
+      <label><span>E-mail para falhas</span><input className="fullInput" type="email" value={email} onChange={e => setEmail(e.target.value)} /></label>
+      <button className="primary" type="button" disabled={busy || state?.status !== 'CONNECTED' || !url || !email} onClick={() => save('PUT')}>Cadastrar webhook</button>
+      {state?.lastError && <p className="negative">{state.lastError}</p>}
+      {state?.webhook && <p className="muted">Webhook: {state.webhook.status} · {state.webhook.callbackUrl}</p>}
+      {error && <p className="negative">{error}</p>}
+    </div>
+  </div>;
 }
 function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) => void }) {
   const [tab, setTab] = useState("Configuração");
@@ -2795,6 +2955,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
     notify(`Sincronizado: ${r.products || 0} produtos, ${r.orders || 0} pedidos`);
     reloadStatus();
   };
+  if (i.name === "Asaas") return <AsaasIntegrationDetail i={i} notify={notify} />;
   if (i.name === "Meta Ads") {
     const connectMeta = async () => {
       const result = await apiJson('/api/integrations/meta/authorize', { method: 'POST' });
@@ -3276,7 +3437,7 @@ function SaleDetail({ s, set, products }: any) {
       </div>
       <div className="detailBox">
         <span>Lucro líquido</span>
-        <b className={s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : undefined}>{money(profit)}</b>
+        <b className={profit < 0 || s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : undefined}>{money(profit)}</b>
       </div>
       <div className="detailBox">
         <span>SKU atual</span>

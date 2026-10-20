@@ -12,7 +12,7 @@ export function middleware(req: NextRequest) {
     const origin = req.headers.get('origin');
     if (origin && origin !== req.nextUrl.origin) return NextResponse.json({ ok: false, error: 'invalid_origin' }, { status: 403 });
   }
-  if (['/privacidade', '/termos', '/exclusao-de-dados', '/forgot-password', '/reset-password', '/sw.js', '/manifest.webmanifest', '/iron-seller-icon.png', '/iron-seller-app-icon-v2.png', '/iron-seller-app-icon-v3.png', '/iron-seller-app-icon-v8.png'].includes(path) || path === '/login' || path === '/onboarding' || (path.startsWith('/api/') && publicApi.some(prefix => path.startsWith(prefix)))) return NextResponse.next();
+  if (['/privacidade', '/termos', '/exclusao-de-dados', '/forgot-password', '/reset-password', '/sw.js', '/manifest.webmanifest', '/iron-seller-icon.png', '/iron-seller-white.png', '/iron-seller-black.png', '/iron-seller-app-icon-v2.png', '/iron-seller-app-icon-v3.png', '/iron-seller-app-icon-v8.png'].includes(path) || path === '/login' || path === '/onboarding' || (path.startsWith('/api/') && publicApi.some(prefix => path.startsWith(prefix)))) return NextResponse.next();
   if (req.cookies.has('ironair_access') || req.cookies.has('ironair_refresh')) return NextResponse.next();
   if (path.startsWith('/api/')) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   return NextResponse.redirect(new URL('/login', req.url));

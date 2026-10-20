@@ -24,6 +24,19 @@ export async function GET(req:Request){
 export async function DELETE(req:Request){
   try{
     const tenantId=await getTenantId(req);
+    if(req.headers.get('content-type')?.includes('application/json')){
+      const body=await req.json();
+      const skus=Array.isArray(body.skus)?body.skus.filter((sku:unknown):sku is string=>typeof sku==='string'&&sku.length>0):[];
+      if(!skus.length) return NextResponse.json({ok:false,error:'Selecione produtos para excluir'},{status:400});
+      const variants=await db.productVariant.findMany({where:{tenantId,sku:{in:skus},active:true},select:{productId:true}});
+      const result=await db.productVariant.updateMany({where:{tenantId,sku:{in:skus}},data:{active:false}});
+      const productIds=[...new Set(variants.map(variant=>variant.productId))];
+      for(const productId of productIds){
+        const activeSiblings=await db.productVariant.count({where:{tenantId,productId,active:true}});
+        if(!activeSiblings) await db.product.update({where:{id:productId,tenantId},data:{active:false}});
+      }
+      return NextResponse.json({ok:true,deleted:result.count});
+    }
     const sku=new URL(req.url).searchParams.get('sku');
     if(!sku) return NextResponse.json({ok:false,error:'sku obrigatório'},{status:400});
     const variant=await db.productVariant.update({where:{tenantId_sku:{tenantId,sku}},data:{active:false}});

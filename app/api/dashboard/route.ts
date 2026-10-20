@@ -93,7 +93,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
     channels.set(name,c);
     const key=localDay(s.date);
     const d=daily.get(key)||{date:key,revenue:0,profit:0,salesProfit:0,orders:0};
-    d.salesProfit-=invested; d.profit-=invested;
+    d.profit-=invested;
     daily.set(key,d);
   }
   const media=spend.reduce((sum,s)=>sum+Number(s.spend),0);
@@ -116,9 +116,9 @@ async function calculateDashboard(req: Request, tenantId: string) {
     expenseBreakdown.push({id:e.id,amount,basis});
     return sum+amount;
   },0);
-  const salesProfit=revenue-fees-media;
+  const salesProfit=revenue-fees;
   const grossProfit=salesProfit-cogs;
-  const profit=grossProfit-expenseTotal;
+  const profit=grossProfit-media-expenseTotal;
   const taxes=Math.round(revenue*4)/100;
   const markupUnitCost=unitsWithCost?unitCostTotal/unitsWithCost:product?costBySku.get(product)||0:0;
   const metaAds=spend.reduce((sum,s)=>/meta|facebook|instagram/i.test(s.platform)?sum+Number(s.spend):sum,0);
@@ -152,6 +152,6 @@ async function calculateDashboard(req: Request, tenantId: string) {
     available,
     trackingEvents:trackingTotal,
     daily:[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)),
-    channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,salesProfit:c.revenue-c.fees-c.invested,profit:c.revenue-c.cogs-c.fees-c.invested}))
+    channels:[...channels.values()].map(c=>({name:c.name,invested:c.invested,sales:c.sales,revenue:c.revenue,cpa:c.sales?c.invested/c.sales:null,roas:c.invested?c.revenue/c.invested:null,salesProfit:c.revenue-c.fees,profit:c.revenue-c.cogs-c.fees-c.invested}))
   };
 }

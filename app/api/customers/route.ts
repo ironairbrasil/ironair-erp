@@ -10,7 +10,7 @@ export async function GET(req:Request){
       where:{tenantId,orders:{some:{}}},
       take:250,
       orderBy:{createdAt:'desc'},
-      include:{orders:{select:{id:true,status:true,grossAmount:true,createdAt:true,paidAt:true,channel:true},orderBy:[{paidAt:'desc'},{createdAt:'desc'}]}}
+      include:{orders:{select:{id:true,status:true,grossAmount:true,createdAt:true,paidAt:true,channel:true,items:{select:{sku:true,name:true}}},orderBy:[{paidAt:'desc'},{createdAt:'desc'}]}}
     });
     const mapped=rows.map(c=>{
       const last=c.orders[0];
@@ -26,11 +26,12 @@ export async function GET(req:Request){
         paidOrders:c.orders.filter(o=>o.status==='PAID').length,
         revenue:c.orders.filter(o=>o.status==='PAID').reduce((sum,o)=>sum+Number(o.grossAmount),0),
         lastOrderAt:last?.paidAt||last?.createdAt||c.createdAt,
-        lastChannel:last?.channel
+        lastChannel:last?.channel,
+        orderHistory:c.orders.map(o=>({date:o.paidAt||o.createdAt,channel:o.channel,status:o.status,grossAmount:Number(o.grossAmount),items:o.items}))
       };
     });
     mapped.sort((a,b)=>new Date(b.lastOrderAt||0).getTime()-new Date(a.lastOrderAt||0).getTime());
-    return NextResponse.json(mapped.slice(0,100));
+    return NextResponse.json(mapped);
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'customers_error'},{status:500});
   }
@@ -82,6 +83,13 @@ export async function PATCH(req:Request){
 export async function DELETE(req:Request){
   try{
     const tenantId=await getTenantId(req);
+    if(req.headers.get('content-type')?.includes('application/json')){
+      const body=await req.json();
+      const ids=Array.isArray(body.ids)?body.ids.filter((id:unknown):id is string=>typeof id==='string'&&id.length>0):[];
+      if(!ids.length) return NextResponse.json({ok:false,error:'Selecione clientes para excluir'},{status:400});
+      const result=await db.customer.deleteMany({where:{tenantId,id:{in:ids}}});
+      return NextResponse.json({ok:true,deleted:result.count});
+    }
     const id=new URL(req.url).searchParams.get('id');
     if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
     await db.customer.deleteMany({where:{id,tenantId}});
