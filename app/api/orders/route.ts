@@ -98,20 +98,32 @@ export async function PATCH(req:Request){
     if(!id) return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});
     const existing=await db.order.findFirst({where:{id,tenantId},include:{items:{orderBy:{id:'asc'}},customer:true}});
     if(!existing) return NextResponse.json({ok:false,error:'Pedido não encontrado'},{status:404});
-    const editedFields=['feeAmount','shippingAmount'];
+    const editedFields=['feeAmount','shippingAmount','grossAmount','paidAt','paymentMethod','unitCost'];
     if(Object.prototype.hasOwnProperty.call(b,'customer')) editedFields.push('customer');
     if(Object.prototype.hasOwnProperty.call(b,'itemSku')) editedFields.push('itemSku');
+    const paidAtInput=String(b.paidAt||'').trim();
+    const paidAt=paidAtInput ? new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(paidAtInput)?paidAtInput:`${paidAtInput}:00-03:00`) : existing.paidAt;
+    if(paidAt&&Number.isNaN(paidAt.getTime())) return NextResponse.json({ok:false,error:'Data da venda inválida'},{status:400});
     await db.order.update({
       where:{id},
       data:{
         feeAmount:Number(b.feeAmount||b.fee||0),
         shippingAmount:Number(b.shippingAmount||b.freight||0),
+        grossAmount:Number(b.grossAmount??existing.grossAmount),
+        paidAt,
+        paymentMethod:String(b.paymentMethod??existing.paymentMethod??'').trim()||null,
         manualOverrides:mergeManualOverrides(existing.manualOverrides,editedFields) as any
       }
     });
     if(existing.customerId && Object.prototype.hasOwnProperty.call(b,'customer')){
       const name=String(b.customer||'').trim();
       if(name) await db.customer.updateMany({where:{id:existing.customerId,tenantId},data:{name}});
+    }else if(Object.prototype.hasOwnProperty.call(b,'customer')){
+      const name=String(b.customer||'').trim();
+      if(name){
+        const customer=await db.customer.create({data:{tenantId,name}});
+        await db.order.update({where:{id},data:{customerId:customer.id}});
+      }
     }
     if(Object.prototype.hasOwnProperty.call(b,'itemSku')){
       const sku=String(b.itemSku||'').trim();
@@ -143,14 +155,21 @@ export async function PATCH(req:Request){
         });
       }
     }
+    if(Object.prototype.hasOwnProperty.call(b,'cogs')){
+      const item=String(b.orderItemId||'')
+        ? await db.orderItem.findFirst({where:{id:String(b.orderItemId),tenantId,orderId:id}})
+        : await db.orderItem.findFirst({where:{tenantId,orderId:id},orderBy:{id:'asc'}});
+      if(item) await db.orderItem.update({where:{id:item.id},data:{unitCost:Number(b.cogs||0)/Math.max(1,item.quantity),manualOverrides:mergeManualOverrides(item.manualOverrides,['unitCost']) as any}});
+    }
+    if(paidAt) await db.inventoryMovement.updateMany({where:{tenantId,orderId:id,type:'SALE'},data:{createdAt:paidAt}});
     const updated=await db.order.findFirst({where:{id,tenantId},include:{items:{orderBy:{id:'asc'}},customer:true}});
     await auditLog({
       tenantId,
       entityType:'Order',
       entityId:id,
       action:'update_manual_order',
-      before:{feeAmount:existing.feeAmount,shippingAmount:existing.shippingAmount,customer:existing.customer?.name,items:existing.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId}))},
-      after:{feeAmount:updated?.feeAmount,shippingAmount:updated?.shippingAmount,customer:updated?.customer?.name,items:updated?.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId}))},
+      before:{grossAmount:existing.grossAmount,feeAmount:existing.feeAmount,shippingAmount:existing.shippingAmount,paidAt:existing.paidAt,paymentMethod:existing.paymentMethod,customer:existing.customer?.name,items:existing.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId,unitCost:i.unitCost}))},
+      after:{grossAmount:updated?.grossAmount,feeAmount:updated?.feeAmount,shippingAmount:updated?.shippingAmount,paidAt:updated?.paidAt,paymentMethod:updated?.paymentMethod,customer:updated?.customer?.name,items:updated?.items.map(i=>({id:i.id,sku:i.sku,variantId:i.variantId,unitCost:i.unitCost}))},
       metadata:{fields:editedFields,externalId:existing.externalId}
     });
     return NextResponse.json({ok:true});

@@ -852,6 +852,10 @@ export default function Home() {
                     customer: data.customer,
                     feeAmount: Number(data.feeAmount ?? data.fee ?? 0),
                     shippingAmount: Number(data.shippingAmount ?? data.freight ?? 0),
+                    grossAmount: Number(data.grossAmount ?? data.raw?.grossAmount ?? 0),
+                    cogs: Number(data.cogs ?? 0),
+                    paidAt: data.paidAt,
+                    paymentMethod: data.paymentMethod ?? data.raw?.paymentMethod ?? "",
                     orderItemId: data.orderItemId,
                     itemSku: data.itemSku,
                   }),
@@ -3429,14 +3433,15 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
 function SaleDetail({ s, set, products }: any) {
   const fee = Number(s.feeAmount ?? s.fee ?? 0),
     freight = Number(s.shippingAmount ?? s.freight ?? 0),
-    gross = Number(s.raw?.grossAmount || 0),
     rawItem = s.raw?.items?.[0] || {},
     originalSku = rawItem.sku || s.itemSku || "";
   const assignable = products.filter((p: any) => String(p.sku || "").match(/(127|220)/i));
   const selectedSku = String(s.itemSku ?? (assignable.some((p: any) => p.sku === originalSku) ? originalSku : ""));
   const selectedProduct = products.find((p: any) => p.sku === selectedSku);
   const qty = Number(rawItem.quantity || 1);
-  const cogs = selectedProduct ? Number(selectedProduct.unitCost ?? selectedProduct.cost ?? 0) * qty : Number(s.cogs || 0);
+  const cogs = Number(s.cogs ?? (Number(rawItem.unitCost || 0) * qty));
+  const paidAt = s.paidAt ?? saoPauloDateTimeLocal(new Date(s.raw?.paidAt || s.raw?.createdAt));
+  const paymentMethod = s.paymentMethod ?? s.raw?.paymentMethod ?? "";
   return (
     <div className="detailGrid">
       <label className="field">
@@ -3444,22 +3449,10 @@ function SaleDetail({ s, set, products }: any) {
         <input value={s.customer || ""} onChange={(e) => set("customer", e.target.value)} />
       </label>
       <AnchoredSelect label="Produto / voltagem" value={selectedSku} onChange={(v) => set("itemSku", v)} options={[{ value: "", label: `Sem atribuir${originalSku ? ` (${originalSku})` : ""}` }, ...assignable.map((p: any) => ({ value: p.sku, label: `${p.sku} · ${p.product}` }))]} />
-      <div className="detailBox">
-        <span>Valor</span>
-        <b>{s.value}</b>
-      </div>
-      <div className="detailBox">
-        <span>Custo dos produtos</span>
-        <b>{money(cogs)}</b>
-      </div>
-      <div className="detailBox">
-        <span>Data da venda</span>
-        <b>{fmtDate(s.raw?.paidAt || s.raw?.createdAt)}</b>
-      </div>
-      <div className="detailBox">
-        <span>SKU atual</span>
-        <b>{originalSku || "—"}</b>
-      </div>
+      <label className="field"><span>Valor</span><input type="number" value={Number(s.grossAmount ?? s.raw?.grossAmount ?? 0)} onChange={(e) => set("grossAmount", e.target.value)} /></label>
+      <label className="field"><span>Custo dos produtos</span><input type="number" value={cogs} onChange={(e) => set("cogs", e.target.value)} /></label>
+      <label className="field"><span>Data e hora da venda</span><input type="datetime-local" value={paidAt} onChange={(e) => set("paidAt", e.target.value)} /></label>
+      <label className="field"><span>Método de pagamento</span><input value={paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} placeholder="Informado pela plataforma" /></label>
       <label className="field">
         <span>Taxa da plataforma</span>
         <input type="number" value={fee} onChange={(e) => set("feeAmount", e.target.value)} />
