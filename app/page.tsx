@@ -327,7 +327,14 @@ export default function Home() {
   const inventorySalesRange = period === "Tempo todo" ? null : periodRange(period, range, firstSaleDate);
   const periodInventoryProducts = formatInventory(inventoryRows, inventoryMovementRows, scopedOrders(orderRows), inventorySalesRange);
   const stockAlerts = products.filter((item) => Number(item.available || 0) <= Number(item.safety || 0)).map((item) => `${item.product} ${item.name || item.sku}: ${item.available} ${Number(item.available) === 1 ? "unidade disponível" : "unidades disponíveis"}.`);
-  const recentSales = orderRows.filter((order) => order.status === "PAID").sort((a, b) => new Date(b.paidAt || b.createdAt).getTime() - new Date(a.paidAt || a.createdAt).getTime()).slice(0, 8);
+  const notificationMonth = new Date();
+  const recentSales = orderRows
+    .filter((order) => {
+      if (order.status !== "PAID") return false;
+      const date = new Date(order.paidAt || order.createdAt);
+      return date.getFullYear() === notificationMonth.getFullYear() && date.getMonth() === notificationMonth.getMonth();
+    })
+    .sort((a, b) => new Date(a.paidAt || a.createdAt).getTime() - new Date(b.paidAt || b.createdAt).getTime());
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
   const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
