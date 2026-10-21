@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: 'Gestão de vendas, estoque e desempenho multicanal',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, title: 'Iron Air Seller | Gestão multicanal', statusBarStyle: 'black-translucent' },
-  icons: { apple: '/iron-air-seller-apple-touch-icon-v2.png', icon: '/iron-air-seller-app-icon-v2.png' }
+  icons: { apple: '/apple-icon.png', icon: '/icon.png' }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -31,6 +31,7 @@ const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi
 const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
 const dashboardExpandedStorageKey = "ironair-dashboard-expanded-v1";
 const dashboardLayoutDirtyKey = "ironair-dashboard-layout-pending-v1";
+const activeViewStorageKey = "ironair-active-view-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, {
     ...init,
@@ -141,6 +142,16 @@ export default function Home() {
     }).catch(() => { location.href = '/login'; });
   }, []);
   const [view, setView] = useState("Visão Geral");
+  const [viewStorageReady, setViewStorageReady] = useState(false);
+  useEffect(() => {
+    const savedView = sessionStorage.getItem(activeViewStorageKey);
+    if (savedView && menu.some(([label]) => label === savedView)) setView(savedView);
+    setViewStorageReady(true);
+  }, []);
+  useEffect(() => {
+    if (!viewStorageReady) return;
+    sessionStorage.setItem(activeViewStorageKey, view);
+  }, [view, viewStorageReady]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [period, setPeriod] = useState("Hoje");
   const [platform, setPlatform] = useState("");
@@ -200,6 +211,7 @@ export default function Home() {
   const [orderRows, setOrderRows] = useState<any[]>([]);
   const [inventoryRows, setInventoryRows] = useState<any[]>([]);
   const [inventoryMovementRows, setInventoryMovementRows] = useState<any[]>([]);
+  const [inventoryFolders, setInventoryFolders] = useState<any[]>([]);
   const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
   const [integrationRows, setIntegrationRows] = useState<any[]>([]);
   const connectedProviders = new Set(integrationRows.filter((row) => row.status === "CONNECTED").map((row) => row.provider));
@@ -319,16 +331,17 @@ export default function Home() {
   const dashboardRowStep = () => typeof window === "undefined" ? 4 : window.innerWidth <= 650 ? 1 : window.innerWidth <= 1050 ? 2 : 4;
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
   const dashboardPlatforms = useMemo(() => [...new Set(orderRows.map((o) => String(o.channel || "")))].filter(Boolean).sort(), [orderRows]);
-  const dashboardProducts = useMemo(() => catalogRows.map((p) => [p.sku, p.name || p.product || p.sku] as [string, string]).sort((a, b) => a[1].localeCompare(b[1])), [catalogRows]);
-  const dashboardPaymentMethods = useMemo(() => [...new Set(orderRows.map((o) => normalizePaymentMethod(o.paymentMethod)).filter(Boolean))].sort(), [orderRows]);
+  const dashboardProducts = useMemo(() => [...new Map<string,string>(orderRows.flatMap((order:any)=>order.items||[]).map((item:any)=>[String(item.variant?.sku||item.sku),orderItemProductLabel(item)] as [string,string])).entries()].sort((a,b)=>a[1].localeCompare(b[1])), [orderRows]);
+  const dashboardPaymentMethods = useMemo(() => [...new Set(orderRows.map((o) => normalizePaymentMethod(o.paymentMethod)).filter((method) => method && method.toLowerCase() !== "manual"))].sort(), [orderRows]);
   const scopedOrders = (orders: any[]) => {
     const { platform: selectedPlatform, product: selectedProduct, paymentMethod: selectedPaymentMethod } = dashboardSelection.current;
-    return orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => i.sku === selectedProduct)) && (!selectedPaymentMethod || normalizePaymentMethod(o.paymentMethod) === selectedPaymentMethod));
+    return orders.filter((o) => (!selectedPlatform || o.channel === selectedPlatform) && (!selectedProduct || (o.items || []).some((i: any) => (i.variant?.sku || i.sku) === selectedProduct)) && (!selectedPaymentMethod || normalizePaymentMethod(o.paymentMethod) === selectedPaymentMethod));
   };
   const firstSaleDate = firstPaidSaleDay(scopedOrders(orderRows));
   const allTimeStart = period === "Tempo todo" && dashboard?.periodMode === "all" ? dashboard.periodFrom : firstSaleDate;
   const inventorySalesRange = period === "Tempo todo" ? null : periodRange(period, range, firstSaleDate);
   const periodInventoryProducts = formatInventory(inventoryRows, inventoryMovementRows, scopedOrders(orderRows), inventorySalesRange);
+  const stockInventoryProducts = formatInventory(inventoryRows, inventoryMovementRows, orderRows, null);
   const stockAlerts = products.filter((item) => Number(item.available || 0) <= Number(item.safety || 0)).map((item) => `${item.product} ${item.name || item.sku}: ${item.available} ${Number(item.available) === 1 ? "unidade disponível" : "unidades disponíveis"}.`);
   const recentSales = orderRows
     .filter((order) => order.status === "PAID")
@@ -413,7 +426,7 @@ export default function Home() {
     if (showLoading) setLoading(true);
     const routes: Record<string, { url: string; fallback: any; apply: (data: any) => void }> = {
       orders: { url: "/api/orders", fallback: [], apply: (data) => { setOrderRows(data || []); setSales(formatOrders(data)); } },
-      inventory: { url: "/api/inventory", fallback: { balances: [], movements: [] }, apply: (data) => { setInventoryRows(data.balances || []); setInventoryMovementRows(data.movements || []); setProducts(formatInventory(data.balances || [], data.movements || [])); setMovements(formatMovements(data.movements || [], data.balances || [])); } },
+      inventory: { url: "/api/inventory", fallback: { balances: [], movements: [], folders: [] }, apply: (data) => { setInventoryRows(data.balances || []); setInventoryMovementRows(data.movements || []); setInventoryFolders(data.folders || []); setProducts(formatInventory(data.balances || [], data.movements || [])); setMovements(formatMovements(data.movements || [], data.balances || [], data.folders || [])); } },
       customers: { url: "/api/customers", fallback: [], apply: (data) => setCustomers(data || []) },
       campaigns: { url: "/api/campaigns?hierarchy=1", fallback: { campaigns: [], adsets: [], ads: [] }, apply: (data) => { setCampaigns(formatCampaigns(data.campaigns || [], "campaign")); setAdsets(formatCampaigns(data.adsets || [], "adset")); setAds(formatCampaigns(data.ads || [], "ad")); } },
       products: { url: "/api/products", fallback: [], apply: (data) => setCatalogRows(data || []) },
@@ -427,7 +440,7 @@ export default function Home() {
       "Vendas": ["orders", "inventory", "products", "customers", "integrations"],
       "Devoluções": ["returns", "orders"],
       "Clientes": ["customers"],
-      "Produtos": ["products", "inventory"],
+      "Produtos": ["products", "inventory", "orders"],
       "Estoque": ["inventory", "orders", "products", "integrations"],
       "Despesas": ["expenses"],
       "Campanhas": [],
@@ -699,13 +712,13 @@ export default function Home() {
                   </div>
                 </div>}
               </div>
-              <div className="dashboardFilter exportMenu platformFilter"><span>Plataforma</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "platform" ? null : "platform")} aria-expanded={filterModal === "platform"}>{platform ? platform.replaceAll("_", " ") : "Todas"}<ChevronDown size={14} /></button>
-                {filterModal === "platform" && <div className="exportOptions dashboardOptions">{["", ...dashboardPlatforms].map((x) => <button key={x || "all"} onClick={() => { setPlatform(x); setFilterModal(null); }}>{x ? x.replaceAll("_", " ") : "Todas"}</button>)}</div>}
+              <div className="dashboardFilter exportMenu platformFilter"><span>Plataforma</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "platform" ? null : "platform")} aria-expanded={filterModal === "platform"}>{platform && salesOriginLogo(platform) && <span className="filterPlatformLogo"><img src={salesOriginLogo(platform)} alt="" /></span>}<span>{platform ? originLabel(platform) : "TODAS"}</span><ChevronDown size={14} /></button>
+                {filterModal === "platform" && <div className="exportOptions dashboardOptions platformFilterOptions">{["", ...dashboardPlatforms].map((x) => <button key={x || "all"} onClick={() => { setPlatform(x); setFilterModal(null); }}>{x && salesOriginLogo(x) && <span className="filterPlatformLogo"><img src={salesOriginLogo(x)} alt="" /></span>}<span>{x ? originLabel(x) : "TODAS"}</span></button>)}</div>}
               </div>
               <div className="dashboardFilter exportMenu"><span>Produto</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "product" ? null : "product")} aria-expanded={filterModal === "product"}>{product ? String(dashboardProducts.find(([sku]) => sku === product)?.[1] || product) : "Todos"}<ChevronDown size={14} /></button>
                 {filterModal === "product" && <div className="exportOptions dashboardOptions">{[["", "Todos"], ...dashboardProducts].map(([sku, name]) => <button key={String(sku) || "all"} onClick={() => { setProduct(String(sku)); setFilterModal(null); }}>{String(name)}</button>)}</div>}
               </div>
-              <div className="dashboardFilter exportMenu"><span>Pagamento</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "payment" ? null : "payment")} aria-expanded={filterModal === "payment"}>{paymentMethod || "Todos"}<ChevronDown size={14} /></button>
+              <div className="dashboardFilter exportMenu"><span>Método de Pag.</span><button className="filterTrigger" onClick={() => setFilterModal(filterModal === "payment" ? null : "payment")} aria-expanded={filterModal === "payment"}>{paymentMethod || "Todos"}<ChevronDown size={14} /></button>
                 {filterModal === "payment" && <div className="exportOptions dashboardOptions">{["", ...dashboardPaymentMethods].map((method) => <button key={method || "all"} onClick={() => { setPaymentMethod(method); setFilterModal(null); }}>{method || "Todos"}</button>)}</div>}
               </div>
             </div>
@@ -742,7 +755,7 @@ export default function Home() {
                     <button type="button" className="dashboardHorizontalMove" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} folders={inventoryFolders} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
                 </div>}
                 </Fragment>;
               })}
@@ -791,12 +804,12 @@ export default function Home() {
         )}{" "}
         {view === "Estoque" && (
           <>
-            <Inventory products={periodInventoryProducts} salesPeriod={period} onEdit={(p: any) => open("product", p)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} bulkEnabled showShopee={connectedProviders.has("Shopee")} />
-            <Movements movements={movements} onNew={() => open("movement")} onEdit={(movement: any) => open("movementEdit", movement)} />
+            <Inventory products={stockInventoryProducts} folders={inventoryFolders} onRefresh={() => loadData(false,"view")} salesPeriod="desde o início de cada pasta" onEdit={(p: any) => open("product", p)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} bulkEnabled showShopee={connectedProviders.has("Shopee")} />
+            <Movements movements={movements} onNew={() => open("movement")} onEdit={(movement: any) => open("movementEdit", movement)} onDelete={(movement: any) => remove(`/api/inventory/movement/${encodeURIComponent(movement.id)}`)} />
           </>
         )}{" "}
         {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} onDeleteMany={(ids: string[]) => removeMany("/api/expenses", ids, "despesas")} />}
-        {view === "Produtos" && <Products products={catalogRows} inventory={products} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
+        {view === "Produtos" && <Products products={catalogRows} orders={orderRows} platforms={[...connectedProviders].filter((provider) => ["Shopify", "Mercado Livre", "Amazon", "Shopee"].includes(provider))} onImported={() => loadData(false, "view")} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
         {view === "Performance" && <PerformanceView />}{" "}
         {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
@@ -807,6 +820,7 @@ export default function Home() {
           close={() => setModal(null)}
           notify={notify}
           products={products}
+          inventoryFolders={inventoryFolders}
           catalogProducts={catalogRows}
           integrations={integrationsSeed}
           channelOptions={salesAndStockOptions(connectedProviders)}
@@ -830,14 +844,12 @@ export default function Home() {
                   method: "PATCH",
                   body: JSON.stringify({
                     sku: data.sku,
+                    folderId: data.folderId,
                     type: data.type,
                     quantity: Number(data.qty),
-                    createdAt: data.createdAt,
+                    createdAt: data.date || data.createdAt,
                     reference: data.ref,
-                    note: data.note,
-                    warehouseCode: data.warehouseCode,
-                    fromWarehouseCode: data.fromWarehouseCode,
-                    toWarehouseCode: data.toWarehouseCode,
+                    warehouseCode: "CENTRAL",
                   }),
                 });
               else if (kind === "sale")
@@ -1126,14 +1138,10 @@ function fmtDate(value: any) {
     : "—";
 }
 function fmtMovementDate(movement: any) {
-  const value = movement?.createdAt;
-  if (movement?.source === "MANUAL" && typeof value === "string") {
-    const date = new Date(value);
-    if (date.getUTCHours() === 0 && date.getUTCMinutes() === 0 && date.getUTCSeconds() === 0) {
-      const [, month, day] = value.match(/^(\d{4})-(\d{2})-(\d{2})/) || [];
-      if (day && month) return `${day}/${month}`;
-    }
-    return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Sao_Paulo" });
+  const value=movement?.createdAt;
+  if(movement?.source==="MANUAL"&&typeof value==="string"&&/T00:00:00(?:\.\d+)?Z$/.test(value)){
+    const [,month,day]=value.match(/^(\d{4})-(\d{2})-(\d{2})/)||[];
+    if(day&&month)return `${day}/${month}, 00:00`;
   }
   return fmtDate(value);
 }
@@ -1306,6 +1314,9 @@ function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false, mod
   const dates = periodRange(period, range, firstSaleDate);
   return <SalesChart points={points} from={dates.from} to={dates.to} hidden={hidden} mode={mode} />;
 }
+function orderItemProductLabel(item:any){
+  return String(item?.name||'').trim();
+}
 function formatOrders(rows: any[]) {
   return (rows || []).map((o) => {
     const items = o.items || [];
@@ -1322,10 +1333,10 @@ function formatOrders(rows: any[]) {
     const revenue = Number(o.grossAmount || 0) - Number(o.discountAmount || 0);
     return {
       raw: o,
-      id: o.externalId,
+      id: o.sourceSnapshot?.displayId || o.externalId,
       date: fmtDate(o.paidAt || o.createdAt),
       customer: o.customer?.name || "Cliente",
-      product: items.map((i: any) => `${i.name}${i.sku ? ` (${i.sku})` : ""}`).join(", ") || "—",
+      product: items.map(orderItemProductLabel).filter(Boolean).join(", ") || "—",
       voltage: voltages.join(", ") || "—",
       itemSku: firstItem?.sku || "",
       orderItemId: firstItem?.id || "",
@@ -1346,6 +1357,7 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
   const bySku = new Map<string, any>();
   const transfers = new Map<string, { fba: number; full: number }>();
   const sold = new Map<string, any>();
+  const physicalBySku = new Map<string, number>();
   for (const m of movements || []) {
     const day = movementDay(m);
     const inPeriod = !salesRange || (day >= salesRange.from && day <= salesRange.to);
@@ -1372,13 +1384,14 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
       else bucket.manual += qty;
       sold.set(m.sku, bucket);
     }
+    if(m.type==='ADJUSTMENT') physicalBySku.set(m.sku,Number(physicalBySku.get(m.sku)||0)+Number(m.quantity||0));
   }
   if (orders) for (const order of orders) {
     if (order.status !== "PAID") continue;
     const paidDay = dateKey(order.paidAt);
     if (!paidDay || (salesRange && (paidDay < salesRange.from || paidDay > salesRange.to))) continue;
     for (const item of order.items || []) {
-      const sku = String(item.sku || item.variant?.sku || "");
+      const sku = String(item.variant?.sku || item.sku || "");
       if (!sku) continue;
       const bucket = sold.get(sku) || { shopify: 0, ml: 0, amazon: 0, shopee: 0, manual: 0 };
       const quantity = Number(item.quantity || 0);
@@ -1416,27 +1429,59 @@ function formatInventory(rows: any[], movements: any[] = [], orders?: any[], sal
       fullQty: 0,
       status: "Saudável",
       productId: r.variant?.productId,
+      parentName:r.variant?.product?.name,
+      parentVariantCount:Number(r.variant?.product?._count?.variants||1),
+      parentSku:r.variant?.source==='AMAZON'?r.variant?.product?.variants?.find((parent:any)=>parent.source==='AMAZON')?.sku||null:null,
+      source: r.variant?.source || "MANUAL",
+      fulfillment:r.variant?.fulfillment,
+      platformManaged:Boolean(r.platformManaged),
+      folderId: r.variant?.inventoryFolderId || null,
+      folderName: r.variant?.inventoryFolder?.name || "Sem pasta",
+      sharedPhysical: r.folderPhysical,
+      sharedAvailable: r.folderAvailable,
+      trackedShopify: Number(r.trackedSales?.shopify || 0),
+      trackedMl: Number(r.trackedSales?.ml || 0),
+      trackedAmazon: Number(r.trackedSales?.amazon || 0),
+      trackedShopee: Number(r.trackedSales?.shopee || 0),
+      trackedManual: Number(r.trackedSales?.manual || 0),
     };
     if (r.warehouse?.code === "CENTRAL") {
       item.physical += r.onHand;
       item.reserved += r.reserved;
-      item.available += Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0));
+      item.available += Number(r.available ?? Math.max(0, Number(r.onHand || 0) - Number(r.reserved || 0)));
     }
     const transfer = transfers.get(sku);
     if (transfer) { item.fbaQty = transfer.fba; item.fullQty = transfer.full; }
     item.status = item.available <= item.safety ? "Pouco" : "Saudável";
     bySku.set(sku, item);
   }
-  return [...bySku.values()];
+  return [...bySku.values()].map(item=>{
+    const sales=item.shopify+item.ml+item.amazon+item.shopee+item.manual;
+    const physical=item.platformManaged?Number(item.physical||0):Number(physicalBySku.get(item.sku)||0)-sales;
+    const available=!item.platformManaged&&!item.folderId?physical-Number(item.reserved||0):Number(item.available||0);
+    return {...item,physical,available,status:available<=item.safety?'Pouco':'Saudável'};
+  });
 }
-function formatMovements(rows: any[], balances: any[] = []) {
+function movementTypeLabel(type: string, quantity = 0) {
+  if (type === "ADJUSTMENT" || type === "PURCHASE") return quantity < 0 ? "Saída manual" : "Entrada manual";
+  if (type === "SALE") return "Venda";
+  if (type === "DAMAGE") return "Avaria";
+  if (type === "RETURN") return "Devolução";
+  if (type === "RESERVE") return "Reserva";
+  if (type === "RELEASE") return "Liberação";
+  if (type === "TRANSFER_IN") return "Transferência recebida";
+  if (type === "TRANSFER_OUT") return "Transferência enviada";
+  return type;
+}
+function formatMovements(rows: any[], balances: any[] = [], folders: any[] = []) {
   const byKey = new Map((rows || []).filter((m) => m.idempotencyKey).map((m) => [m.idempotencyKey, m]));
   const running = new Map<string, number>();
-  for (const balance of balances) running.set(`${balance.variant?.sku || balance.sku}:${balance.warehouse?.code || balance.warehouseCode}`, Number(balance.onHand || 0));
+  for (const folder of folders) running.set(`folder:${folder.name}`, Number(folder.physical || 0));
+  for (const balance of balances) if (!balance.variant?.inventoryFolder?.name) running.set(`sku:${balance.variant?.sku || balance.sku}:${balance.warehouse?.code || balance.warehouseCode}`, Number(balance.officialOnHand ?? balance.onHand ?? 0));
   return (rows || []).map((m) => {
     const pairKey = String(m.idempotencyKey || "");
     const other = byKey.get(m.type === "TRANSFER_IN" ? pairKey.slice(0, -3) : `${pairKey}:in`);
-    const balanceKey = `${m.sku}:${m.warehouseCode}`;
+    const balanceKey = m.folderName && m.folderName !== "Sem pasta" ? `folder:${m.folderName}` : `sku:${m.sku}:${m.warehouseCode}`;
     const balance = running.get(balanceKey);
     if (balance !== undefined && m.type !== "RESERVE" && m.type !== "RELEASE") running.set(balanceKey, balance - Number(m.quantity || 0));
     return ({
@@ -1444,8 +1489,11 @@ function formatMovements(rows: any[], balances: any[] = []) {
     raw: m,
     date: fmtMovementDate(m),
     createdAt: movementLocalDateTime(m),
-    sku: m.sku,
-    type: m.type,
+    sku: m.folderMovement ? "—" : m.sku,
+    folderId: m.folderId || m.raw?.variant?.inventoryFolder?.id || null,
+    folderName: m.folderName || "Sem pasta",
+    type: movementTypeLabel(m.type, Number(m.quantity || 0)),
+    rawType: m.type,
     qty: m.quantity,
     ref: m.reference || m.note || m.warehouseCode,
     reference: m.reference || "",
@@ -1552,15 +1600,48 @@ function MobileBulkActions({ ids, selected, setSelected, selecting, setSelecting
     </div>}
   </>;
 }
-function Inventory({ products, onEdit, onDeleteMany, bulkEnabled = false, hidden = false, showShopee = false, salesPeriod = "Tempo todo" }: any) {
+function Inventory({ products, folders = [], onRefresh, onEdit, onDeleteMany, bulkEnabled = false, hidden = false, showShopee = false, salesPeriod = "Tempo todo" }: any) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const toggleSelected = (sku: string) => setSelected((previous) => { const next = new Set(previous); next.has(sku) ? next.delete(sku) : next.add(sku); return next; });
-  const physical = products.reduce((s: number, p: any) => s + Number(p.physical || 0), 0);
-  const available = products.reduce((s: number, p: any) => s + Number(p.available || 0), 0);
-  const reserved = products.reduce((s: number, p: any) => s + Number(p.reserved || 0), 0);
+  const assignedFolderIds=new Set(folders.map((folder:any)=>folder.id));
+  const unassignedProducts=products.filter((product:any)=>!product.folderId||!assignedFolderIds.has(product.folderId));
+  const physical = folders.reduce((sum:number,folder:any)=>sum+Number(folder.physical||0),0)+unassignedProducts.reduce((sum:number,product:any)=>sum+Number(product.physical||0),0);
+  const available = folders.reduce((sum:number,folder:any)=>sum+Number(folder.available||0),0)+unassignedProducts.reduce((sum:number,product:any)=>sum+Number(product.available||0),0);
+  const reserved = folders.reduce((sum:number,folder:any)=>sum+Number(folder.reserved||0),0)+unassignedProducts.reduce((sum:number,product:any)=>sum+Number(product.reserved||0),0);
   const total = (key: string) => products.reduce((sum: number, item: any) => sum + Number(item[key] || 0), 0);
-  const totalSales = total("shopify") + total("ml") + total("amazon") + total("shopee") + total("manual");
+  const [openVoltageFolders, setOpenVoltageFolders] = useState<Set<string>>(new Set());
+  const [folderModalOpen,setFolderModalOpen]=useState(false);
+  const [folderName,setFolderName]=useState("");
+  const [folderSkus,setFolderSkus]=useState<Set<string>>(new Set());
+  const [folderBusy,setFolderBusy]=useState(false);
+  const voltageFolders = useMemo(() => {
+    const grouped=new Map<string,any[]>(folders.map((folder:any)=>[String(folder.name),[]]));
+    grouped.set("Sem pasta",[]);
+    for(const item of products){const name=String(item.folderName||"Sem pasta");if(!grouped.has(name))grouped.set(name,[]);grouped.get(name)!.push(item)}
+    return [...grouped.entries()].filter(([,items])=>items.length);
+  }, [products,folders]);
+  const folderTotal = (items: any[], key: string) => items.reduce((sum, item) => sum + Number(item[key] || 0), 0);
+  const folderStock=(name:string,items:any[],key:'physical'|'available')=>name==='Sem pasta'?folderTotal(items,key):Number(folders.find((folder:any)=>folder.name===name)?.[key]||0);
+  const folderMetric=(name:string,items:any[],key:string)=>name==='Sem pasta'?folderTotal(items,key):Number(folders.find((folder:any)=>folder.name===name)?.[key]||0);
+  const productSale=(item:any,key:'shopify'|'ml'|'amazon'|'shopee'|'manual')=>{
+    return Number(item[key]||0);
+  };
+  const consolidatedTotal=(key:string)=>folders.reduce((sum:number,folder:any)=>sum+Number(folder[key]||0),0)+folderTotal(unassignedProducts,key);
+  const totalSales=consolidatedTotal("shopify")+consolidatedTotal("ml")+consolidatedTotal("amazon")+consolidatedTotal("shopee")+consolidatedTotal("manual");
+  const toggleVoltageFolder = (folder: string) => setOpenVoltageFolders(current => { const next = new Set(current); next.has(folder) ? next.delete(folder) : next.add(folder); return next; });
+  const moveToFolder=async(sku:string,folderId:string)=>{await apiJson('/api/inventory/folders',{method:'PATCH',body:JSON.stringify({sku,folderId:folderId||null})});await onRefresh?.()};
+  const createFolder=async()=>{if(!folderName.trim())return;setFolderBusy(true);try{await apiJson('/api/inventory/folders',{method:'POST',body:JSON.stringify({name:folderName.trim(),skus:[...folderSkus]})});setFolderName('');setFolderSkus(new Set());setFolderModalOpen(false);await onRefresh?.()}finally{setFolderBusy(false)}};
+  const productRow = (i: any) => <tr key={i.sku} className={`inventoryChildRow ${bulkEnabled && selected.has(String(i.sku)) ? "mobileSelectedRow" : ""}`} onClick={() => { if (bulkEnabled && window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(i.sku)); else onEdit(i); } }}>
+    {bulkEnabled && selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(i.sku))} onChange={() => toggleSelected(String(i.sku))} aria-label={`Selecionar ${i.product}`} /></td>}
+    <td><b className="inventoryProductName" title={i.product}>{i.product}</b></td>
+    <td><b>{i.sku}</b></td>
+    <td className="salesOriginCell"><span className="salesOrigin">{salesOriginLogo(i.source)&&<span className="salesOriginLogo"><img src={salesOriginLogo(i.source)} alt="" /></span>}<span>{originLabel(i.fulfillment === 'Amazon FBA' ? i.fulfillment : i.source)}</span></span></td>
+    <td>{bulkEnabled?<div className="inventoryFolderMenu" onClick={event=>event.stopPropagation()}><AnchoredSelect compact value={String(i.folderId||"")} onChange={folderId=>void moveToFolder(i.sku,folderId)} options={[{value:"",label:"Sem pasta"},...folders.map((folder:any)=>({value:String(folder.id),label:String(folder.name)}))]}/></div>:i.folderName}</td><td>{hidden ? "—" : money(i.cost || 0)}</td><td>{hidden ? "—" : money(i.price || 0)}</td><td>{hidden ? "—" : i.platformManaged&&i.folderId?`${i.available}/${Number(i.sharedPhysical||0)}`:i.platformManaged?i.physical:bulkEnabled&&i.folderId?i.sharedPhysical:i.physical}</td><td>{hidden ? "—" : i.available}</td>
+    <td>{hidden ? "—" : productSale(i,"shopify")}</td><td>{hidden ? "—" : productSale(i,"ml")}</td><td>{hidden ? "—" : productSale(i,"amazon")}</td>{showShopee && <td>{hidden ? "—" : productSale(i,"shopee")}</td>}
+    <td><b>{hidden ? "—" : productSale(i,"shopify")+productSale(i,"ml")+productSale(i,"amazon")+productSale(i,"shopee")+productSale(i,"manual")}</b></td><td>{hidden ? "—" : i.fbaQty}</td><td>{hidden ? "—" : i.fullQty}</td>
+    <td><span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span></td><td><button className="mini" onClick={(event) => { event.stopPropagation(); onEdit(i); }} disabled={hidden}><Pencil size={14} /></button></td>
+  </tr>;
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -1579,6 +1660,7 @@ function Inventory({ products, onEdit, onDeleteMany, bulkEnabled = false, hidden
             <b>{hidden ? "—" : reserved}</b> reservado
           </span>
         </div>
+        {bulkEnabled&&<button type="button" className="ghost clickable inventoryCreateFolder" onClick={()=>{setFolderSkus(new Set());setFolderModalOpen(true)}}><Plus size={14}/>Nova pasta</button>}
       </div>
       {bulkEnabled && <MobileBulkActions ids={products.map((item: any) => String(item.sku))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="produtos" />}
       <div className="formula">Estoque de segurança só muda o status para Pouco; não prende disponibilidade.</div>
@@ -1589,6 +1671,8 @@ function Inventory({ products, onEdit, onDeleteMany, bulkEnabled = false, hidden
               {bulkEnabled && selecting && <th className="checkCol"><input type="checkbox" checked={products.length > 0 && products.every((item: any) => selected.has(String(item.sku)))} onChange={() => setSelected(products.every((item: any) => selected.has(String(item.sku))) ? new Set() : new Set(products.map((item: any) => String(item.sku))))} aria-label="Selecionar todos os produtos" /></th>}
               <th>Produto</th>
               <th>SKU</th>
+              <th className="salesOriginCell">Origem</th>
+              <th>Pasta</th>
               <th>Custo</th>
               <th>Preço</th>
               <th>Físico</th>
@@ -1604,84 +1688,133 @@ function Inventory({ products, onEdit, onDeleteMany, bulkEnabled = false, hidden
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {products.map((i: any) => (
-              <tr key={i.sku} className={bulkEnabled && selected.has(String(i.sku)) ? "mobileSelectedRow" : undefined} onClick={() => { if (bulkEnabled && window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(i.sku)); else onEdit(i); } }}>
-                {bulkEnabled && selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(i.sku))} onChange={() => toggleSelected(String(i.sku))} aria-label={`Selecionar ${i.product}`} /></td>}
-                <td>
-                  <b>{i.product}</b>
-                </td>
-                <td>{i.sku}</td>
-                <td>{hidden ? "—" : money(i.cost || 0)}</td>
-                <td>{hidden ? "—" : money(i.price || 0)}</td>
-                <td>{hidden ? "—" : i.physical}</td>
-                <td>
-                  <b>{hidden ? "—" : i.available}</b>
-                </td>
-                <td>{hidden ? "—" : i.shopify}</td>
-                <td>{hidden ? "—" : i.ml}</td>
-                <td>{hidden ? "—" : i.amazon}</td>
-                {showShopee && <td>{hidden ? "—" : i.shopee}</td>}
-                <td><b>{hidden ? "—" : Number(i.shopify || 0) + Number(i.ml || 0) + Number(i.amazon || 0) + Number(i.shopee || 0) + Number(i.manual || 0)}</b></td>
-                <td>{hidden ? "—" : i.fbaQty}</td>
-                <td>{hidden ? "—" : i.fullQty}</td>
-                <td>
-                  <span className={`status ${i.status === "Saudável" ? "ok" : "warn"}`}>{i.status}</span>
-                </td>
-                <td>
-                  <button className="mini" onClick={(event) => { event.stopPropagation(); onEdit(i); }} disabled={hidden}>
-                    <Pencil size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot><tr className="inventoryTotalRow">{bulkEnabled && selecting && <td className="checkCol" />}<td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td><b>{hidden ? "—" : available}</b></td><td>{hidden ? "—" : total("shopify")}</td><td>{hidden ? "—" : total("ml")}</td><td>{hidden ? "—" : total("amazon")}</td>{showShopee && <td>{hidden ? "—" : total("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>{hidden ? "—" : total("fbaQty")}</td><td>{hidden ? "—" : total("fullQty")}</td><td>—</td><td></td></tr></tfoot>
+          <tbody>{voltageFolders.map(([folder,items])=>{if(folder==='Sem pasta')return <Fragment key={folder}>{items.map(productRow)}</Fragment>;const open=openVoltageFolders.has(folder);const sales=folderMetric(folder,items,"shopify")+folderMetric(folder,items,"ml")+folderMetric(folder,items,"amazon")+folderMetric(folder,items,"shopee")+folderMetric(folder,items,"manual");return <Fragment key={folder}><tr className="inventoryFolderRow" onClick={()=>toggleVoltageFolder(folder)}>{bulkEnabled&&selecting&&<td/>}<td><button type="button" className="inventoryFolderButton">{open?<ChevronUp size={16}/>:<ChevronDown size={16}/>}<span><b>{folder}</b><small>{items.length} {items.length===1?"produto":"produtos"}</small></span></button></td><td>—</td><td>—</td><td>{folder}</td><td>—</td><td>—</td><td><b>{hidden?"—":folderStock(folder,items,"physical")}</b></td><td>{hidden?"—":folderStock(folder,items,"available")}</td><td>{hidden?"—":folderMetric(folder,items,"shopify")}</td><td>{hidden?"—":folderMetric(folder,items,"ml")}</td><td>{hidden?"—":folderMetric(folder,items,"amazon")}</td>{showShopee&&<td>{hidden?"—":folderMetric(folder,items,"shopee")}</td>}<td><b>{hidden?"—":sales}</b></td><td>{hidden?"—":folderTotal(items,"fbaQty")}</td><td>{hidden?"—":folderTotal(items,"fullQty")}</td><td>—</td><td></td></tr>{open&&items.map(productRow)}</Fragment>})}</tbody>
+          <tfoot><tr className="inventoryTotalRow">{bulkEnabled && selecting && <td className="checkCol" />}<td><b>Total</b></td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td><b>{hidden ? "—" : physical}</b></td><td>—</td><td>{hidden ? "—" : consolidatedTotal("shopify")}</td><td>{hidden ? "—" : consolidatedTotal("ml")}</td><td>{hidden ? "—" : consolidatedTotal("amazon")}</td>{showShopee && <td>{hidden ? "—" : consolidatedTotal("shopee")}</td>}<td><b>{hidden ? "—" : totalSales}</b></td><td>{hidden ? "—" : total("fbaQty")}</td><td>{hidden ? "—" : total("fullQty")}</td><td>—</td><td></td></tr></tfoot>
         </table>
       </div>
+      {folderModalOpen&&<div className="salesConfirmBackdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!folderBusy)setFolderModalOpen(false)}}><div className="salesConfirmDialog inventoryFolderDialog" role="dialog" aria-modal="true"><h2>Nova pasta de estoque</h2><p>Crie uma pasta e selecione os produtos equivalentes.</p><label className="field"><span>Nome da pasta</span><input autoFocus value={folderName} onChange={event=>setFolderName(event.target.value)} placeholder="Ex.: 127V"/></label><div className="inventoryFolderProducts"><span>Produtos</span>{products.map((product:any)=><label key={product.sku}><input type="checkbox" checked={folderSkus.has(String(product.sku))} onChange={()=>setFolderSkus(current=>{const next=new Set(current);next.has(String(product.sku))?next.delete(String(product.sku)):next.add(String(product.sku));return next})}/><span><b title={product.product}>{product.product}</b><small>{product.sku} · {originLabel(product.source)}</small></span></label>)}</div><div className="salesConfirmActions"><button className="ghost clickable" disabled={folderBusy} onClick={()=>setFolderModalOpen(false)}>Cancelar</button><button className="primary" disabled={folderBusy||!folderName.trim()||!folderSkus.size} onClick={()=>void createFolder()}>{folderBusy?'Criando...':'Criar pasta'}</button></div></div></div>}
     </article>
   );
 }
-function Products({ products, inventory, onNew, onEdit, onDelete, onDeleteMany }: any) {
+function Products({ products, orders = [], onNew, onEdit, onDelete, onDeleteMany, platforms = [], onImported }: any) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const toggleSelected = (sku: string) => setSelected((previous) => { const next = new Set(previous); next.has(sku) ? next.delete(sku) : next.add(sku); return next; });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const rows = products.filter((p: any) => `${p.product} ${p.name} ${p.sku}`.toLowerCase().includes(query.toLowerCase()));
-  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const visible = rows.slice((Math.min(page, pages) - 1) * pageSize, Math.min(page, pages) * pageSize);
-  const stockFor = (sku: string) => inventory.find((item: any) => item.sku === sku);
-  const editable = (p: any) => ({ ...p, physical: stockFor(p.sku)?.physical || 0, safety: p.safetyStock, cost: p.unitCost, price: p.salePrice });
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importRows, setImportRows] = useState<any[]>([]);
+  const [importSelected, setImportSelected] = useState<Set<number>>(new Set());
+  const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
+  const [systemNotice, setSystemNotice] = useState<{title:string;message:string}|null>(null);
+  const [openParents,setOpenParents]=useState<Set<string>>(new Set());
+  const fileRef = useRef<HTMLInputElement>(null);
+  const normalizedProductQuery=query.trim().toLowerCase();
+  const filteredProducts = products.filter((p: any) => `${p.product} ${p.name} ${p.sku}`.toLowerCase().includes(normalizedProductQuery));
+  const parentGroups=new Map<string,any[]>();
+  for(const product of filteredProducts){const key=`${product.source||'MANUAL'}:${product.parentId||product.productId||product.product}`;const group=parentGroups.get(key)||[];group.push(product);parentGroups.set(key,group)}
+  const productGroups=[...parentGroups.entries()];
+  const pages = Math.max(1, Math.ceil(productGroups.length / pageSize));
+  const visibleGroups=productGroups.slice((Math.min(page,pages)-1)*pageSize,Math.min(page,pages)*pageSize);
+  const visible=visibleGroups.flatMap(([key,variants])=>variants.length<2?variants:[{isParent:true,parentKey:key,product:variants[0].parentName||variants[0].product,imageUrl:variants[0].imageUrl,source:variants[0].source,fulfillment:variants.every((variant:any)=>variant.fulfillment==='Amazon FBA')?'Amazon FBA':variants[0].fulfillment,parentSku:variants[0].parentSku,variantCount:variants.length,childSkus:variants.map((variant:any)=>String(variant.sku)),sku:`parent:${key}`},...((openParents.has(key)||Boolean(normalizedProductQuery))?variants.map((variant:any)=>({...variant,parentKey:key})):[])])
+  const editable = (p: any) => ({ ...p, cost: p.unitCost, price: p.salePrice });
+  const productBySku = new Map<string, any>(products.map((product: any) => [String(product.sku), product]));
+  const salesBySku = new Map<string, { units: number; revenue: number; fees: number; shipping: number; cost: number }>();
+  for (const order of orders) {
+    if (order.status !== "PAID") continue;
+    const items = order.items || [];
+    const lineValues = items.map((item: any) => Number(item.unitPrice || 0) * Number(item.quantity || 0));
+    const linesTotal = lineValues.reduce((sum: number, value: number) => sum + value, 0);
+    const orderRevenue = Number(order.grossAmount || 0) - Number(order.discountAmount || 0);
+    const orderFees = Number(order.feeAmount || 0) + Number(order.taxAmount || 0);
+    const orderShipping = Number(order.shippingAmount || 0);
+    items.forEach((item: any, index: number) => {
+      const sku = String(item.variant?.sku || item.sku || "");
+      if (!sku) return;
+      const quantity = Number(item.quantity || 0);
+      const share = linesTotal > 0 ? lineValues[index] / linesTotal : items.length ? 1 / items.length : 0;
+      const current = salesBySku.get(sku) || { units: 0, revenue: 0, fees: 0, shipping: 0, cost: 0 };
+      current.units += quantity;
+      current.revenue += orderRevenue * share;
+      current.fees += orderFees * share;
+      current.shipping += orderShipping * share;
+      current.cost += Number(item.unitCost || productBySku.get(sku)?.unitCost || 0) * quantity;
+      salesBySku.set(sku, current);
+    });
+  }
+  const emptyProductMetrics = () => ({ units: 0, revenue: 0, fees: 0, shipping: 0, cost: 0 });
+  const productMetrics = (product: any) => {
+    const skus = product.isParent ? product.childSkus || [] : [String(product.sku)];
+    return skus.reduce((total: ReturnType<typeof emptyProductMetrics>, sku: string) => {
+      const metrics = salesBySku.get(String(sku)) || emptyProductMetrics();
+      total.units += metrics.units;
+      total.revenue += metrics.revenue;
+      total.fees += metrics.fees;
+      total.shipping += metrics.shipping;
+      total.cost += metrics.cost;
+      return total;
+    }, emptyProductMetrics());
+  };
+  const productMargin = (product: any) => {
+    const metrics = productMetrics(product);
+    return metrics.revenue ? (metrics.revenue - metrics.fees - metrics.shipping - metrics.cost) / metrics.revenue : 0;
+  };
+  const readImportFile = async (file: File) => {
+    const text = await file.text();
+    let parsed:any[]=[];
+    if(file.name.toLowerCase().endsWith('.xml')){
+      const doc=new DOMParser().parseFromString(text,'application/xml');
+      parsed=[...doc.querySelectorAll('produto, product, item')].map((node:any)=>({sku:node.querySelector('sku, codigo, code')?.textContent?.trim(),product:node.querySelector('produto, product, title, nome, name')?.textContent?.trim(),name:node.querySelector('variante, variant, nome, name, title')?.textContent?.trim(),price:Number(String(node.querySelector('preco, price, valor')?.textContent||'0').replace(',','.')),cost:Number(String(node.querySelector('custo, cost')?.textContent||'0').replace(',','.')),quantity:Number(node.querySelector('quantidade, quantity, estoque, stock')?.textContent||0)}));
+    }else{
+      const lines=text.split(/\r?\n/).filter(Boolean); const headers=(lines.shift()||'').split(/[,;]/).map(value=>value.trim().toLowerCase());
+      parsed=lines.map(line=>{const values=line.split(/[,;]/).map(value=>value.replace(/^"|"$/g,'').trim()); const row=Object.fromEntries(headers.map((header,index)=>[header,values[index]])); return {sku:row.sku||row.codigo||row.code,product:row.produto||row.product||row.nome||row.name,name:row.variante||row.variant||row.nome||row.name,price:Number(String(row.preco||row.price||row.valor||0).replace(',','.')),cost:Number(String(row.custo||row.cost||0).replace(',','.')),quantity:Number(row.quantidade||row.quantity||row.estoque||row.stock||0)};});
+    }
+    parsed=parsed.filter(row=>row.sku);
+    setImportRows(parsed); setImportSelected(new Set(parsed.map((_,index)=>index))); setImportMenuOpen(false); setImportOpen(true);
+  };
+  const executeImport = async () => {
+    setImporting(true);
+    try{
+      const body=importRows.length?{rows:importRows.filter((_,index)=>importSelected.has(index))}:{platforms:[...selectedPlatforms]};
+      const result=await apiJson('/api/products/import',{method:'POST',body:JSON.stringify(body)});
+      await onImported?.(); setImportOpen(false); setImportRows([]); setSelectedPlatforms(new Set());
+      setSystemNotice({title:'Sincronização concluída',message:`${result.imported||0} produtos importados.`});
+    }catch(error:any){setSystemNotice({title:'Não foi possível sincronizar',message:error.message||'Não foi possível importar os produtos.'});}finally{setImporting(false);}
+  };
   return (
     <article className="card tableCard">
       <div className="sectionHead">
         <div>
           <h2>Catálogo de produtos</h2>
-          <p>{rows.length} produtos · SKUs, preços e disponibilidade</p>
+          <p>{parentGroups.size} produtos · {filteredProducts.length} variações, SKUs, preços e disponibilidade</p>
         </div>
-        <button className="primary" onClick={onNew}>
-          <Plus size={14} />
-          Novo produto
-        </button>
+        <div className="rowActions productCatalogActions"><div className="exportMenu"><button className="ghost clickable" onClick={() => setImportMenuOpen((open)=>!open)}><Upload size={14} />Importar</button>{importMenuOpen&&<div className="exportOptions"><button onClick={()=>{if(fileRef.current){fileRef.current.accept='.csv';fileRef.current.click()}}}>CSV</button><button onClick={()=>{if(fileRef.current){fileRef.current.accept='.xml';fileRef.current.click()}}}>XML</button></div>}<input ref={fileRef} hidden type="file" onChange={(event)=>{const file=event.target.files?.[0];if(file)void readImportFile(file);event.currentTarget.value=''}}/></div><button className="ghost clickable" onClick={() => {setImportRows([]);setSelectedPlatforms(new Set());setImportOpen(true)}}><RefreshCw size={14}/>Sincronizar produtos</button><button className="primary" onClick={onNew}><Plus size={14} />Novo produto</button></div>
       </div>
-      <MobileBulkActions ids={visible.map((product: any) => String(product.sku))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="produtos" />
+      <MobileBulkActions ids={visible.filter((product:any)=>!product.isParent).map((product: any) => String(product.sku))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="produtos" />
       <div className="catalogToolbar">
         <label className="catalogSearch"><Search size={15} /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Pesquisar produto ou SKU..." /></label>
         <div className="catalogPageSize">Itens por página <AnchoredSelect value={String(pageSize)} onChange={(v) => { setPageSize(Number(v)); setPage(1); }} options={["10", "25", "50"]} compact /></div>
       </div>
       <div className="tableWrap">
         <table className="catalogTable">
-          <thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={visible.length > 0 && visible.every((item: any) => selected.has(String(item.sku)))} onChange={() => setSelected(visible.every((item: any) => selected.has(String(item.sku))) ? new Set() : new Set(visible.map((item: any) => String(item.sku))))} aria-label="Selecionar todos os produtos exibidos" /></th>}<th>SKU interno</th><th>Imagem</th><th>Produto</th><th>Variante</th><th>Preço</th><th>Custo</th><th>Físico</th><th>Disponível</th><th aria-label="Ações"></th></tr></thead>
-          <tbody>{visible.map((p: any) => <tr key={p.sku} className={selected.has(String(p.sku)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(p.sku)); else onEdit(editable(p)); } }}>
-            {selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(p.sku))} onChange={() => toggleSelected(String(p.sku))} aria-label={`Selecionar ${p.product}`} /></td>}<td><b>{p.sku}</b></td><td><span className="catalogImage"><PackageCheck size={18} /></span></td><td>{p.product}</td><td>{p.name}</td><td>{money(Number(p.salePrice || 0))}</td><td>{money(Number(p.unitCost || 0))}</td><td>{stockFor(p.sku)?.physical || 0}</td><td>{stockFor(p.sku)?.available || 0}</td>
+          <colgroup>{selecting&&<col style={{width:42}}/>}<col style={{width:64}}/><col style={{width:420}}/><col style={{width:360}}/><col style={{width:180}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:112}}/></colgroup>
+          <thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={visible.some((item:any)=>!item.isParent) && visible.filter((item:any)=>!item.isParent).every((item: any) => selected.has(String(item.sku)))} onChange={() => {const variants=visible.filter((item:any)=>!item.isParent);setSelected(variants.every((item:any)=>selected.has(String(item.sku)))?new Set():new Set(variants.map((item:any)=>String(item.sku))))}} aria-label="Selecionar todos os produtos exibidos" /></th>}<th></th><th>Nome</th><th>SKU</th><th>Origem</th><th>Preço</th><th>Custo</th><th className="catalogMetricHeader">Unidades vendidas</th><th className="catalogMetricHeader">Total faturado</th><th>Taxas</th><th>Frete</th><th className="catalogMargin">Margem</th><th aria-label="Ações"></th></tr></thead>
+          <tbody>{visible.map((p: any) => p.isParent?<tr key={p.sku} className="catalogParentRow" onClick={()=>setOpenParents(current=>{const next=new Set(current);next.has(p.parentKey)?next.delete(p.parentKey):next.add(p.parentKey);return next})}>{selecting&&<td/>}<td><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span></td><td><button type="button" className="catalogParentButton">{openParents.has(p.parentKey)||normalizedProductQuery?<ChevronUp size={16}/>:<ChevronDown size={16}/>}<span><b>{p.product}</b><small>{p.variantCount} variações</small></span></button></td><td><b>{p.parentSku||'—'}</b></td><td><span className="catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment||(p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></td><td>—</td><td>—</td><td>{productMetrics(p).units}</td><td>{money(productMetrics(p).revenue)}</td><td className={productMetrics(p).fees ? "negative" : undefined}>{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</td><td className={productMetrics(p).shipping ? "negative" : undefined}>{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</td><td>{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</td><td/></tr>:<tr key={p.sku} className={`${p.parentKey?'catalogVariationRow ':''}${selected.has(String(p.sku)) ? "mobileSelectedRow" : ''}`} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(p.sku)); else onEdit(editable(p)); } }}>
+            {selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(p.sku))} onChange={() => toggleSelected(String(p.sku))} aria-label={`Selecionar ${p.product}`} /></td>}<td><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span></td><td className="catalogProductName" title={p.product}>{p.externalUrl?<a href={p.externalUrl} target="_blank" rel="noreferrer" onClick={(event)=>event.stopPropagation()}>{p.product}</a>:p.product}</td><td><b>{p.sku}</b></td><td><span className="catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment|| (p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></td><td>{money(Number(p.salePrice || 0))}</td><td>{money(Number(p.unitCost || 0))}</td><td>{productMetrics(p).units}</td><td>{money(productMetrics(p).revenue)}</td><td className={productMetrics(p).fees ? "negative" : undefined}>{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</td><td className={productMetrics(p).shipping ? "negative" : undefined}>{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</td><td className="catalogMargin">{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</td>
             <td><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={(event) => { event.stopPropagation(); onEdit(editable(p)); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={(event) => { event.stopPropagation(); onDelete(p); }}><Trash2 size={15} /></button></div></td>
           </tr>)}</tbody>
         </table>
       </div>
-      {!rows.length && <div className="catalogEmpty">Nenhum produto encontrado.</div>}
+      {!productGroups.length && <div className="catalogEmpty">Nenhum produto encontrado.</div>}
       <div className="catalogPagination"><span>Página {Math.min(page, pages)} de {pages}</span><div><button disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button><button disabled={page >= pages} onClick={() => setPage(page + 1)}>Próxima</button></div></div>
+      {importOpen && <div className="salesConfirmBackdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget&&!importing)setImportOpen(false)}}><div className="productImportDialog" role="dialog" aria-modal="true"><div className="modalHead"><div><h2>{importRows.length?'Importar produtos':'Sincronizar produtos'}</h2><p>{importRows.length?'Selecione os produtos encontrados no arquivo.':'Puxe os produtos das plataformas de venda integradas.'}</p></div><button className="close" onClick={()=>setImportOpen(false)}><X/></button></div><div className="productImportBody">
+        {!importRows.length&&<><h3>Plataformas de venda integradas</h3><p className="muted">Selecione uma ou mais plataformas</p><div className="platformImportGrid">{platforms.length?platforms.map((platform:string)=><button key={platform} className={selectedPlatforms.has(platform)?'selected':''} onClick={()=>setSelectedPlatforms(current=>{const next=new Set(current);next.has(platform)?next.delete(platform):next.add(platform);return next})}><span className="platformSyncLogo"><img src={integrationLogoSrc[platform]} alt="" /></span><span className="platformSyncInfo"><span className="platformSyncTitle"><b>{platform}</b><span className="platformSyncStatus">Conectado</span></span><small>Sincronizar produtos</small></span></button>):<p className="muted">Nenhuma plataforma de vendas conectada.</p>}</div></>}
+        {!!importRows.length&&<><div className="sectionHead"><div><h3>Produtos encontrados</h3><p>{importSelected.size} de {importRows.length} selecionados</p></div><button className="ghost clickable" onClick={()=>setImportSelected(importSelected.size===importRows.length?new Set():new Set(importRows.map((_,index)=>index)))}>{importSelected.size===importRows.length?'Desmarcar todos':'Selecionar todos'}</button></div><div className="importPreview">{importRows.map((row,index)=><label key={`${row.sku}-${index}`}><input type="checkbox" checked={importSelected.has(index)} onChange={()=>setImportSelected(current=>{const next=new Set(current);next.has(index)?next.delete(index):next.add(index);return next})}/><span><b>{row.product||row.name||row.sku}</b><small>{row.sku}</small></span></label>)}</div></>}
+      </div><div className="modalFoot"><button className="ghost clickable" onClick={()=>setImportOpen(false)}>Cancelar</button><button className="primary" disabled={importing||(!importRows.length&&!selectedPlatforms.size)||Boolean(importRows.length&&!importSelected.size)} onClick={executeImport}>{importing?'Aguarde...':importRows.length?'Importar selecionados':'Sincronizar produtos'}</button></div></div></div>}
+      {systemNotice&&<div className="salesConfirmBackdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)setSystemNotice(null)}}><div className="salesConfirmDialog" role="alertdialog" aria-modal="true"><h2>{systemNotice.title}</h2><p>{systemNotice.message}</p><div className="salesConfirmActions"><button className="primary" onClick={()=>setSystemNotice(null)}>OK</button></div></div></div>}
     </article>
   );
 }
@@ -1764,7 +1897,7 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
             </div>
           </div>}
         </div>
-        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={origin} onChange={setOrigin} options={[{ value: "", label: "Todas" }, ...origins.map((channel) => ({ value: channel, label: channel.replaceAll("_", " ") }))]} compact /></div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={origin} onChange={setOrigin} options={[{ value: "", label: "TODAS" }, ...origins.map((channel) => ({ value: channel, label: originLabel(channel), icon: salesOriginLogo(channel) }))]} compact /></div>
         <div className="salesSelectField"><span>Produto</span><AnchoredSelect value={product} onChange={setProduct} options={[{ value: "", label: "Todos" }, ...products.map(([sku, name]) => ({ value: sku, label: name }))]} compact /></div>
         <button type="button" className="ghost" onClick={() => { setPeriod("Tempo todo"); setFrom(""); setTo(""); setPeriodOpen(false); setOrigin(""); setProduct(""); }}>Limpar</button>
         <button type="button" className="mobileSalesFilterApply primary" onClick={() => setFiltersOpen(false)}>Aplicar</button>
@@ -1796,14 +1929,14 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
               <tr key={c.id} className={`clickrow ${selected.has(c.id) ? "mobileSelectedRow" : ""}`} onClick={() => { if (selecting && window.matchMedia("(max-width: 650px)").matches) toggleSelected(c.id); else onEdit(c); }}>
                 <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelected(c.id)} aria-label={`Selecionar ${c.name || "cliente"}`} /></td>
                 <td className="listDateCell">{c.lastOrderAt ? fmtDate(c.lastOrderAt) : "—"}</td>
-                <td>
+                <td className="salesOriginCell">
                   <b>{c.name || "Cliente sem nome"}</b>
                 </td>
                 <td>{c.city || "—"}</td>
                 <td>{c.state || "—"}</td>
                 <td>{c.orders}</td>
                 <td>{money(c.revenue || 0)}</td>
-                <td>{c.lastChannel || "—"}</td>
+                <td>{c.lastChannel ? originLabel(c.lastChannel) : "—"}</td>
                 <td>
                   <div className="rowActions">
                     <button
@@ -1881,14 +2014,14 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const statusClass = (status: string) => (status === "CANCELLED" || status === "CHARGEBACK" ? "danger" : status === "PAID" ? "ok" : "warn");
   const keyOf = (s: any) => String(s.raw?.id || s.id);
   const sources = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((s: any) => s.source).filter(Boolean)))], [rows]);
-  const products = useMemo(() => [...new Map<string, string>(rows.flatMap((sale: any) => sale.raw?.items || []).map((item: any) => [String(item.sku || item.name), String(item.name || item.sku)] as [string, string])).entries()].sort((a, b) => a[1].localeCompare(b[1])), [rows]);
-  const paymentMethods = useMemo(() => [...new Set<string>(rows.map((sale: any) => normalizePaymentMethod(sale.paymentMethod)).filter(Boolean))].sort(), [rows]);
+  const products = useMemo(() => [...new Map<string, string>(rows.flatMap((sale: any) => sale.raw?.items || []).map((item: any) => [String(item.variant?.sku || item.sku), orderItemProductLabel(item)] as [string, string])).entries()].sort((a, b) => a[1].localeCompare(b[1])), [rows]);
+  const paymentMethods = useMemo(() => [...new Set<string>(rows.map((sale: any) => normalizePaymentMethod(sale.paymentMethod)).filter((method: string) => method && method.toLowerCase() !== "manual"))].sort(), [rows]);
   const filtered = useMemo(
     () =>
       rows.filter((s: any) => {
         const key = s.raw?.paidAt || s.raw?.createdAt;
         const day = key ? dateKey(key) : "";
-        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!product || (s.raw?.items || []).some((item: any) => String(item.sku || item.name) === product)) && (!paymentMethod || normalizePaymentMethod(s.paymentMethod) === paymentMethod) && (!from || day >= from) && (!to || day <= to);
+        return (status === "Todos" || s.status === status) && (source === "Todas" || s.source === source) && (!product || (s.raw?.items || []).some((item: any) => String(item.variant?.sku || item.sku) === product)) && (!paymentMethod || normalizePaymentMethod(s.paymentMethod) === paymentMethod) && (!from || day >= from) && (!to || day <= to);
       }),
     [rows, status, source, product, paymentMethod, from, to],
   );
@@ -2007,9 +2140,9 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
             </div>
           </div>}
         </div>
-        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map(String)} compact /></div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={sources.map((channel) => ({ value: String(channel), label: originLabel(channel), icon: salesOriginLogo(channel) }))} compact /></div>
         <div className="salesSelectField"><span>Produto</span><AnchoredSelect value={product} onChange={setProduct} options={[{ value: "", label: "Todos" }, ...products.map(([sku, name]) => ({ value: sku, label: name }))]} compact /></div>
-        <div className="salesSelectField"><span>Pagamento</span><AnchoredSelect value={paymentMethod} onChange={setPaymentMethod} options={[{ value: "", label: "Todos" }, ...paymentMethods]} compact /></div>
+        <div className="salesSelectField"><span>Método de Pag.</span><AnchoredSelect value={paymentMethod} onChange={setPaymentMethod} options={[{ value: "", label: "Todos" }, ...paymentMethods]} compact /></div>
         <button
           className="ghost clickable"
           onClick={() => {
@@ -2048,13 +2181,16 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
               </th>
               <th className="listDateCell">Data</th>
               <th>Pedido</th>
-              <th>Cliente</th>
-              <th>Origem</th>
-              <th>Voltagem</th>
-              <th>Pagamento</th>
+              <th className="salesProductCell">Produto</th>
+              <th className="salesSkuCell">SKU</th>
+              <th className="salesClientCell">Cliente</th>
+              <th className="salesOriginCell">Origem</th>
               <th>Valor</th>
-              <th>Taxa</th>
+              <th>Método de Pag.</th>
+              <th>Taxa da plataforma</th>
               <th>Frete</th>
+              <th>Taxa FBA</th>
+              <th>Taxa ML Full</th>
               <th>Lucro vendas</th>
               <th>Status</th>
               <th></th>
@@ -2067,16 +2203,22 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                   <input type="checkbox" checked={selected.has(keyOf(s))} onChange={() => toggleOne(keyOf(s))} aria-label={`Selecionar ${s.id}`} />
                 </td>
                 <td className="listDateCell">{s.date}</td>
-                <td>
-                  <b>{s.id}</b>
+                <td>{s.raw?.platformUrl ? <a className="orderPlatformLink" href={s.raw.platformUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}><b>{s.id}</b></a> : <b>{s.id}</b>}</td>
+                <td className="salesProductCell"><span className="salesProductText" title={s.product}>{s.product}</span></td>
+                <td className="salesSkuCell" title={s.itemSku}>{s.itemSku || "—"}</td>
+                <td className="salesClientCell">{s.customer}</td>
+                <td className="salesOriginCell">
+                  <span className="salesOrigin">
+                    {salesOriginLogo(s.source) && <span className="salesOriginLogo"><img src={salesOriginLogo(s.source)} alt="" /></span>}
+                    <span>{originLabel(s.source)}</span>
+                  </span>
                 </td>
-                <td>{s.customer}</td>
-                <td>{s.source}</td>
-                <td>{s.voltage}</td>
-                <td>{s.paymentMethod || "—"}</td>
                 <td className={isNegativeDisplay(s.value) ? "negative" : undefined}>{s.value}</td>
-                <td className={Number(s.fee || 0) !== 0 ? "negative" : undefined}>{money(Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
+                <td>{s.paymentMethod || "—"}</td>
+                <td className={Number(s.fee || 0) !== 0 && s.source !== "Amazon FBA" && s.source !== "Mercado Livre Full" ? "negative" : undefined}>{money(s.source !== "Amazon FBA" && s.source !== "Mercado Livre Full" && Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
                 <td className={Number(s.freight || 0) !== 0 ? "negative" : undefined}>{money(Number(s.freight || 0) ? -Math.abs(Number(s.freight || 0)) : 0)}</td>
+                <td className={s.source === "Amazon FBA" && Number(s.fee || 0) !== 0 ? "negative" : undefined}>{money(s.source === "Amazon FBA" && Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
+                <td className={s.source === "Mercado Livre Full" && Number(s.fee || 0) !== 0 ? "negative" : undefined}>{money(s.source === "Mercado Livre Full" && Number(s.fee || 0) ? -Math.abs(Number(s.fee || 0)) : 0)}</td>
                 <td className={Number(s.profit || 0) < 0 || s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : "positive"}>{money(s.profit || 0)}</td>
                 <td>
                   <span className={`status ${statusClass(s.status)}`}>{s.status}</span>
@@ -2457,13 +2599,13 @@ function Creatives({ rows }: { rows: any[] }) {
   );
 }
 
-function Movements({ movements, onNew, onEdit }: any) {
+function Movements({ movements, onNew, onEdit, onDelete }: any) {
   return (
     <article className="card tableCard">
       <div className="sectionHead">
         <div>
           <h2>Ledger de estoque</h2>
-          <p>Registro cronológico com data, SKU, quantidade e referência</p>
+          <p>Registro cronológico com data, SKU, pasta, quantidade e referência</p>
         </div>
         <button className="primary" onClick={onNew}>
           <Plus size={14} />
@@ -2476,6 +2618,7 @@ function Movements({ movements, onNew, onEdit }: any) {
             <tr>
               <th>Data</th>
               <th>SKU</th>
+              <th>Pasta</th>
               <th>Movimento</th>
               <th>Quantidade</th>
               <th>Referência</th>
@@ -2489,7 +2632,8 @@ function Movements({ movements, onNew, onEdit }: any) {
                 <td>
                   <b>{m.date}</b>
                 </td>
-                <td>{m.sku}</td>
+                <td><b>{m.sku}</b></td>
+                <td>{m.folderName}</td>
                 <td>{m.type}</td>
                 <td className={m.qty < 0 ? "negative" : "positive"}>
                   {m.qty > 0 ? "+" : ""}
@@ -2499,7 +2643,7 @@ function Movements({ movements, onNew, onEdit }: any) {
                 <td>
                   <b>{m.balance}</b>
                 </td>
-                <td><button className="mini" title="Editar movimentação" aria-label={`Editar movimentação ${m.sku} ${m.date}`} onClick={() => onEdit(m)}><Pencil size={14} /></button></td>
+                <td><div className="rowActions"><button className="mini" title="Editar movimentação" aria-label={`Editar movimentação ${m.sku} ${m.date}`} onClick={() => onEdit(m)}><Pencil size={14} /></button><button className="mini danger" title="Excluir movimentação" aria-label={`Excluir movimentação ${m.sku} ${m.date}`} onClick={() => { if (window.confirm(`Excluir a movimentação de ${m.sku}?`)) void onDelete(m); }}><Trash2 size={14} /></button></div></td>
               </tr>
             ))}
           </tbody>
@@ -2655,6 +2799,13 @@ function Integrations({ refreshKey, onNew, onOpen }: any) {
       lastError: row.lastError || undefined,
     };
   });
+  const sections = [
+    { category: "Plataforma de vendas", title: "Plataformas de vendas", description: "Lojas, marketplaces, pedidos e estoque" },
+    { category: "ADS", title: "ADS", description: "Campanhas, anúncios e mídia paga" },
+    { category: "Banco", title: "Bancos", description: "Pagamentos, recebimentos e transferências" },
+    { category: "Outros", title: "Outros", description: "Demais serviços conectados" },
+  ].map((section) => ({ ...section, integrations: visible.filter((integration) => integration.cat === section.category) }))
+    .filter((section) => section.integrations.length > 0);
   return (
     <>
       <div className="sectionTools">
@@ -2667,23 +2818,32 @@ function Integrations({ refreshKey, onNew, onOpen }: any) {
           Criar nova integração
         </button>
       </div>
-      <div className="integrationGrid">
-        {visible.map((i) => {
-          const status = i.status;
-          return (
-            <article className="card integration integrationClickable" key={i.name} onClick={() => onOpen({ ...i, status })}>
-              <PlatformLogo i={i} />
-              <div className="integrationInfo">
-                <b>{i.name}</b>
-                <small>{i.desc}</small>
-              </div>
-              <div className="integrationActions">
-                <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
-                <span className="integrationCategoryBadge">{i.cat}</span>
-              </div>
-            </article>
-          );
-        })}
+      <div className="integrationSections">
+        {sections.map((section) => (
+          <section className="integrationSection" key={section.category}>
+            <div className="integrationSectionHead">
+              <h3>{section.title}</h3>
+              <p>{section.description}</p>
+            </div>
+            <div className="integrationGrid">
+              {section.integrations.map((i) => {
+                const status = i.status;
+                return (
+                  <article className="card integration integrationClickable" key={i.name} onClick={() => onOpen({ ...i, status })}>
+                    <PlatformLogo i={i} />
+                    <div className="integrationInfo">
+                      <b>{i.name}</b>
+                      <small>{i.desc}</small>
+                    </div>
+                    <div className="integrationActions">
+                      <span className={status === "Conectado" ? "status ok" : "status warn"}>{status}</span>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </div>
     </>
   );
@@ -2692,13 +2852,23 @@ const integrationLogoSrc: Record<string, string> = {
   "Meta Ads": "/integration-logos/meta-ads.webp",
   "Google Ads": "/integration-logos/google-ads.webp",
   "TikTok Ads": "/integration-logos/tiktok-ads.webp",
-  Shopify: "/integration-logos/shopify.webp",
-  "Mercado Livre": "/integration-logos/mercado-livre.webp",
-  Amazon: "/integration-logos/amazon.webp",
+  Shopify: "/integration-logos/shopify.png",
+  "Mercado Livre": "/integration-logos/mercado-livre.jpg",
+  Amazon: "/integration-logos/amazon.jpg",
   Kiwify: "/integration-logos/kiwify.webp",
   Asaas: "/integration-logos/asaas.png",
   "Mercado Pago": "/integration-logos/mercado-pago.png",
 };
+function salesOriginLogo(source: unknown) {
+  const normalized = String(source || "").toUpperCase().replaceAll("_", " ");
+  if (normalized.includes("MERCADO LIVRE") || normalized.includes("ML FULL")) return integrationLogoSrc["Mercado Livre"];
+  if (normalized.includes("AMAZON")) return integrationLogoSrc.Amazon;
+  if (normalized.includes("SHOPIFY")) return integrationLogoSrc.Shopify;
+  return "";
+}
+function originLabel(source: unknown) {
+  return String(source || "MANUAL").replaceAll("_", " ").trim().toLocaleUpperCase("pt-BR");
+}
 function PlatformLogo({ i }: { i: Integration }) {
   const src = integrationLogoSrc[i.name];
   return (
@@ -2749,14 +2919,28 @@ function SettingsView({ onEdit }: any) {
     </div>
   );
 }
-function Modal({ kind, data, close, notify, products, catalogProducts, integrations, channelOptions, onSave, onDeleteIntegration }: any) {
+function Modal({ kind, data, close, notify, products, inventoryFolders = [], catalogProducts, integrations, channelOptions, onSave, onDeleteIntegration }: any) {
   const [f, setF] = useState<any>(() => {
     if (kind === "expense") return data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() };
     if (kind === "sale") return data ? { ...data, _edit: data.sku } : { source: "Manual", paidAt: saoPauloDateTimeLocal(), feeAmount: 0, shippingAmount: 0 };
+    if (kind === "movementEdit" && data) return {
+      ...data,
+      _edit: data.sku,
+      productTarget: data.folderId ? `folder:${data.folderId}` : `sku:${data.sku}`,
+      type: ["Entrada manual", "Saída manual", "Avaria", "Devolução"].includes(data.type) ? data.type : data.rawType === "ADJUSTMENT" ? (Number(data.qty) < 0 ? "Saída manual" : "Entrada manual") : ({ PURCHASE: "Entrada manual", DAMAGE: "Avaria", RETURN: "Devolução" } as any)[data.rawType] || data.type,
+      date: String(data.createdAt || "").slice(0, 10),
+    };
     return data ? { ...data, _edit: data.sku } : {};
   });
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const movementProductOptions = [
+    ...inventoryFolders.map((folder: any) => ({ value: `folder:${folder.id}`, label: `Pasta: ${folder.name}` })),
+    ...products.map((product: any) => ({ value: `sku:${product.sku}`, label: `${product.product || product.name || product.sku} · ${product.sku}` })),
+  ];
+  const setMovementProduct = (value: string) => setF((current: any) => value.startsWith("folder:")
+    ? { ...current, productTarget: value, folderId: value.slice(7), sku: "" }
+    : { ...current, productTarget: value, folderId: null, sku: value.replace(/^sku:/, "") });
   const title: any = {
     movement: "Nova movimentação",
     movementEdit: "Editar movimentação",
@@ -2791,7 +2975,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
         <div className="modalHead">
           <div>
             <h2>{title[kind]}</h2>
-            <p>{kind === "integrationDetail" ? "Configure credenciais, webhook e sincronização." : kind === "expense" ? "A despesa será salva e abatida do lucro líquido." : kind === "movementEdit" ? "Os dados da movimentação serão salvos no banco local." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
+            <p>{kind === "integrationDetail" ? (["Amazon", "Mercado Pago"].includes(data?.name) ? "Confira os dados da conexão." : data?.name === "Asaas" ? "Configure a chave de acesso e o webhook." : ["Shopify", "Mercado Livre"].includes(data?.name) ? "Configure a conexão e os webhooks." : "Configure os dados da integração.") : kind === "expense" ? "A despesa será salva e abatida do lucro líquido." : kind === "movementEdit" ? "Os dados da movimentação serão salvos no banco local." : "Preencha os dados abaixo. No localhost eles ficam apenas nesta sessão."}</p>
           </div>
           <button className="close" onClick={close}>
             <X />
@@ -2800,41 +2984,32 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
         <div className="modalBody">
           {kind === "movement" && (
             <FormGrid>
-              <Select label="Tipo" value={f.type} onChange={(v: any) => set("type", v)} options={["Entrada manual", "Saída manual", "Transferência", "Avaria", "Devolução", "Ajuste de inventário"]} />
-              <Select label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} options={products.map((p: any) => p.sku)} />
+              <Select label="Tipo" value={f.type} onChange={(v: any) => set("type", v)} options={["Entrada manual", "Saída manual", "Avaria", "Devolução"]} />
+              <Select label="Produto" value={f.productTarget} onChange={setMovementProduct} options={movementProductOptions} />
               <Input label="Quantidade" type="number" value={f.qty} onChange={(v: any) => set("qty", v)} />
               <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
               <Input label="Referência / motivo" value={f.ref} onChange={(v: any) => set("ref", v)} />
-              <Select label="Destino" value={f.to} onChange={(v: any) => setF((current: any) => ({ ...current, to: v, type: v === "Amazon FBA" || v === "Mercado Livre Full" ? "Transferência" : current.type === "Transferência" ? "" : current.type }))} options={channelOptions} />
             </FormGrid>
           )}
           {kind === "movementEdit" && (
             <FormGrid>
-              <Select label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} options={products.map((p: any) => p.sku)} />
-              <label className="field"><span>Data e hora</span><input type="datetime-local" value={f.createdAt || ""} onChange={(e) => set("createdAt", e.target.value)} /></label>
-              <Select label="Movimento" value={f.type} onChange={(v: any) => setF((current: any) => ({ ...current, type: v, qty: ["SALE", "DAMAGE"].includes(v) ? -Math.abs(Number(current.qty || 1)) : ["PURCHASE", "RETURN"].includes(v) ? Math.abs(Number(current.qty || 1)) : current.qty }))} options={f.type === "TRANSFER_IN" || f.type === "TRANSFER_OUT" ? [f.type] : ["PURCHASE", "SALE", "RESERVE", "RELEASE", "RETURN", "DAMAGE", "ADJUSTMENT"]} />
-              <Input label="Quantidade (+ entrada, − saída)" type="number" value={f.qty} onChange={(v: any) => set("qty", v)} />
-              {f.type === "TRANSFER_IN" || f.type === "TRANSFER_OUT" ? <>
-                <Select label="Origem" value={f.fromWarehouseCode} onChange={(v: any) => set("fromWarehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />
-                <Select label="Destino" value={f.toWarehouseCode} onChange={(v: any) => set("toWarehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />
-              </> : <Select label="Depósito" value={f.warehouseCode} onChange={(v: any) => set("warehouseCode", v)} options={["CENTRAL", "AMAZON_FBA", "ML_FULL"]} />}
-              <Input label="Referência" value={f.reference} onChange={(v: any) => setF((current: any) => ({ ...current, reference: v, ref: v }))} />
-              <Input label="Observação" value={f.note} onChange={(v: any) => set("note", v)} />
-              <div className="field"><span>Saldo após movimento</span><strong>{f.balance}</strong><small>Recalculado ao salvar quantidade, SKU ou depósito.</small></div>
-              <div className="field"><span>Origem do registro</span><strong>{f.source === "SYNC" ? "Integração · edição manual" : "Manual"}</strong></div>
+              <Select label="Tipo" value={f.type} onChange={(v: any) => set("type", v)} options={["Entrada manual", "Saída manual", "Avaria", "Devolução"]} />
+              <Select label="Produto" value={f.productTarget} onChange={setMovementProduct} options={movementProductOptions} />
+              <Input label="Quantidade" type="number" value={Math.abs(Number(f.qty || 0)) || ""} onChange={(v: any) => set("qty", v)} />
+              <Input label="Data" type="date" value={f.date} onChange={(v: any) => set("date", v)} />
+              <Input label="Referência / motivo" value={f.ref} onChange={(v: any) => set("ref", v)} />
             </FormGrid>
           )}
           {kind === "sale" && (
             <FormGrid>
               <Input label="Cliente" value={f.customer} onChange={(v: any) => set("customer", v)} />
-              <Select label="Produto / voltagem" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
+              <Select label="Produto" value={f.sku} onChange={(v: any) => set("sku", v)} options={catalogProducts.map((p: any) => ({ value: p.sku, label: p.name || `${p.product} · ${p.voltage || p.sku}` }))} />
               <Input label="Valor" type="number" value={f.value} onChange={(v: any) => set("value", v)} />
-              <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={channelOptions} />
+              <Select label="Origem" value={f.source} onChange={(v: any) => set("source", v)} options={channelOptions.map((channel: string) => ({ value: channel, label: originLabel(channel) }))} />
               <CalendarDateTimeField label="Data e hora da venda" value={f.paidAt || ""} onChange={(value) => set("paidAt", value)} />
-              <Input label="Taxas" type="number" value={f.feeAmount} onChange={(v: any) => set("feeAmount", v)} />
+              <Input label="Taxa da plataforma" type="number" value={f.feeAmount} onChange={(v: any) => set("feeAmount", v)} />
               <Input label="Frete" type="number" value={f.shippingAmount} onChange={(v: any) => set("shippingAmount", v)} />
-              <Input label="Método de pagamento" value={f.paymentMethod} onChange={(v: any) => set("paymentMethod", v)} />
-              <Input label="E-mail" value={f.email} onChange={(v: any) => set("email", v)} />
+              <Input label="Método de Pag." value={f.paymentMethod} onChange={(v: any) => set("paymentMethod", v)} />
             </FormGrid>
           )}
           {kind === "customer" && (
@@ -2850,8 +3025,6 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
             <FormGrid>
               <Input label="Nome do produto" value={f.product} onChange={(v: any) => set("product", v)} />
               <Input label="SKU" value={f.sku} onChange={(v: any) => set("sku", v)} />
-              <Input label="Quantidade" type="number" value={f.physical} onChange={(v: any) => set("physical", v)} />
-              <Input label="Estoque de segurança" type="number" value={f.safety} onChange={(v: any) => set("safety", v)} />
               <Input label="Custo unitário" type="number" value={f.cost} onChange={(v: any) => set("cost", v)} />
               <Input label="Preço de venda" type="number" value={f.price} onChange={(v: any) => set("price", v)} />
             </FormGrid>
@@ -2908,7 +3081,7 @@ function Modal({ kind, data, close, notify, products, catalogProducts, integrati
               ))}
             </div>
           )}
-          {kind === "integrationDetail" && <IntegrationDetail i={data} notify={notify} />} {kind === "saleDetail" && <SaleDetail s={f} set={set} products={products} />}{" "}
+          {kind === "integrationDetail" && <IntegrationDetail i={data} notify={notify} />} {kind === "saleDetail" && <SaleDetail s={f} set={set} products={catalogProducts} />}{" "}
           {kind === "settings" && (
             <FormGrid>
               <Input label="Nome da empresa" value={f.company || "Iron Air Brasil"} onChange={(v: any) => set("company", v)} />
@@ -2938,32 +3111,82 @@ function AsaasIntegrationDetail({ i, notify }: { i: Integration; notify: (x: str
   const [state, setState] = useState<any>(null);
   const [token, setToken] = useState('');
   const [url, setUrl] = useState('');
-  const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const reload = () => apiJson('/api/integrations/asaas').then(setState).catch((e: any) => setError(e.message));
   useEffect(() => { reload(); }, []);
-  const save = async (method: 'POST' | 'PUT') => {
+  const connect = async () => {
     setBusy(true); setError('');
     try {
-      await apiJson('/api/integrations/asaas', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(method === 'POST' ? { accessToken: token } : { callbackUrl: url, email }) });
-      setToken(''); await reload(); notify(method === 'POST' ? 'Asaas conectado' : 'Webhook de transferências cadastrado');
+      await apiJson('/api/integrations/asaas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: token }) });
+      await apiJson('/api/integrations/asaas', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callbackUrl: url }) });
+      setToken(''); setUrl(''); await reload(); notify('Asaas conectado');
     } catch (e: any) { setError(e.message || 'Falha ao configurar Asaas'); }
+    finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true); setError('');
+    try {
+      await apiJson('/api/integrations/asaas', { method: 'DELETE' });
+      setToken(''); setUrl(''); await reload(); notify('Asaas desconectado');
+    } catch (e: any) { setError(e.message || 'Falha ao desconectar Asaas'); }
     finally { setBusy(false); }
   };
   return <div>
     <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Asaas</h3><p>Saques e transferências da Shopify</p></div><span className={state?.status === 'CONNECTED' ? 'status ok' : 'status warn'}>{state?.status === 'CONNECTED' ? 'Conectado' : state?.status === 'ERROR' ? 'Permissão pendente' : 'Preparado'}</span></div>
     <div className="credentials">
       <p className="muted">A chave fica criptografada no servidor. O financeiro consulta o histórico de transferências diretamente no Asaas.</p>
-      <label><span>Chave API de produção</span><input className="fullInput" type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} placeholder="$aact_prod_…" /></label>
-      <button className="primary" type="button" disabled={busy || !token} onClick={() => save('POST')}>Conectar Asaas</button>
-      <h4>Webhook de saques</h4>
-      <p className="muted">Eventos TRANSFER_* com token de autenticação e envio sequencial. A URL precisa ser HTTPS pública e executar esta versão do projeto.</p>
-      <label><span>URL pública</span><input className="fullInput" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://seu-dominio/api/webhooks/asaas" /></label>
-      <label><span>E-mail para falhas</span><input className="fullInput" type="email" value={email} onChange={e => setEmail(e.target.value)} /></label>
-      <button className="primary" type="button" disabled={busy || state?.status !== 'CONNECTED' || !url || !email} onClick={() => save('PUT')}>Cadastrar webhook</button>
+      {state?.status === 'CONNECTED' ? <div className="detailGrid">
+        <div className="detailBox"><span>Chave API</span><b>Protegida</b></div>
+        <div className="detailBox"><span>Status</span><b>Ativa</b></div>
+      </div> : <>
+        <label><span>Chave API de produção</span><input className="fullInput" type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} placeholder="$aact_prod_…" /></label>
+        <h4>Webhook</h4>
+        <label><span>URL pública</span><input className="fullInput" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://seu-dominio/api/webhooks/asaas" /></label>
+      </>}
+      <div className="syncOptions singleIntegrationAction">{state?.status === 'CONNECTED'
+        ? <button className="integrationDisconnectButton" type="button" disabled={busy} onClick={disconnect}><Link2 size={15} />Desconectar</button>
+        : <button type="button" disabled={busy || !token || !url} onClick={connect}><Link2 size={15} />Conectar</button>}
+      </div>
       {state?.lastError && <p className="negative">{state.lastError}</p>}
-      {state?.webhook && <p className="muted">Webhook: {state.webhook.status} · {state.webhook.callbackUrl}</p>}
+      {error && <p className="negative">{error}</p>}
+    </div>
+  </div>;
+}
+function MercadoPagoIntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) => void }) {
+  const [connected, setConnected] = useState(i.status === "Conectado");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const connect = async () => {
+    setBusy(true); setError("");
+    try {
+      await apiJson("/api/integrations/mercado-pago", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accessToken: token }) });
+      setToken(""); setConnected(true); notify("Mercado Pago conectado");
+    } catch (e: any) { setError(e.message || "Falha ao conectar Mercado Pago"); }
+    finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true); setError("");
+    try {
+      await apiJson("/api/integrations/mercado-pago", { method: "DELETE" });
+      setConnected(false); setToken(""); notify("Mercado Pago desconectado");
+    } catch (e: any) { setError(e.message || "Falha ao desconectar Mercado Pago"); }
+    finally { setBusy(false); }
+  };
+  return <div>
+    <div className="integrationHero"><PlatformLogo i={i} /><div><h3>Mercado Pago</h3><p>Credencial protegida por empresa</p></div><span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span></div>
+    <div className="tabs"><button className="selected">Configuração</button></div>
+    <div className="credentials">
+      <p className="muted">O Access Token fica criptografado no servidor e não é exibido depois da conexão.</p>
+      {connected ? <div className="detailGrid">
+        <div className="detailBox"><span>Access Token</span><b>Protegido</b></div>
+        <div className="detailBox"><span>Status</span><b>Ativa</b></div>
+      </div> : <>
+        <label><span>Access Token de produção</span><input className="fullInput" type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} placeholder="APP_USR-…" /></label>
+        <div className="syncOptions singleIntegrationAction"><button type="button" disabled={busy || !token} onClick={connect}><Link2 size={15} />Conectar</button></div>
+      </>}
+      {connected && <div className="syncOptions singleIntegrationAction"><button className="integrationDisconnectButton" type="button" disabled={busy} onClick={disconnect}><Link2 size={15} />Desconectar</button></div>}
       {error && <p className="negative">{error}</p>}
     </div>
   </div>;
@@ -2984,15 +3207,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
   useEffect(() => {
     reloadStatus();
   }, [statusPath]);
-  const sync = async (body: any) => {
-    const r = await apiJson("/api/integrations/shopify/sync", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    notify(`Sincronizado: ${r.products || 0} produtos, ${r.orders || 0} pedidos`);
-    reloadStatus();
-  };
   if (i.name === "Asaas") return <AsaasIntegrationDetail i={i} notify={notify} />;
+  if (i.name === "Mercado Pago") return <MercadoPagoIntegrationDetail i={i} notify={notify} />;
   if (i.name === "Meta Ads") {
     const connectMeta = async () => {
       const result = await apiJson('/api/integrations/meta/authorize', { method: 'POST' });
@@ -3013,7 +3229,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
       <p className="muted">A conexão é separada por empresa. O token fica criptografado no servidor; a sincronização periódica usa somente a conta vinculada a esta empresa.</p>
       <div className="metaConnectionActions">
         <button type="button" className="primary" onClick={connectMeta}><Link2 size={15} />{metaConnected ? "Trocar conta Meta" : "Conectar Meta Ads"}</button>
-        {metaConnected && <button type="button" className="metaDisconnectButton" onClick={disconnectMeta}><LogOut size={15} />Desconectar</button>}
+        {metaConnected && <button type="button" className="integrationDisconnectButton" onClick={disconnectMeta}><Link2 size={15} />Desconectar</button>}
       </div>
     </div>;
   }
@@ -3030,7 +3246,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
           <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
         </div>
         <div className="tabs">
-          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+          {["Configuração", "Webhooks"].map((t) => (
             <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
               {t}
             </button>
@@ -3056,17 +3272,14 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                 <b>{connected ? "Ativa" : "Aguardando"}</b>
               </div>
             </div>
-            <p className="muted">Tokens e secrets ficam somente no servidor. O modo DEV/manual continua aceitando os webhooks já cadastrados da Iron Air.</p>
-            <label>
+            {!connected && <label>
               <span>Loja Shopify</span>
               <input className="fullInput" value={shop} onChange={(e) => setShop(e.target.value)} placeholder="sua-loja.myshopify.com" />
-            </label>
-            <div className="syncOptions">
-              <button onClick={() => (shop ? (location.href = `/api/integrations/shopify/connect?shop=${encodeURIComponent(shop)}`) : notify("Informe a loja Shopify"))}>
-                <Link2 />
-                Conectar Shopify
-              </button>
-              <button
+            </label>}
+            <div className="syncOptions singleIntegrationAction">
+              {!connected ? <button onClick={() => (shop ? (location.href = `/api/integrations/shopify/connect?shop=${encodeURIComponent(shop)}`) : notify("Informe a loja Shopify"))}>
+                <Link2 />Conectar
+              </button> : <button className="disconnectAction integrationDisconnectButton"
                 onClick={async () => {
                   await apiJson("/api/integrations/shopify/disconnect", {
                     method: "POST",
@@ -3076,9 +3289,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                   notify("Shopify desconectado");
                 }}
               >
-                <Trash2 />
-                Desconectar
-              </button>
+                <Link2 />Desconectar
+              </button>}
             </div>
           </div>
         )}
@@ -3096,43 +3308,6 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                 <Copy size={15} />
               </button>
             </div>
-            <div className="eventChecks">
-              {(status?.webhooks?.length
-                ? status.webhooks
-                : [
-                    { topic: "orders/create", status: "PENDING" },
-                    { topic: "orders/paid", status: "PENDING" },
-                    { topic: "orders/updated", status: "PENDING" },
-                    { topic: "orders/cancelled", status: "PENDING" },
-                    { topic: "refunds/create", status: "PENDING" },
-                  ]
-              ).map((w: any) => (
-                <label key={w.topic}>
-                  <input type="checkbox" checked readOnly />
-                  {w.topic} · {w.status}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-        {tab === "Sincronização" && (
-          <div className="syncPanel">
-            <h3>Sincronização manual</h3>
-            <p className="muted">Busca dados recentes da loja conectada ou do modo DEV/manual.</p>
-            <div className="syncOptions">
-              <button onClick={() => sync({ products: false, orders: true, days: 90 })}>
-                <RefreshCw />
-                Pedidos
-              </button>
-              <button onClick={() => sync({ products: true, orders: false })}>
-                <PackageCheck />
-                Produtos
-              </button>
-              <button onClick={() => sync({ products: true, orders: true, days: 90 })}>
-                <CircleDollarSign />
-                Sincronizar agora
-              </button>
-            </div>
           </div>
         )}
       </div>
@@ -3141,18 +3316,6 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
   if (i.name === "Mercado Livre") {
     const connected = status?.status === "CONNECTED";
     const mlName = status?.user?.nickname || status?.externalAccountId || "Nenhuma";
-    const syncMl = async () => {
-      await apiJson("/api/integrations/refresh", {
-        method: "POST",
-        body: JSON.stringify({ provider: "Mercado Livre" }),
-      }).catch(() => null);
-      const r = await apiJson("/api/integrations/mercadolivre/sync", {
-        method: "POST",
-        body: JSON.stringify({ days: 365 }),
-      });
-      notify(`Mercado Livre: ${r.orders || 0} pedidos sincronizados`);
-      reloadStatus();
-    };
     return (
       <div>
         <div className="integrationHero">
@@ -3164,7 +3327,7 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
           <span className={connected && !status?.requiresReconnect ? "status ok" : "status warn"}>{status?.requiresReconnect ? "Reconectar" : connected ? "Conectado" : "Preparado"}</span>
         </div>
         <div className="tabs">
-          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
+          {["Configuração", "Webhooks"].map((t) => (
             <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
               {t}
             </button>
@@ -3200,12 +3363,10 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
             </div>
             {status?.requiresReconnect && <p className="negative">A conexão não tem token de renovação. Ative “Refresh Token” no aplicativo do Mercado Livre Developer e conecte a conta novamente para retomar a sincronização automática.</p>}
             <p className="muted">Tokens ficam criptografados no servidor. Com “Refresh Token” ativo no aplicativo, a conexão se renova automaticamente.</p>
-            <div className="syncOptions">
-              <button onClick={() => (location.href = "/api/integrations/mercadolivre/connect")}>
-                <Link2 />
-                Conectar Mercado Livre
-              </button>
-              <button
+            <div className="syncOptions singleIntegrationAction">
+              {!connected || status?.requiresReconnect ? <button onClick={() => (location.href = "/api/integrations/mercadolivre/connect")}>
+                <Link2 />Conectar
+              </button> : <button className="disconnectAction integrationDisconnectButton"
                 onClick={async () => {
                   await apiJson("/api/integrations/mercadolivre/disconnect", {
                     method: "POST",
@@ -3215,9 +3376,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                   notify("Mercado Livre desconectado");
                 }}
               >
-                <Trash2 />
-                Desconectar
-              </button>
+                <Link2 />Desconectar
+              </button>}
             </div>
           </div>
         )}
@@ -3235,32 +3395,6 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                 <Copy size={15} />
               </button>
             </div>
-            <div className="eventChecks">
-              {(status?.webhooks?.length
-                ? status.webhooks
-                : [
-                    { topic: "notifications", status: "PENDING" },
-                    { topic: "orders", status: "PENDING" },
-                  ]
-              ).map((w: any) => (
-                <label key={w.topic}>
-                  <input type="checkbox" checked readOnly />
-                  {w.topic} · {w.status}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-        {tab === "Sincronização" && (
-          <div className="syncPanel">
-            <h3>Sincronização manual</h3>
-            <p className="muted">Busca pedidos recentes da conta conectada e atualiza vendas/dashboard.</p>
-            <div className="syncOptions">
-              <button onClick={syncMl}>
-                <RefreshCw />
-                Sincronizar pedidos
-              </button>
-            </div>
           </div>
         )}
       </div>
@@ -3268,18 +3402,6 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
   }
   if (i.name === "Amazon") {
     const connected = status?.status === "CONNECTED";
-    const syncAmazon = async () => {
-      await apiJson("/api/integrations/refresh", {
-        method: "POST",
-        body: JSON.stringify({ provider: "Amazon" }),
-      }).catch(() => null);
-      const r = await apiJson("/api/integrations/amazon/sync", {
-        method: "POST",
-        body: JSON.stringify({ days: 365 }),
-      });
-      notify(`Amazon: ${r.orders || 0} pedidos sincronizados`);
-      reloadStatus();
-    };
     return (
       <div>
         <div className="integrationHero">
@@ -3291,14 +3413,9 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
           <span className={connected ? "status ok" : "status warn"}>{connected ? "Conectado" : "Preparado"}</span>
         </div>
         <div className="tabs">
-          {["Configuração", "Webhooks", "Sincronização"].map((t) => (
-            <button className={tab === t ? "selected" : ""} onClick={() => setTab(t)} key={t}>
-              {t}
-            </button>
-          ))}
+          <button className="selected">Configuração</button>
         </div>
-        {tab === "Configuração" && (
-          <div className="credentials">
+        <div className="credentials">
             <div className="detailGrid">
               <div className="detailBox">
                 <span>Marketplace</span>
@@ -3322,8 +3439,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
               </div>
             </div>
             <p className="muted">O refresh token da Amazon fica criptografado no servidor. A sincronização usa LWA e SP-API no marketplace Brasil.</p>
-            <div className="syncOptions">
-              <button
+            <div className="syncOptions singleIntegrationAction">
+              {!connected ? <button
                 onClick={async () => {
                   await apiJson("/api/integrations/amazon/connect", {
                     method: "POST",
@@ -3333,10 +3450,8 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                   reloadStatus();
                 }}
               >
-                <Link2 />
-                Conectar Amazon
-              </button>
-              <button
+                <Link2 />Conectar
+              </button> : <button className="disconnectAction integrationDisconnectButton"
                 onClick={async () => {
                   await apiJson("/api/integrations/amazon/disconnect", {
                     method: "POST",
@@ -3346,35 +3461,10 @@ function IntegrationDetail({ i, notify }: { i: Integration; notify: (x: string) 
                   notify("Amazon desconectada");
                 }}
               >
-                <Trash2 />
-                Desconectar
-              </button>
+                <Link2 />Desconectar
+              </button>}
             </div>
-          </div>
-        )}
-        {tab === "Webhooks" && (
-          <div className="webhookBox">
-            <label>Notificações</label>
-            <div className="copyField">
-              <code>Amazon SP-API Notifications via Seller Central</code>
-              <button onClick={() => notify("Configure notificações no Seller Central quando liberado")}>
-                <Copy size={15} />
-              </button>
-            </div>
-          </div>
-        )}
-        {tab === "Sincronização" && (
-          <div className="syncPanel">
-            <h3>Sincronização manual</h3>
-            <p className="muted">Renova o token e busca pedidos recentes da conta Amazon autorizada.</p>
-            <div className="syncOptions">
-              <button onClick={syncAmazon}>
-                <RefreshCw />
-                Sincronizar pedidos
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     );
   }
@@ -3449,7 +3539,9 @@ function SaleDetail({ s, set, products }: any) {
     freight = Number(s.shippingAmount ?? s.freight ?? 0),
     rawItem = s.raw?.items?.[0] || {},
     originalSku = rawItem.sku || s.itemSku || "";
-  const assignable = products.filter((p: any) => String(p.sku || "").match(/(127|220)/i));
+  const orderChannel=String(s.raw?.channel||s.channel||s.source||'').toUpperCase().replaceAll(' ','_');
+  const expectedSource=orderChannel.includes('SHOPIFY')?'SHOPIFY':orderChannel.includes('AMAZON')?'AMAZON':orderChannel.includes('MERCADO')?'MERCADO_LIVRE':orderChannel.includes('SHOPEE')?'SHOPEE':'';
+  const assignable = products.filter((p:any)=>!expectedSource||String(p.source||'').toUpperCase()===expectedSource);
   const selectedSku = String(s.itemSku ?? (assignable.some((p: any) => p.sku === originalSku) ? originalSku : ""));
   const selectedProduct = products.find((p: any) => p.sku === selectedSku);
   const qty = Number(rawItem.quantity || 1);
@@ -3462,11 +3554,11 @@ function SaleDetail({ s, set, products }: any) {
         <span>Cliente</span>
         <input value={s.customer || ""} onChange={(e) => set("customer", e.target.value)} />
       </label>
-      <AnchoredSelect label="Produto / voltagem" value={selectedSku} onChange={(v) => set("itemSku", v)} options={[{ value: "", label: `Sem atribuir${originalSku ? ` (${originalSku})` : ""}` }, ...assignable.map((p: any) => ({ value: p.sku, label: `${p.sku} · ${p.product}` }))]} />
+      <AnchoredSelect label="Produto" value={selectedSku} onChange={(v) => { const product = products.find((item: any) => item.sku === v); set("itemSku", v); set("cogs", product ? Number(product.unitCost ?? product.cost ?? 0) * qty : 0); }} options={assignable.map((p: any) => ({ value: p.sku, label: `${p.sku} · ${p.product}` }))} />
       <label className="field"><span>Valor</span><input type="number" value={Number(s.grossAmount ?? s.raw?.grossAmount ?? 0)} onChange={(e) => set("grossAmount", e.target.value)} /></label>
       <label className="field"><span>Custo dos produtos</span><input type="number" value={cogs} onChange={(e) => set("cogs", e.target.value)} /></label>
       <CalendarDateTimeField label="Data e hora da venda" value={paidAt} onChange={(value) => set("paidAt", value)} />
-      <label className="field"><span>Método de pagamento</span><input value={paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} placeholder="Informado pela plataforma" /></label>
+      <label className="field"><span>Método de Pag.</span><input value={paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} placeholder="Informado pela plataforma" /></label>
       <label className="field">
         <span>Taxa da plataforma</span>
         <input type="number" value={fee} onChange={(e) => set("feeAmount", e.target.value)} />
@@ -3522,7 +3614,7 @@ function CalendarDateTimeField({ label, value, onChange }: { label: string; valu
   const date = String(value || "").slice(0, 10);
   const time = String(value || "").slice(11, 16) || "00:00";
   const update = (nextDate: string, nextTime: string) => onChange(nextDate ? `${nextDate}T${nextTime || "00:00"}` : "");
-  return <div className="field calendarDateTimeField"><span>{label}</span><div><CalendarDateField label="Data" value={date} onChange={(next) => update(next, time)} /><label><span>Hora</span><input type="time" value={time} onChange={(event) => update(date || todayISO(), event.target.value)} /></label></div></div>;
+  return <div className="field calendarDateTimeField"><span>{label}</span><div><CalendarDateField label="Data" value={date} onChange={(next) => update(next, time)} /><input aria-label="Hora" type="time" value={time} onChange={(event) => update(date || todayISO(), event.target.value)} /></div></div>;
 }
 function Input({ label, value, onChange, type = "text" }: any) {
   if (type === "date") return <CalendarDateField label={label} value={value || ""} onChange={onChange} />;
@@ -3537,13 +3629,13 @@ function Select({ label, value, onChange, options }: any) {
   return <AnchoredSelect label={label} value={value ?? ""} onChange={onChange} options={[{ value: "", label: "Selecione..." }, ...options]} />;
 }
 
-type SelectOption = string | { value: string; label: string };
+type SelectOption = string | { value: string; label: string; icon?: string };
 function AnchoredSelect({ label, value, onChange, options, compact = false }: { label?: string; value: string; onChange: (value: string) => void; options: SelectOption[]; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const normalized = options.map((option) => typeof option === "string" ? { value: option, label: option } : option);
+  const normalized: Array<{ value: string; label: string; icon?: string }> = options.map((option) => typeof option === "string" ? { value: option, label: option } : option);
   const current = normalized.find((option) => option.value === String(value ?? ""));
   useEffect(() => {
     if (!open) return;
@@ -3582,9 +3674,9 @@ function AnchoredSelect({ label, value, onChange, options, compact = false }: { 
   };
   return <div className={compact ? "anchoredSelect anchoredSelectCompact" : "field anchoredSelect"}>
     {label && <span>{label}</span>}
-    <button ref={triggerRef} type="button" className="anchoredSelectTrigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={toggle}><span>{current?.label || "Selecione..."}</span><ChevronDown size={15} /></button>
+    <button ref={triggerRef} type="button" className="anchoredSelectTrigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={toggle}><span className="anchoredSelectValue">{current?.icon && <span className="filterPlatformLogo"><img src={current.icon} alt="" /></span>}<span>{current?.label || "Selecione..."}</span></span><ChevronDown size={15} /></button>
     {open && createPortal(<div ref={panelRef} className={`anchoredSelectMenu${compact ? " compact" : ""}`} role="listbox" aria-label={label} style={position}>
-      {normalized.map((option) => <button key={option.value} type="button" role="option" aria-selected={option.value === String(value ?? "")} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}</button>)}
+      {normalized.map((option) => <button key={option.value} type="button" role="option" aria-selected={option.value === String(value ?? "")} onClick={() => { onChange(option.value); setOpen(false); }}>{option.icon && <span className="filterPlatformLogo"><img src={option.icon} alt="" /></span>}<span>{option.label}</span></button>)}
     </div>, document.querySelector(".shell") || document.body)}
   </div>;
 }

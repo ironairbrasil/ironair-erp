@@ -71,6 +71,14 @@ export async function shopifyGraphQL<T=any>(query:string, variables:Record<strin
 
 function attrs(list:any[]|undefined){return Object.fromEntries((list||[]).filter(x=>x?.name||x?.key).map(x=>[x.name||x.key,x.value]));}
 function num(v:any){const n=Number(v??0);return Number.isFinite(n)?n:0}
+function shopifySku(productTitle:string, variantTitle:string, variantId:string){
+  const text=`${productTitle} ${variantTitle}`.toUpperCase();
+  if(/^IRON AIR$/i.test(productTitle.trim()) && /127V|110V/.test(text)) return 'IRON-AIR-127V';
+  if(/^IRON AIR$/i.test(productTitle.trim()) && /220V/.test(text)) return 'IRON-AIR-220V';
+  const slug=`${productTitle}${variantTitle && variantTitle !== 'Default Title' ? `-${variantTitle}` : ''}`
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,54);
+  return slug || `SHOPIFY-${String(variantId).split('/').pop()}`;
+}
 function orderStatus(o:any):IngestOrder['status']{
   const financial=String(o.financial_status||o.displayFinancialStatus||'').toUpperCase();
   const cancelled=!!(o.cancelled_at||o.cancelledAt);
@@ -105,6 +113,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
   return {
     tenantId,
     externalId:String(o.id),
+    displayId:String(o.name||o.order_number||o.orderNumber||'').replace(/^#/,'')||undefined,
     channel:'SHOPIFY',
     status:orderStatus(o),
     currency:o.currency||o.currencyCode||'BRL',
@@ -131,7 +140,8 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
 export async function processShopifyOrder(o:any, tenantId?:string){
   const scopedTenantId=tenantId||await getTenantId();
   const mapped=mapShopifyOrder(o,scopedTenantId);
-  mapped.paymentMethod=await findAsaasPaymentMethod(scopedTenantId,o)||mapped.paymentMethod;
+  const shopifyMethod=normalizePaymentMethod(mapped.paymentMethod);
+  mapped.paymentMethod=await findAsaasPaymentMethod(scopedTenantId,o)||(shopifyMethod.toLowerCase()==='manual'?null:shopifyMethod||null);
   return ingestOrder(mapped);
 }
 
@@ -191,16 +201,29 @@ export async function syncShopifyProducts(tenantId?:string){
   const conn=await getShopifyConnection(tenantId);
   let cursor:string|null=null,count=0;
   do{
-    const data:any=await shopifyGraphQL(`query($after:String){products(first:50,after:$after){pageInfo{hasNextPage endCursor}nodes{id title status variants(first:100){nodes{id title sku barcode price inventoryQuantity}}}}}`,{after:cursor},conn);
+    const data:any=await shopifyGraphQL(`query($after:String){
+      products(first:50,after:$after){
+        pageInfo{hasNextPage endCursor}
+        nodes{
+          id title status
+          featuredImage{url}
+          images(first:1){nodes{url}}
+          variants(first:100){nodes{id title sku barcode price inventoryQuantity image{url}}}
+        }
+      }
+    }`,{after:cursor},conn);
     for(const p of data.products.nodes){
-      const product=await db.product.upsert({where:{tenantId_shopifyId:{tenantId:conn.tenantId,shopifyId:p.id}},create:{tenantId:conn.tenantId,shopifyId:p.id,name:p.title,active:p.status==='ACTIVE'},update:{name:p.title,active:p.status==='ACTIVE'}});
+      const productImage=p.featuredImage?.url||p.images?.nodes?.[0]?.url||p.variants?.nodes?.find((variant:any)=>variant.image?.url)?.image?.url||null;
+      const product=await db.product.upsert({where:{tenantId_shopifyId:{tenantId:conn.tenantId,shopifyId:p.id}},create:{tenantId:conn.tenantId,shopifyId:p.id,name:p.title,imageUrl:productImage,active:p.status==='ACTIVE'},update:{name:p.title,imageUrl:productImage,active:p.status==='ACTIVE'}});
       for(const v of p.variants.nodes){
-        if(!v.sku)continue;
-        await db.productVariant.upsert({
-          where:{tenantId_sku:{tenantId:conn.tenantId,sku:v.sku}},
-          create:{tenantId:conn.tenantId,productId:product.id,shopifyId:v.id,sku:v.sku,name:v.title,barcode:v.barcode,salePrice:num(v.price),unitCost:0,active:true},
-          update:{productId:product.id,shopifyId:v.id,name:v.title,barcode:v.barcode,salePrice:num(v.price),active:true}
+        const sku=String(v.sku||shopifySku(p.title,v.title,v.id));
+        const variant=await db.productVariant.upsert({
+          where:{tenantId_sku:{tenantId:conn.tenantId,sku}},
+          create:{tenantId:conn.tenantId,productId:product.id,shopifyId:v.id,sku,name:v.title,source:'SHOPIFY',availableQuantity:Math.max(0,Number(v.inventoryQuantity||0)),fulfillment:'Shopify',externalUrl:`https://${conn.shopDomain}/admin/products/${String(p.id).split('/').pop()}`,barcode:v.barcode,salePrice:num(v.price),unitCost:0,active:true},
+          update:{productId:product.id,shopifyId:v.id,name:v.title,source:'SHOPIFY',availableQuantity:Math.max(0,Number(v.inventoryQuantity||0)),fulfillment:'Shopify',externalUrl:`https://${conn.shopDomain}/admin/products/${String(p.id).split('/').pop()}`,barcode:v.barcode,salePrice:num(v.price),active:true}
         });
+        const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId:conn.tenantId,code:'CENTRAL'}}});
+        if(warehouse) await db.inventoryBalance.upsert({where:{tenantId_variantId_warehouseId:{tenantId:conn.tenantId,variantId:variant.id,warehouseId:warehouse.id}},create:{tenantId:conn.tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:0,reserved:0},update:{}});
         count++;
       }
     }

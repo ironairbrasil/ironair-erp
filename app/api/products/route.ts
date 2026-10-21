@@ -5,11 +5,20 @@ import { auditLog, mergeManualOverrides } from '@/lib/audit';
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
-  const variants=await db.productVariant.findMany({where:{tenantId,active:true,product:{active:true}},orderBy:{sku:'asc'},include:{product:true,balances:{where:{tenantId},include:{warehouse:true}}}});
+  const variants=await db.productVariant.findMany({where:{tenantId,active:true,product:{active:true}},orderBy:{sku:'asc'},include:{product:{include:{variants:{where:{active:false},select:{sku:true,source:true}},_count:{select:{variants:{where:{active:true}}}}}},balances:{where:{tenantId},include:{warehouse:true}},orderItems:{select:{order:{select:{channel:true}}}}}});
   return NextResponse.json(variants.map(v=>({
     id:v.id,
     productId:v.productId,
     product:v.product.name,
+    parentId:v.productId,
+    parentName:v.product.name,
+    parentVariantCount:v.product._count.variants,
+    parentSku:v.source==='AMAZON'?v.product.variants.find(parent=>parent.source==='AMAZON')?.sku||null:null,
+    imageUrl:v.product.imageUrl,
+    source:v.source || (v.shopifyId ? 'SHOPIFY' : v.orderItems[0]?.order.channel) || 'MANUAL',
+    availableQuantity:v.availableQuantity,
+    fulfillment:v.fulfillment,
+    externalUrl:v.externalUrl,
     sku:v.sku,
     name:v.name,
     voltage:v.voltage,
@@ -66,6 +75,7 @@ export async function POST(req:Request){
         name:String(b.name||productName),
         salePrice:Number(b.price||b.salePrice||0),
         unitCost:Number(b.cost||b.unitCost||0),
+        ...(Object.prototype.hasOwnProperty.call(b,'available')?{availableQuantity:Math.max(0,Math.trunc(Number(b.available||0)))}:{}),
         safetyStock:Math.max(0,Math.trunc(Number(b.safety||b.safetyStock||0))),
         active:b.status==='Pausado'?false:true,
         manualOverrides:mergeManualOverrides(before?.manualOverrides,['productId','sku','name','salePrice','unitCost','safetyStock','active']) as any
@@ -79,20 +89,33 @@ export async function POST(req:Request){
         name:String(b.name||productName),
         salePrice:Number(b.price||b.salePrice||0),
         unitCost:Number(b.cost||b.unitCost||0),
+        availableQuantity:Object.prototype.hasOwnProperty.call(b,'available')?Math.max(0,Math.trunc(Number(b.available||0))):null,
         safetyStock:Math.max(0,Math.trunc(Number(b.safety||b.safetyStock||0))),
         active:b.status==='Pausado'?false:true,
         manualOverrides:mergeManualOverrides(null,['productId','sku','name','salePrice','unitCost','safetyStock','active']) as any
       },
       update:updateData
     });
-    if(Object.prototype.hasOwnProperty.call(b,'quantity')||Object.prototype.hasOwnProperty.call(b,'physical')){
-      const quantity=Math.max(0,Math.trunc(Number(b.quantity??b.physical??0)));
-      const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId,code:'CENTRAL'}}});
+    const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId,code:'CENTRAL'}}});
+    if(warehouse) await db.inventoryBalance.upsert({
+      where:{tenantId_variantId_warehouseId:{tenantId,variantId:variant.id,warehouseId:warehouse.id}},
+      create:{tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:0,reserved:0},
+      update:{}
+    });
+    if(Object.prototype.hasOwnProperty.call(b,'physical')){
+      const desiredPhysical=Math.max(0,Math.trunc(Number(b.physical||0)));
+      const movements=await db.inventoryMovement.findMany({where:{tenantId,variantId:variant.id,type:{in:['ADJUSTMENT','SALE']}},select:{quantity:true}});
+      const currentPhysical=movements.reduce((sum,movement)=>sum+movement.quantity,0);
+      const adjustment=desiredPhysical-currentPhysical;
+      if(warehouse&&adjustment!==0) await db.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:'ADJUSTMENT',quantity:adjustment,reference:`product-physical:${sku}:${Date.now()}`,source:'MANUAL'}});
+    }
+    if(Object.prototype.hasOwnProperty.call(b,'available')){
+      const available=Math.max(0,Math.trunc(Number(b.available||0)));
       if(warehouse){
         await db.inventoryBalance.upsert({
           where:{tenantId_variantId_warehouseId:{tenantId,variantId:variant.id,warehouseId:warehouse.id}},
-          create:{tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:quantity,reserved:0},
-          update:{onHand:quantity}
+          create:{tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:available,reserved:0},
+          update:{onHand:available}
         });
       }
     }
@@ -103,7 +126,7 @@ export async function POST(req:Request){
       entityId:variant.id,
       action:before?'update_manual_product':'create_manual_product',
       before:before?{product:before.product.name,sku:before.sku,name:before.name,salePrice:before.salePrice,unitCost:before.unitCost,safetyStock:before.safetyStock,active:before.active}:null,
-      after:{product:productName,sku,name:updateData.name,salePrice:updateData.salePrice,unitCost:updateData.unitCost,safetyStock:updateData.safetyStock,active:updateData.active,quantity:b.quantity??b.physical},
+      after:{product:productName,sku,name:updateData.name,salePrice:updateData.salePrice,unitCost:updateData.unitCost,safetyStock:updateData.safetyStock,active:updateData.active,physical:b.physical,available:b.available},
       metadata:{previousSku:existingSku}
     });
     return NextResponse.json({ok:true,id:variant.id});

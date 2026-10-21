@@ -42,23 +42,31 @@ export async function listAsaasTransfers(tenantId: string) {
   }
 }
 
-export async function findAsaasPaymentMethod(tenantId: string, order: { id?: unknown; name?: unknown; order_number?: unknown; total_price?: unknown; processed_at?: unknown; created_at?: unknown }) {
+export async function findAsaasPaymentMethod(tenantId: string, order: { id?: unknown; externalId?: unknown; displayId?: unknown; name?: unknown; order_number?: unknown; orderNumber?: unknown; total_price?: unknown; grossAmount?: unknown; processed_at?: unknown; created_at?: unknown; processedAt?: unknown; createdAt?: unknown; paidAt?: unknown; currentTotalPriceSet?: any; attribution?: { externalReference?: unknown } }) {
   const integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Asaas' } } });
   if (!integration?.accessTokenEncrypted) return '';
   try {
     const token = decryptSecret(integration.accessTokenEncrypted);
-    const references = [order.id, order.name, order.order_number].filter(Boolean).map(String);
+    const references = [order.id, order.externalId, order.displayId, order.name, order.order_number, order.orderNumber, order.attribution?.externalReference].filter(Boolean).map(String);
     for (const reference of references) {
       const page = await asaasRequest(token, `/payments?limit=10&externalReference=${encodeURIComponent(reference)}`);
       const match = page.data?.[0];
       if (match) return normalizePaymentMethod(match.billingType);
     }
-    const date = String(order.processed_at || order.created_at || '').slice(0, 10);
-    const amount = Number(order.total_price || 0);
+    const date = String(order.processed_at || order.processedAt || order.created_at || order.createdAt || order.paidAt || '').slice(0, 10);
+    const amount = Number(order.total_price || order.currentTotalPriceSet?.shopMoney?.amount || order.grossAmount || 0);
     if (!date || !amount) return '';
     const page = await asaasRequest(token, `/payments?limit=100&dateCreated[ge]=${date}&dateCreated[le]=${date}`);
-    const matches = (page.data || []).filter((payment: any) => Math.abs(Number(payment.value || 0) - amount) < 0.01);
-    return matches.length === 1 ? normalizePaymentMethod(matches[0].billingType) : '';
+    const payments:any[]=page.data||[];
+    const direct=payments.filter((payment:any)=>Math.abs(Number(payment.value||0)-amount)<0.01);
+    if(direct.length===1) return normalizePaymentMethod(direct[0].billingType);
+    const groups=new Map<string,any[]>();
+    for(const payment of payments){
+      const reference=String(payment.externalReference||payment.id||'');
+      groups.set(reference,[...(groups.get(reference)||[]),payment]);
+    }
+    const installmentGroups=[...groups.values()].filter(group=>Math.abs(group.reduce((sum,payment)=>sum+Number(payment.value||0),0)-amount)<0.02);
+    return installmentGroups.length===1?normalizePaymentMethod(installmentGroups[0][0]?.billingType):'';
   } catch {
     return '';
   }

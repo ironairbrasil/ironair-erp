@@ -196,7 +196,7 @@ function amzDate(date = new Date()){
   return date.toISOString().replace(/[:-]|\.\d{3}/g, '');
 }
 
-async function amazonRequest<T = any>(path: string, options: { method?: string; query?: Record<string, string>; body?: unknown; accessToken?: string } = {}, tenantId?: string): Promise<T>{
+export async function amazonRequest<T = any>(path: string, options: { method?: string; query?: Record<string, string>; body?: unknown; accessToken?: string } = {}, tenantId?: string): Promise<T>{
   const conn = await getAmazonConnection(tenantId);
   const method = options.method || 'GET';
   const url = new URL(path, conn.endpoint);

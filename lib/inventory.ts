@@ -1,8 +1,8 @@
 import { db } from './db';
 import { getTenantId } from './tenant';
-import type { InventoryMovementType } from '@prisma/client';
+import type { InventoryMovementType, Prisma } from '@prisma/client';
 import { sendTenantPush } from './push';
-export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string;createdAt?:Date|string}){
+export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string;createdAt?:Date|string;metadata?:Prisma.InputJsonObject}){
  if(!Number.isInteger(input.quantity)||input.quantity===0) throw new Error('quantity must be a non-zero integer');
  const tenantId=input.tenantId||await getTenantId();
  const result=await db.$transaction(async tx=>{
@@ -13,9 +13,9 @@ export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode
   const reserveDelta=input.type==='RESERVE'?Math.abs(input.quantity):input.type==='RELEASE'?-Math.abs(input.quantity):0;
   const onHandDelta=['RESERVE','RELEASE'].includes(input.type)?0:input.quantity;
   const nextOnHand=bal.onHand+onHandDelta, nextReserved=bal.reserved+reserveDelta;
-  if(nextOnHand<0)throw new Error(`Insufficient stock for ${input.sku}`);if(nextReserved<0||nextReserved>nextOnHand)throw new Error(`Invalid reservation for ${input.sku}`);
+  if(nextOnHand<0&&input.type!=='SALE')throw new Error(`Insufficient stock for ${input.sku}`);if(nextReserved<0||(input.type!=='SALE'&&nextReserved>nextOnHand))throw new Error(`Invalid reservation for ${input.sku}`);
   await tx.inventoryBalance.update({where:{id:bal.id},data:{onHand:nextOnHand,reserved:nextReserved}});
-  const movement=await tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,source:String(input.idempotencyKey||'').startsWith('manual')?'MANUAL':'SYNC',createdAt:input.createdAt?new Date(input.createdAt):undefined}});
+  const movement=await tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,source:String(input.idempotencyKey||'').startsWith('manual')?'MANUAL':'SYNC',metadata:input.metadata,createdAt:input.createdAt?new Date(input.createdAt):undefined}});
   return {movement,alert:bal.onHand-bal.reserved>variant.safetyStock && nextOnHand-nextReserved<=variant.safetyStock?{sku:variant.sku,name:variant.name,available:nextOnHand-nextReserved}:null};
  });
  if(result.alert) await sendTenantPush(tenantId,{title:'Estoque de atenção',body:`${result.alert.name} (${result.alert.sku}): ${result.alert.available} disponíveis`,tag:`stock:${result.alert.sku}`,url:'/'}).catch(error=>console.error('Push stock failed',error));

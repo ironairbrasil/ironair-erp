@@ -466,12 +466,26 @@ export async function syncMercadoLivreOrders(days = 365, tenantId?: string){
   let count = 0;
   const limit = 50;
   const from = isoDaysAgo(days);
+  const officialSkuByItem=new Map<string,string>();
   do{
     const search:any = await mercadoLivreApi(`/orders/search?seller=${encodeURIComponent(seller)}&order.date_created.from=${encodeURIComponent(from)}&sort=date_desc&limit=${limit}&offset=${offset}`, {}, conn.tenantId);
     const results = Array.isArray(search.results) ? search.results : [];
     for(const orderSummary of results){
       const orderId = orderSummary?.id;
       const order = orderId ? await mercadoLivreApi(`/orders/${orderId}`, {}, conn.tenantId) : orderSummary;
+      for(const entry of order?.order_items||[]){
+        const itemId=String(entry?.item?.id||'');
+        if(!itemId) continue;
+        if(!officialSkuByItem.has(itemId)){
+          const item:any=await mercadoLivreApi(`/items/${encodeURIComponent(itemId)}`,{},conn.tenantId);
+          const variation=(item.variations||[]).find((candidate:any)=>String(candidate.id)===String(entry?.item?.variation_id));
+          const attributes=[...(variation?.attributes||[]),...(item.attributes||[])];
+          const sku=String(variation?.seller_custom_field||item.seller_custom_field||attributes.find((attribute:any)=>attribute.id==='SELLER_SKU')?.value_name||entry?.item?.seller_sku||'').trim();
+          officialSkuByItem.set(itemId,sku);
+        }
+        const officialSku=officialSkuByItem.get(itemId);
+        if(officialSku) entry.item.seller_sku=officialSku;
+      }
       const extra = await mercadoLivreOrderExtra(order, conn.tenantId);
       await ingestOrder({ ...await mapMercadoLivreOrderWithReturns(order, conn.tenantId, extra), skipInventory: true });
       count++;
@@ -479,7 +493,7 @@ export async function syncMercadoLivreOrders(days = 365, tenantId?: string){
     offset += results.length;
     if(!results.length || offset >= Number(search.paging?.total || 0)) break;
   }while(offset < 1000);
-  await syncMercadoLivreReturns(conn.tenantId);
+  await syncMercadoLivreReturns(conn.tenantId).catch(()=>0);
   await db.integration.update({ where: { id: conn.integrationId }, data: { lastSyncAt: new Date(), lastError: null } });
   return count;
 }

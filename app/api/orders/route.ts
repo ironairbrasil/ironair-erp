@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { ingestOrder } from '@/lib/orders';
+import { canonicalSku, ingestOrder } from '@/lib/orders';
 import { moveStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
 import { normalizePaymentMethod } from '@/lib/payment-method';
@@ -10,44 +10,38 @@ async function reconcileOrderSaleMovement(input:{tenantId:string;orderId:string;
   const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId:input.tenantId,code:'CENTRAL'}}});
   if(!warehouse) throw new Error('Estoque CENTRAL não encontrado');
   const quantity=-Math.abs(input.quantity || 1);
+  const variant=await db.productVariant.findFirst({where:{id:input.variantId,tenantId:input.tenantId}});
+  if(!variant) throw new Error('Produto não encontrado');
   const current=await db.inventoryMovement.findFirst({where:{tenantId:input.tenantId,orderId:input.orderId,type:'SALE'},include:{variant:true,warehouse:true},orderBy:{createdAt:'asc'}});
   if(!current){
-    await moveStock({
-      tenantId:input.tenantId,
-      sku:input.sku,
-      warehouseCode:'CENTRAL',
-      quantity,
-      type:'SALE',
-      reference:input.externalId,
-      orderId:input.orderId,
-      createdAt:input.date,
-      idempotencyKey:`manual-assign-sale:${input.orderId}`
-    });
+    await db.inventoryMovement.create({data:{tenantId:input.tenantId,variantId:input.variantId,warehouseId:warehouse.id,type:'SALE',quantity,reference:input.externalId,orderId:input.orderId,createdAt:input.date,idempotencyKey:`manual-assign-sale:${input.orderId}`,source:'MANUAL'}});
     return;
   }
   if(current.variantId===input.variantId){
     await db.inventoryMovement.update({where:{id:current.id},data:{quantity,reference:input.externalId,createdAt:input.date,warehouseId:warehouse.id}});
     return;
   }
-  await db.$transaction(async tx=>{
-    const oldBalance=await tx.inventoryBalance.findUnique({where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:current.variantId,warehouseId:current.warehouseId}}});
-    if(oldBalance) await tx.inventoryBalance.update({where:{id:oldBalance.id},data:{onHand:oldBalance.onHand-current.quantity}});
-    const newBalance=await tx.inventoryBalance.upsert({
-      where:{tenantId_variantId_warehouseId:{tenantId:input.tenantId,variantId:input.variantId,warehouseId:warehouse.id}},
-      create:{tenantId:input.tenantId,variantId:input.variantId,warehouseId:warehouse.id,onHand:0,reserved:0},
-      update:{}
-    });
-    const nextOnHand=newBalance.onHand+quantity;
-    if(nextOnHand<0) throw new Error(`Estoque insuficiente para ${input.sku}`);
-    await tx.inventoryBalance.update({where:{id:newBalance.id},data:{onHand:nextOnHand}});
-    await tx.inventoryMovement.update({where:{id:current.id},data:{variantId:input.variantId,warehouseId:warehouse.id,quantity,reference:input.externalId,createdAt:input.date,idempotencyKey:`manual-assign-sale:${input.orderId}`}});
-  });
+  await db.inventoryMovement.update({where:{id:current.id},data:{variantId:input.variantId,warehouseId:warehouse.id,quantity,reference:input.externalId,createdAt:input.date,idempotencyKey:`manual-assign-sale:${input.orderId}`}});
 }
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
-  const rows=await db.order.findMany({where:{tenantId},take:1000,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:{include:{variant:{select:{voltage:true}}}},attribution:true,customer:true}});
-  return NextResponse.json(rows);
+  const unlinked=await db.orderItem.findMany({where:{tenantId,variantId:null},select:{id:true,sku:true,name:true}});
+  if(unlinked.length){
+    const variants=await db.productVariant.findMany({where:{tenantId,active:true},select:{id:true,sku:true,name:true,unitCost:true}});
+    const bySku=new Map(variants.map(variant=>[variant.sku.toUpperCase(),variant]));
+    const links=unlinked.map(item=>({item,variant:bySku.get(canonicalSku(item.sku,item.name).toUpperCase())})).filter(entry=>Boolean(entry.variant));
+    if(links.length) await db.$transaction(links.map(({item,variant})=>db.orderItem.update({where:{id:item.id},data:{variantId:variant!.id,sku:variant!.sku,unitCost:variant!.unitCost}})));
+  }
+  const [rows,shopify]=await Promise.all([
+    db.order.findMany({where:{tenantId},take:1000,orderBy:[{paidAt:'desc'},{createdAt:'desc'}],include:{items:{include:{variant:{include:{product:{select:{name:true}}}}}},attribution:true,customer:true}}),
+    db.integration.findUnique({where:{tenantId_provider:{tenantId,provider:'Shopify'}},select:{shopDomain:true}})
+  ]);
+  const shopDomain=shopify?.shopDomain?.replace(/^https?:\/\//,'').replace(/\/$/,'');
+  return NextResponse.json(rows.map(order=>({
+    ...order,
+    platformUrl:order.channel==='SHOPIFY'&&shopDomain?`https://${shopDomain}/admin/orders/${encodeURIComponent(order.externalId)}`:order.channel==='AMAZON'?`https://sellercentral.amazon.com.br/orders-v3/order/${encodeURIComponent(order.externalId)}`:order.channel==='MERCADO_LIVRE'?`https://www.mercadolivre.com.br/vendas/${encodeURIComponent(order.externalId)}/detalhe`:null
+  })));
 }
 
 export async function POST(req:Request){

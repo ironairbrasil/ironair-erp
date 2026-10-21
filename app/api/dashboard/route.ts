@@ -53,7 +53,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const [paidRows,spend,inventory,tracking,expenses,variants]=await Promise.all([
     db.order.findMany({where:{tenantId,status:'PAID',paidAt:range,...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},include:{items:true,attribution:true}}),
     product?Promise.resolve([]):db.adSpendDaily.findMany({where:{tenantId,date:range,...(platform?{platform:platform as any}:{})}}),
-    db.inventoryBalance.findMany({where:{tenantId},include:{variant:true}}),
+    db.inventoryMovement.findMany({where:{tenantId,type:{in:['ADJUSTMENT','SALE']}},select:{quantity:true}}),
     db.trackingEvent.groupBy({by:['type'],_count:{_all:true},where:{tenantId,occurredAt:range}}),
     db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
     db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}})
@@ -128,7 +128,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const metaAds=spend.reduce((sum,s)=>/meta|facebook|instagram/i.test(s.platform)?sum+Number(s.spend):sum,0);
   const googleAds=spend.reduce((sum,s)=>/google/i.test(s.platform)?sum+Number(s.spend):sum,0);
   const tiktokAds=spend.reduce((sum,s)=>/tiktok|tik tok/i.test(s.platform)?sum+Number(s.spend):sum,0);
-  const available=inventory.reduce((sum,b)=>sum+Math.max(0,b.onHand-b.reserved),0);
+  const available=inventory.reduce((sum,m)=>sum+Number(m.quantity||0),0);
   const trackingTotal=tracking.reduce((sum,t)=>sum+t._count._all,0);
   return {
     periodMode:allTime?'all':null,

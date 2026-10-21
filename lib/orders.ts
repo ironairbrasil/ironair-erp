@@ -1,24 +1,12 @@
 import { db } from './db';
 import { moveStock } from './inventory';
+import { publishAvailableStock } from './inventory-publish';
 import { getTenantId } from './tenant';
 import type { Channel } from '@prisma/client';
 import { sendTenantPush } from './push';
-export type IngestOrder={tenantId?:string;externalId:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL'};
-const skuAliases:Record<string,string>={
- 'IRONAIR-127':'IRON-AIR-127V',
- 'IRONAIR127':'IRON-AIR-127V',
- 'FBA-IRONAIR127':'IRON-AIR-127V',
- 'FBA-IRONAIR-127':'IRON-AIR-127V',
- 'FBA-IRONAIR-127V':'IRON-AIR-127V',
- 'IRONAIR-220':'IRON-AIR-220V',
- 'IRONAIR220':'IRON-AIR-220V',
- 'FBA-IRONAIR220':'IRON-AIR-220V',
- 'FBA-IRONAIR-220':'IRON-AIR-220V',
- 'FBA-IRONAIR-220V':'IRON-AIR-220V'
-};
-function canonicalSku(sku:string){
- const normalized=String(sku||'').trim().toUpperCase();
- return skuAliases[normalized]||String(sku||'').trim();
+export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL'};
+export function canonicalSku(sku:string,name=''){
+ return String(sku||'').trim();
 }
 function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
  const data:Record<string,string>={};
@@ -40,11 +28,10 @@ export async function ingestOrder(input:IngestOrder){
  });
  if(manuallyDeleted) return null;
  const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId,channel:input.channel,externalId:input.externalId}},include:{items:{orderBy:{id:'asc'}},movements:{where:{tenantId,type:'SALE'},select:{id:true,idempotencyKey:true}}}});
- const hasManualSaleMovement=!!existing?.movements?.some(m=>String(m.idempotencyKey||'').startsWith('manual-assign-sale')||String(m.idempotencyKey||'').startsWith('manual:'));
  const orderOverrides=overrideFields(existing?.manualOverrides);
  let customerId=existing?.customerId||undefined;
  if(input.customer){const key=input.customer.externalId?`${input.channel}:${input.customer.externalId}`:undefined;const data=cleanCustomerUpdate(input.customer);if(key){const current=await db.customer.findUnique({where:{tenantId_sourceKey:{tenantId,sourceKey:key}}});if(current){const customerOverrides=overrideFields(current.manualOverrides);const update=Object.fromEntries(Object.entries(data).filter(([k,v])=>v&&!(current as any)[k]&&!customerOverrides.has(k)));const customer=Object.keys(update).length?await db.customer.update({where:{id:current.id},data:update}):current;customerId=customer.id}else{const customer=await db.customer.create({data:{...data,tenantId,sourceKey:key}});customerId=customer.id}}else if(!existing?.customerId){const customer=await db.customer.create({data:{...data,tenantId}});customerId=customer.id}}
- const prepared=await Promise.all(input.items.map(async (i,index)=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});const previous=existing?.items[index];if(hasManualSaleMovement&&previous)return{tenantId,variantId:previous.variantId,sku:previous.sku,name:previous.name,quantity:previous.quantity,unitPrice:Number(previous.unitPrice||i.unitPrice),unitCost:Number(previous.unitCost||0)};if(!v&&previous?.variantId)return{tenantId,variantId:previous.variantId,sku:previous.sku,name:previous.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:Number(previous.unitCost||0)};return{tenantId,variantId:v?.id,sku:v?.sku||i.sku,name:v?.name||i.name,quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
+ const prepared=await Promise.all(input.items.map(async i=>{const sku=canonicalSku(i.sku);const v=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}}});return{tenantId,variantId:v?.id,sku,name:String(i.name||v?.name||sku),quantity:i.quantity,unitPrice:i.unitPrice,unitCost:i.unitCost??Number(v?.unitCost||0)}}));
  const order=await db.$transaction(async tx=>{
    const existingFee=Number(existing?.feeAmount||0);
    const existingFreight=Number(existing?.shippingAmount||0);
@@ -57,7 +44,14 @@ export async function ingestOrder(input:IngestOrder){
  });
  if(input.attribution) await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...mapAttribution(input.attribution)},update:mapAttribution(input.attribution)});
  // Inventory is deducted exactly once on the first transition into PAID. Refunds do NOT auto-restock: physical returns require an explicit RETURN movement.
- if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') for(const item of prepared.filter(i=>i.variantId)) await moveStock({tenantId,sku:item.sku,warehouseCode:input.warehouseCode||'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
+ if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') {
+  const changedSkus=new Set<string>();
+  for(const item of prepared.filter(i=>i.variantId)) {
+   await moveStock({tenantId,sku:item.sku,warehouseCode:input.warehouseCode||'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
+   changedSkus.add(item.sku);
+  }
+  for(const sku of changedSkus) await publishAvailableStock(tenantId,sku).catch(error=>console.error(`Inventory publish failed for ${sku}`,error));
+ }
  if(input.status==='PAID'&&existing?.status!=='PAID'&&(!input.paidAt||Date.now()-new Date(input.paidAt).getTime()<15*60*1000)) {
   const amount=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(input.grossAmount-(input.discountAmount||0));
   const paidAt=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(order.paidAt||order.createdAt);

@@ -14,7 +14,7 @@ export async function GET(req:Request){
   if(!isValidShopDomain(shop)) return NextResponse.json({ok:false,error:'Informe a loja no formato loja.myshopify.com'},{status:400});
   const tenantId=await requireTenantAdmin(req);
   const state=signState({tenantId,nonce:crypto.randomBytes(16).toString('hex'),createdAt:Date.now()});
-  const scopes=process.env.SHOPIFY_SCOPES || 'read_orders,read_products,write_webhooks';
+  const scopes=process.env.SHOPIFY_SCOPES || 'read_orders,read_products,write_inventory,write_webhooks';
   const redirectUri=`${appUrl}/api/integrations/shopify/callback`;
   const url=new URL(`https://${shop}/admin/oauth/authorize`);
   url.searchParams.set('client_id',clientId);

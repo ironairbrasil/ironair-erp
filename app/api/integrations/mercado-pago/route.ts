@@ -21,3 +21,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Falha ao conectar' }, { status: 400 });
   }
 }
+
+export async function DELETE(req: Request) {
+  try {
+    const tenantId = await requireTenantAdmin(req);
+    await db.integration.upsert({
+      where: { tenantId_provider: { tenantId, provider: 'Mercado Pago' } },
+      create: { tenantId, provider: 'Mercado Pago', status: 'DISCONNECTED', mode: 'DEV_MANUAL', config: { hidden: false } },
+      update: { status: 'DISCONNECTED', accessTokenEncrypted: null, refreshTokenEncrypted: null, connectedAt: null, disconnectedAt: new Date(), lastError: null, metadata: {}, config: { hidden: false } },
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Falha ao desconectar' }, { status: 400 });
+  }
+}
