@@ -1,24 +1,48 @@
 import { db } from './db';
 
-async function sharedAvailable(tenantId:string, sku:string){
-  const variant=await db.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku}},include:{inventoryFolder:true}});
-  if(!variant) return null;
+async function publicationPlans(tenantId:string){
   const warehouse=await db.warehouse.findUnique({where:{tenantId_code:{tenantId,code:'CENTRAL'}}});
-  if(!warehouse) return null;
-  if(!variant.inventoryFolderId){
-    const balance=await db.inventoryBalance.findUnique({where:{tenantId_variantId_warehouseId:{tenantId,variantId:variant.id,warehouseId:warehouse.id}}});
-    return {available:Math.max(0,(balance?.onHand||0)-(balance?.reserved||0)),folderId:null,variant};
-  }
-  const members=await db.productVariant.findMany({where:{tenantId,inventoryFolderId:variant.inventoryFolderId,active:true},select:{id:true}});
-  const memberIds=members.map(member=>member.id);
-  const movements=await db.inventoryMovement.findMany({where:{tenantId,variantId:{in:memberIds},warehouseId:warehouse.id,...(variant.inventoryFolder?.trackingStartDate?{createdAt:{gte:variant.inventoryFolder.trackingStartDate}}:{})},select:{type:true,quantity:true}});
-  let physical=0,reserved=0;
+  if(!warehouse) return [];
+  const [variants,folders,movements]=await Promise.all([
+    db.productVariant.findMany({where:{tenantId,active:true},include:{inventoryFolder:true}}),
+    db.inventoryFolder.findMany({where:{tenantId},orderBy:{name:'asc'}}),
+    db.inventoryMovement.findMany({where:{tenantId,warehouseId:warehouse.id},select:{variantId:true,type:true,quantity:true,createdAt:true}})
+  ]);
+  const totals=new Map<string,{physical:number,reserved:number}>();
   for(const movement of movements){
-    if(movement.type==='ADJUSTMENT'||movement.type==='SALE') physical+=movement.quantity;
-    else if(movement.type==='RESERVE') reserved+=Math.abs(movement.quantity);
-    else if(movement.type==='RELEASE') reserved=Math.max(0,reserved-Math.abs(movement.quantity));
+    const variant=variants.find(item=>item.id===movement.variantId);
+    if(!variant) continue;
+    const folder=variant.inventoryFolder;
+    if(folder?.trackingStartDate&&movement.createdAt<folder.trackingStartDate) continue;
+    const key=folder?.id||variant.id;
+    const total=totals.get(key)||{physical:0,reserved:0};
+    if(movement.type==='ADJUSTMENT'||movement.type==='SALE') total.physical+=movement.quantity;
+    else if(movement.type==='RESERVE') total.reserved+=Math.abs(movement.quantity);
+    else if(movement.type==='RELEASE') total.reserved=Math.max(0,total.reserved-Math.abs(movement.quantity));
+    totals.set(key,total);
   }
-  return {available:Math.max(0,physical-reserved),folderId:variant.inventoryFolderId,variant};
+  // Produtos sem pasta também fazem parte do estoque central. Se eles estiverem
+  // negativos, o débito precisa reduzir o total publicado nas pastas, senão as
+  // plataformas exibem mais unidades do que o card de estoque do ERP.
+  let unassignedDebt=variants.filter(variant=>!variant.inventoryFolderId).reduce((sum,variant)=>{
+    const total=totals.get(variant.id)||{physical:0,reserved:0};
+    return sum+Math.max(0,total.reserved-total.physical);
+  },0);
+  const folderAvailable=new Map<string,number>();
+  for(const folder of folders){
+    const total=totals.get(folder.id)||{physical:0,reserved:0};
+    const raw=Math.max(0,total.physical-total.reserved);
+    const deduction=Math.min(raw,unassignedDebt);
+    folderAvailable.set(folder.id,raw-deduction);
+    unassignedDebt-=deduction;
+  }
+  return variants.map(variant=>{
+    const total=totals.get(variant.id)||{physical:0,reserved:0};
+    const quantity=variant.inventoryFolderId
+      ? folderAvailable.get(variant.inventoryFolderId)||0
+      : Math.max(0,total.physical-total.reserved);
+    return {variant,quantity,key:variant.inventoryFolderId||variant.id};
+  });
 }
 
 async function publishShopify(tenantId:string, variants:any[], quantity:number){
@@ -53,6 +77,8 @@ async function publishMercadoLivre(tenantId:string, variants:any[], quantity:num
   const { getMercadoLivreConnection, mercadoLivreApi } = await import('./mercadolivre');
   const connection=await getMercadoLivreConnection(tenantId);
   if(!connection.externalAccountId) throw new Error('Mercado Livre sem conta vinculada');
+  const user:any=await mercadoLivreApi(`/users/${connection.externalAccountId}?attributes=tags`,{},tenantId);
+  const usesWarehouseManagement=Array.isArray(user.tags)&&user.tags.includes('warehouse_management');
   const search:any=await mercadoLivreApi(`/users/${connection.externalAccountId}/items/search?status=active&limit=100`,{},tenantId);
   const ids:string[]=search.results||[];
   if(!ids.length) return 0;
@@ -86,14 +112,14 @@ async function publishMercadoLivre(tenantId:string, variants:any[], quantity:num
         const matching=item.variations.filter((variation:any)=>wanted.has(String(variation.seller_custom_field||attributeSku(variation.attributes)||'').toUpperCase()));
         if(!matching.length) continue;
         for(const variation of matching){
-          if(variation.user_product_id) await updateUserProductStock(variation.user_product_id);
+          if(usesWarehouseManagement&&variation.user_product_id) await updateUserProductStock(variation.user_product_id);
           else await mercadoLivreApi(`/items/${encodeURIComponent(item.id)}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({variations:[{id:variation.id,available_quantity:quantity}]})},tenantId);
         }
         updated+=matching.length;
       }else{
         const itemSku=String(item.seller_custom_field||attributeSku(item.attributes)||'').toUpperCase();
         if(!wanted.has(itemSku)) continue;
-        if(item.user_product_id){
+        if(usesWarehouseManagement&&item.user_product_id){
           try { await updateUserProductStock(item.user_product_id); }
           catch(error) {
             if(item.inventory_id) throw error;
@@ -110,15 +136,20 @@ async function publishMercadoLivre(tenantId:string, variants:any[], quantity:num
 }
 
 export async function publishAvailableStock(tenantId:string, sku:string){
-  const stock=await sharedAvailable(tenantId,sku);
-  if(!stock) return {quantity:0,shopify:0,mercadoLivre:0};
-  const targets=await db.productVariant.findMany({where:{tenantId,active:true,...(stock.folderId?{inventoryFolderId:stock.folderId}:{id:stock.variant.id})}});
-  const shopifyTargets=targets.filter(target=>target.source==='SHOPIFY');
-  const mercadoLivreTargets=targets.filter(target=>target.source==='MERCADO_LIVRE'&&!/FULL/i.test(String(target.fulfillment||'')));
-  const results=await Promise.allSettled([
-    publishShopify(tenantId,shopifyTargets,stock.available),
-    publishMercadoLivre(tenantId,mercadoLivreTargets,stock.available)
-  ]);
-  for(const result of results) if(result.status==='rejected') console.error('Inventory publish failed',result.reason);
-  return {quantity:stock.available,shopify:results[0].status==='fulfilled'?results[0].value:0,mercadoLivre:results[1].status==='fulfilled'?results[1].value:0};
+  const plans=await publicationPlans(tenantId);
+  if(!plans.length) return {quantity:0,shopify:0,mercadoLivre:0};
+  const groups=new Map<string,typeof plans>();
+  for(const plan of plans) groups.set(plan.key,[...(groups.get(plan.key)||[]),plan]);
+  let shopify=0,mercadoLivre=0;
+  for(const group of groups.values()){
+    const quantity=group[0]?.quantity||0;
+    const results=await Promise.allSettled([
+      publishShopify(tenantId,group.filter(item=>item.variant.source==='SHOPIFY').map(item=>item.variant),quantity),
+      publishMercadoLivre(tenantId,group.filter(item=>item.variant.source==='MERCADO_LIVRE'&&!/FULL/i.test(String(item.variant.fulfillment||''))).map(item=>item.variant),quantity)
+    ]);
+    if(results[0].status==='fulfilled') shopify+=results[0].value; else console.error('Shopify inventory publish failed',results[0].reason);
+    if(results[1].status==='fulfilled') mercadoLivre+=results[1].value; else console.error('Mercado Livre inventory publish failed',results[1].reason);
+  }
+  const requested=plans.find(plan=>plan.variant.sku===sku);
+  return {quantity:requested?.quantity||0,shopify,mercadoLivre};
 }
