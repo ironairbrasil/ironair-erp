@@ -24,7 +24,7 @@ export async function GET(req:Request){
     for(const item of paidItems) if(item.variantId) officialSales.set(item.variantId,(officialSales.get(item.variantId)||0)+Number(item.quantity||0));
     const movements=await db.inventoryMovement.findMany({where:{tenantId},take:1000,orderBy:{createdAt:'desc'},include:{variant:{include:{inventoryFolder:true}},warehouse:true,order:{select:{channel:true}}}});
     const trackedMovements=folders.length?await db.inventoryMovement.findMany({where:{tenantId,variant:{inventoryFolderId:{not:null}}},select:{quantity:true,type:true,createdAt:true,variantId:true,metadata:true,idempotencyKey:true,variant:{select:{inventoryFolderId:true}},order:{select:{channel:true}}}}):[];
-    const productMovements=await db.inventoryMovement.findMany({where:{tenantId,type:{in:['ADJUSTMENT','SALE']}},select:{quantity:true,type:true,createdAt:true,variantId:true,variant:{select:{inventoryFolderId:true}}}});
+    const productMovements=await db.inventoryMovement.findMany({where:{tenantId,type:{in:['ADJUSTMENT','SALE','PURCHASE','RETURN','DAMAGE']}},select:{quantity:true,type:true,createdAt:true,variantId:true,variant:{select:{inventoryFolderId:true}}}});
     const folderBalances=new Map(folders.map(folder=>[folder.id,{physical:0,reserved:0}]));
     const folderSales=new Map(folders.map(folder=>[folder.id,{shopify:0,ml:0,amazon:0,shopee:0,manual:0,totalSales:0}]));
     const folderAdjustmentsByVariant=new Map<string,number>();
@@ -34,7 +34,7 @@ export async function GET(req:Request){
       const folder=movement.variant.inventoryFolderId?folders.find(item=>item.id===movement.variant.inventoryFolderId):null;
       if(folder?.trackingStartDate&&movement.createdAt<folder.trackingStartDate) continue;
       const stock=variantStock.get(movement.variantId)||{adjustments:0,sales:0};
-      if(movement.type==='ADJUSTMENT') stock.adjustments+=Number(movement.quantity||0);
+      if(movement.type!=='SALE') stock.adjustments+=Number(movement.quantity||0);
       else if(movement.type==='SALE') stock.sales+=Math.abs(Number(movement.quantity||0));
       variantStock.set(movement.variantId,stock);
     }
@@ -47,7 +47,7 @@ export async function GET(req:Request){
       if(folderMovement&&movement.type==='ADJUSTMENT') folderAdjustmentsByVariant.set(movement.variantId,(folderAdjustmentsByVariant.get(movement.variantId)||0)+Number(movement.quantity||0));
       if(movement.type==='RESERVE') balance.reserved+=Math.abs(movement.quantity);
       else if(movement.type==='RELEASE') balance.reserved=Math.max(0,balance.reserved-Math.abs(movement.quantity));
-      else if(movement.type==='ADJUSTMENT'||movement.type==='SALE') balance.physical+=movement.quantity;
+      else if(['ADJUSTMENT','SALE','PURCHASE','RETURN','DAMAGE'].includes(movement.type)) balance.physical+=movement.quantity;
       if(movement.type==='SALE'){
         const sales=folderSales.get(folder.id)!;
         const productSales=variantSales.get(movement.variantId)||{shopify:0,ml:0,amazon:0,shopee:0,manual:0,totalSales:0};

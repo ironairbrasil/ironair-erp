@@ -5,6 +5,13 @@ import { CALENDAR_SCHEDULE_MONTHS, calendarPeriods } from '@/lib/expense-schedul
 import { paymentMethodMatches } from '@/lib/payment-method';
 
 const localDay=(value:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(value);
+const installmentDays=(start:Date,count:number)=>Array.from({length:Math.max(1,count)},(_,index)=>{
+  const year=start.getUTCFullYear();
+  const month=start.getUTCMonth()+index;
+  const day=start.getUTCDate();
+  const lastDay=new Date(Date.UTC(year,month+1,0)).getUTCDate();
+  return new Date(Date.UTC(year,month,Math.min(day,lastDay),15));
+}).map(localDay);
 const dashboardCache = new Map<string, { expires: number; data: unknown }>();
 const dashboardPending = new Map<string, Promise<unknown>>();
 
@@ -55,7 +62,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
     product?Promise.resolve([]):db.adSpendDaily.findMany({where:{tenantId,date:range,...(platform?{platform:platform as any}:{})}}),
     db.inventoryMovement.findMany({where:{tenantId,type:{in:['ADJUSTMENT','SALE']}},select:{quantity:true}}),
     db.trackingEvent.groupBy({by:['type'],_count:{_all:true},where:{tenantId,occurredAt:range}}),
-    db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
+    db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}},{kind:'FIXED',isFixed:false,category:{not:'Imposto'},date:{lte:until||new Date()}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
     db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}})
   ]);
   const paid=paymentMethod?paidRows.filter(order=>paymentMethodMatches(order.paymentMethod,paymentMethod)):paidRows;
@@ -110,7 +117,10 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const expenseTotal=expenses.reduce((sum,e)=>{
     const periods=periodsByExpense.get(e.id);
     if(e.kind!=='PERCENT') {
-      const amount=periods?periods.length*Number(e.amount):Number(e.amount);
+      const variableInstallment=!e.isFixed&&e.category!=='Imposto';
+      const installmentCount=Math.max(1,e.installments||1);
+      const occurrences=variableInstallment?installmentDays(e.date,installmentCount).filter(day=>day>=rangeFrom&&day<=rangeTo).length:0;
+      const amount=variableInstallment?occurrences*(Number(e.amount)/installmentCount):periods?periods.length*Number(e.amount):Number(e.amount);
       expenseBreakdown.push({id:e.id,amount});
       return sum+amount;
     }

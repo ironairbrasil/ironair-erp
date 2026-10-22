@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Download, RefreshCw, TrendingUp } from "lucide-react";
 import SalesChart, { ChartStyleToggle, type SalesChartMode, type SalesPoint } from "./sales-chart";
+import LocationGlobe, { type LocationData } from "./location-globe";
 
 type Dashboard = {
   periodFrom: string; periodTo: string; revenue: number; orders: number; cogs: number;
@@ -66,6 +67,7 @@ export default function PerformanceView() {
   const [to, setTo] = useState("");
   const [data, setData] = useState<Dashboard | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [locations, setLocations] = useState<LocationData | null>(null);
   const [metaMetrics, setMetaMetrics] = useState<MetaMetrics | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaError, setMetaError] = useState("");
@@ -87,7 +89,7 @@ export default function PerformanceView() {
   useEffect(() => {
     if (period === "Personalizado" && (!dates.from || !dates.to || dates.from > dates.to)) return;
     const controller = new AbortController();
-    setLoading(true); setError(""); setMetaMetrics(null); setMetaError(""); setMetaLoading(true); setCampaigns([]);
+    setLoading(true); setError(""); setMetaMetrics(null); setMetaError(""); setMetaLoading(true); setCampaigns([]); setLocations(null);
     const params = new URLSearchParams({ from: dates.from, to: dates.to });
     if (period === "Tempo todo") params.set("all", "1");
     if (refresh) params.set("fresh", "1");
@@ -96,7 +98,9 @@ export default function PerformanceView() {
         if (controller.signal.aborted) return;
         setData(dashboard);
         const range = new URLSearchParams({ from: dashboard.periodFrom, to: dashboard.periodTo });
+        if (period === "Tempo todo") range.set("all", "1");
         fetch(`/api/campaigns?${range}`, { signal: controller.signal, cache: "no-store" }).then(async response => response.ok ? response.json() : []).then(campaignRows => { if (!controller.signal.aborted) setCampaigns(Array.isArray(campaignRows) ? campaignRows : []); }).catch(() => {});
+        fetch(`/api/performance/locations?${range}`, { signal: controller.signal, cache: "no-store" }).then(async response => response.ok ? response.json() as Promise<LocationData> : null).then(locationData => { if (!controller.signal.aborted) setLocations(locationData); }).catch(() => {});
         fetch(`/api/campaigns/metrics?${range}`, { signal: controller.signal, cache: "no-store" }).then(async response => { const body = await response.json(); if (!response.ok) throw Error(body.error || "Falha ao carregar compras da Meta"); return body as { metrics: MetaMetrics }; }).then(body => { if (!controller.signal.aborted) setMetaMetrics(body.metrics); }).catch(err => { if (!controller.signal.aborted) setMetaError(err.message || "Compras Meta indisponíveis"); }).finally(() => { if (!controller.signal.aborted) setMetaLoading(false); });
       })
       .catch(err => { if (err.name !== "AbortError") setError(err.message || "Falha ao carregar performance"); })
@@ -168,13 +172,14 @@ export default function PerformanceView() {
       <div className="performanceKpis">
         <article className="card"><span>Faturamento</span><strong>{brl(data.revenue)}</strong><small>{data.orders} pedidos pagos</small></article>
         <article className="card"><span>Lucro bruto</span><strong className={grossResult < 0 ? "negative" : undefined}>{brl(grossResult)}</strong><small>Após taxas e custo dos produtos</small></article>
-        <article className="card"><span>Resultado líquido</span><strong className={data.profit < 0 ? "negative" : "positive"}>{brl(data.profit)}</strong><small>Margem {pct(data.margin)}</small></article>
-        <article className="card"><span>ROAS geral</span><strong>{ratio(data.roas)}</strong><small>Faturamento total ÷ {brl(data.media)} em anúncios</small></article>
+        <article className="card"><span>Resultado líquido</span><strong className={data.profit < 0 ? "negative" : "positive"}>{brl(data.profit)}</strong><small>Lucro bruto − despesas</small></article>
+        <article className="card"><span>Margem líquida</span><strong className={data.margin < 0 ? "negative" : "positive"}>{pct(data.margin)}</strong><small>Resultado líquido ÷ faturamento</small></article>
       </div>
       <div className="performanceMainGrid">
         <article className="card performancePanel"><div className="sectionHead"><div><h2>Receita ao longo do tempo</h2><p>Valor de pedidos pagos por dia</p></div><ChartStyleToggle mode={chartMode} onChange={setChartMode} /></div><SalesChart points={chartPoints} from={data.periodFrom} to={data.periodTo} mode={chartMode} /></article>
         <article className="card performancePanel performanceInsight"><div className="sectionHead"><div><h2>Indicadores do período</h2><p>Quanto cada custo representa do faturamento</p></div></div><div className="performanceInsightRow"><span>Ticket médio por pedido</span><b>{brl(data.ticket)}</b></div><div className="performanceInsightRow"><span>Gasto com anúncios sobre faturamento</span><b>{data.revenue ? pct(data.media / data.revenue) : "—"}</b></div><div className="performanceInsightRow"><span>Taxas e frete sobre faturamento</span><b>{data.revenue ? pct(data.fees / data.revenue) : "—"}</b></div><div className="performanceInsightRow"><span>Margem líquida</span><b className={data.profit < 0 ? "negative" : "positive"}>{pct(data.margin)}</b></div><p className="performanceFootnote">Ex.: 2,6% em anúncios = R$ 2,60 gastos a cada R$ 100 faturados.</p></article>
       </div>
+      {locations && <LocationGlobe data={locations} />}
       <div className="performanceMainGrid">
         <article className="card performancePanel"><div className="sectionHead"><div><h2>DRE gerencial</h2><p>Receita até o resultado líquido</p></div></div><div className="performanceDre">{rows.map(row => <div key={row.label} className={`${row.strong ? "strong" : ""} ${row.final ? "final" : ""}`}><span>{row.label}</span><b className={row.amount < 0 ? "negative" : undefined}>{brl(row.amount)}</b></div>)}</div><p className="performanceFootnote">Tributos registrados integram as taxas. Impostos estimados não são abatidos neste resultado. Base gerencial; não substitui a DRE contábil.</p></article>
         <article className="card performancePanel"><div className="sectionHead"><div><h2>Resultado por canal</h2><p>Receita e resultado antes das despesas gerais</p></div></div><div className="performanceChannelList">{data.channels.length ? data.channels.map(channel => /meta/i.test(channel.name) ? <div className="performanceChannel" key={channel.name}><div><b>{channelLabel(channel.name)}</b><small>{metaLoading ? "Carregando compras Meta..." : metaError ? "Compras Meta indisponíveis" : `${metaPurchases ?? 0} compras Meta · ${ratio(metaPurchaseValue !== null && channel.invested ? metaPurchaseValue / channel.invested : null)} ROAS Meta`}</small></div><div><b>{metaPurchaseValue === null ? "—" : brl(metaPurchaseValue)}</b><small>Valor atribuído pela Meta</small></div></div> : <div className="performanceChannel" key={channel.name}><div><b>{channelLabel(channel.name)}</b><small>{channel.sales} vendas · {ratio(channel.roas)} ROAS</small></div><div><b>{brl(channel.revenue)}</b><small className={channel.profit < 0 ? "negative" : undefined}>Resultado {brl(channel.profit)}</small></div></div>) : <div className="performanceEmpty">Sem dados por canal neste período.</div>}</div><p className="performanceFootnote">Compras Meta são atribuições da plataforma e não são somadas novamente ao faturamento ou à DRE.</p></article>

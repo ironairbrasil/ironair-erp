@@ -1,0 +1,1 @@
+ALTER TABLE "Expense" ADD COLUMN "installments" INTEGER NOT NULL DEFAULT 1;

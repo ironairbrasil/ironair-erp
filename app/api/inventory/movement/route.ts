@@ -3,6 +3,7 @@ import { moveStock, transferStock } from '@/lib/inventory';
 import { getTenantId } from '@/lib/tenant';
 import { auditLog } from '@/lib/audit';
 import { db } from '@/lib/db';
+import { publishAvailableStock } from '@/lib/inventory-publish';
 
 const typeMap:Record<string,any>={
   'Entrada manual':'ADJUSTMENT',
@@ -57,7 +58,8 @@ export async function POST(req:Request){
       after:{sku,folderId:body.folderId||null,type,quantity,reference:body.reference||body.ref,date:body.date||body.createdAt},
       metadata:{warehouseCode:destination,folderId:body.folderId||null}
     });
-    return NextResponse.json({ok:true,id:movement.id});
+    const publication=await publishAvailableStock(tenantId,sku);
+    return NextResponse.json({ok:true,id:movement.id,publication});
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'error'},{status:400});
   }

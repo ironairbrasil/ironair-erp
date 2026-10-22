@@ -16,25 +16,15 @@ async function publicationPlans(tenantId:string){
     if(folder?.trackingStartDate&&movement.createdAt<folder.trackingStartDate) continue;
     const key=folder?.id||variant.id;
     const total=totals.get(key)||{physical:0,reserved:0};
-    if(movement.type==='ADJUSTMENT'||movement.type==='SALE') total.physical+=movement.quantity;
+    if(!['RESERVE','RELEASE'].includes(movement.type)) total.physical+=movement.quantity;
     else if(movement.type==='RESERVE') total.reserved+=Math.abs(movement.quantity);
     else if(movement.type==='RELEASE') total.reserved=Math.max(0,total.reserved-Math.abs(movement.quantity));
     totals.set(key,total);
   }
-  // Produtos sem pasta também fazem parte do estoque central. Se eles estiverem
-  // negativos, o débito precisa reduzir o total publicado nas pastas, senão as
-  // plataformas exibem mais unidades do que o card de estoque do ERP.
-  let unassignedDebt=variants.filter(variant=>!variant.inventoryFolderId).reduce((sum,variant)=>{
-    const total=totals.get(variant.id)||{physical:0,reserved:0};
-    return sum+Math.max(0,total.reserved-total.physical);
-  },0);
   const folderAvailable=new Map<string,number>();
   for(const folder of folders){
     const total=totals.get(folder.id)||{physical:0,reserved:0};
-    const raw=Math.max(0,total.physical-total.reserved);
-    const deduction=Math.min(raw,unassignedDebt);
-    folderAvailable.set(folder.id,raw-deduction);
-    unassignedDebt-=deduction;
+    folderAvailable.set(folder.id,Math.max(0,total.physical-total.reserved));
   }
   return variants.map(variant=>{
     const total=totals.get(variant.id)||{physical:0,reserved:0};

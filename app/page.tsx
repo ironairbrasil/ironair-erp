@@ -1239,7 +1239,7 @@ function dashboardKpis(d: any) {
     {
       label: "Lucro bruto",
       value: money(d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)),
-      delta: "Faturamento − taxas e frete − produtos",
+      delta: "Líq. do Marketplace − produtos",
     },
     {
       label: "ROAS total",
@@ -2600,6 +2600,29 @@ function Creatives({ rows }: { rows: any[] }) {
 }
 
 function Movements({ movements, onNew, onEdit, onDelete }: any) {
+  const [ledgerPeriod, setLedgerPeriod] = useState("Tempo todo");
+  const [sku, setSku] = useState("Todos");
+  const [folder, setFolder] = useState("Todas");
+  const [movementType, setMovementType] = useState("Todos");
+  const ledgerPeriodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
+  const folders = useMemo(() => Array.from(new Set<string>(movements.map((movement: any) => String(movement.folderName || "Sem pasta")))).sort((a, b) => a.localeCompare(b, "pt-BR")), [movements]);
+  const skus = useMemo(() => Array.from(new Set<string>(movements
+    .filter((movement: any) => folder === "Todas" || movement.folderName === folder)
+    .map((movement: any) => String(movement.sku || ""))
+    .filter((value: string) => value && value !== "—")))
+    .sort((a, b) => a.localeCompare(b, "pt-BR")), [movements, folder]);
+  const movementTypes = useMemo(() => Array.from(new Set<string>(movements.map((movement: any) => String(movement.type || "")).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")), [movements]);
+  useEffect(() => { if (sku !== "Todos" && !skus.includes(sku)) setSku("Todos"); }, [sku, skus]);
+  const firstMovementDay = useMemo(() => movements.map((movement: any) => String(movement.createdAt || "").slice(0, 10)).filter(Boolean).sort()[0] || todayISO(), [movements]);
+  const selectedPeriod = periodRange(ledgerPeriod, { from: "", to: "" }, firstMovementDay);
+  const filteredMovements = useMemo(() => movements.filter((movement: any) => {
+    const day = String(movement.createdAt || "").slice(0, 10);
+    return day >= selectedPeriod.from && day <= selectedPeriod.to
+      && (sku === "Todos" || movement.sku === sku)
+      && (folder === "Todas" || movement.folderName === folder)
+      && (movementType === "Todos" || movement.type === movementType);
+  }), [movements, selectedPeriod.from, selectedPeriod.to, sku, folder, movementType]);
+  const filtersActive = ledgerPeriod !== "Tempo todo" || sku !== "Todos" || folder !== "Todas" || movementType !== "Todos";
   return (
     <article className="card tableCard">
       <div className="sectionHead">
@@ -2611,6 +2634,39 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
           <Plus size={14} />
           Nova movimentação
         </button>
+      </div>
+      <div className="ledgerFilters">
+        <label className="ledgerSelectFilter">
+          <CalendarDays size={15} />
+          <span>Período</span>
+          <select value={ledgerPeriod} onChange={(event) => setLedgerPeriod(event.target.value)} aria-label="Filtrar por período">
+            {ledgerPeriodOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <label className="ledgerSelectFilter">
+          <span>SKU</span>
+          <select value={sku} onChange={(event) => setSku(event.target.value)} aria-label="Filtrar por SKU">
+            <option value="Todos">Todos</option>
+            {skus.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <label className="ledgerSelectFilter">
+          <span>Pasta</span>
+          <select value={folder} onChange={(event) => setFolder(event.target.value)} aria-label="Filtrar por pasta">
+            <option value="Todas">Todas</option>
+            {folders.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <label className="ledgerSelectFilter">
+          <Filter size={15} />
+          <span>Tipo</span>
+          <select value={movementType} onChange={(event) => setMovementType(event.target.value)} aria-label="Filtrar por tipo de movimento">
+            <option value="Todos">Todos</option>
+            {movementTypes.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <span className="ledgerResultCount">{filteredMovements.length} de {movements.length}</span>
+        {filtersActive && <button type="button" className="ghost clickable ledgerClearFilters" onClick={() => { setLedgerPeriod("Tempo todo"); setSku("Todos"); setFolder("Todas"); setMovementType("Todos"); }}>Limpar filtros</button>}
       </div>
       <div className="tableWrap">
         <table>
@@ -2627,7 +2683,7 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
             </tr>
           </thead>
           <tbody>
-            {movements.map((m: any, i: number) => (
+            {filteredMovements.map((m: any, i: number) => (
               <tr key={i}>
                 <td>
                   <b>{m.date}</b>
@@ -2646,6 +2702,7 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
                 <td><div className="rowActions"><button className="mini" title="Editar movimentação" aria-label={`Editar movimentação ${m.sku} ${m.date}`} onClick={() => onEdit(m)}><Pencil size={14} /></button><button className="mini danger" title="Excluir movimentação" aria-label={`Excluir movimentação ${m.sku} ${m.date}`} onClick={() => { if (window.confirm(`Excluir a movimentação de ${m.sku}?`)) void onDelete(m); }}><Trash2 size={14} /></button></div></td>
               </tr>
             ))}
+            {!filteredMovements.length && <tr><td colSpan={8} className="ledgerEmpty">Nenhuma movimentação encontrada para os filtros selecionados.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2738,9 +2795,17 @@ function Finance() {
     </>
   );
 }
-function Expenses({ rows, data, onNew, onEdit, onDelete, onDeleteMany }: any) {
+function Expenses({ rows, onNew, onEdit, onDelete, onDeleteMany }: any) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
+  const [expensePeriod, setExpensePeriod] = useState("Este mês");
+  const [expenseRange, setExpenseRange] = useState({ from: "", to: "" });
+  const [expensePeriodOpen, setExpensePeriodOpen] = useState(false);
+  const [expenseDraftRange, setExpenseDraftRange] = useState({ from: "", to: "" });
+  const [expenseCalendarMonth, setExpenseCalendarMonth] = useState(todayISO().slice(0, 7));
+  const [selectingExpenseRangeEnd, setSelectingExpenseRangeEnd] = useState(false);
+  const [periodData, setPeriodData] = useState<any>(null);
+  const [periodLoading, setPeriodLoading] = useState(false);
   const toggleSelected = (id: string) => setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const annualCycles: Record<string, number> = { MONTHLY: 12, QUARTERLY: 4, SEMIANNUAL: 2, YEARLY: 1 };
   const periodLabel: Record<string, string> = {
@@ -2749,11 +2814,38 @@ function Expenses({ rows, data, onNew, onEdit, onDelete, onDeleteMany }: any) {
     SEMIANNUAL: "01/01–30/06 · 01/07–31/12",
     YEARLY: "01/01–31/12",
   };
+  const selectedExpenseRange = periodRange(expensePeriod, expenseRange);
+  useEffect(() => {
+    let cancelled = false;
+    setPeriodLoading(true);
+    const query = expensePeriod === "Tempo todo"
+      ? "/api/dashboard?all=1&fresh=1"
+      : `/api/dashboard?from=${encodeURIComponent(selectedExpenseRange.from)}&to=${encodeURIComponent(selectedExpenseRange.to)}&fresh=1`;
+    apiJson(query)
+      .then((result) => { if (!cancelled) setPeriodData(result); })
+      .catch(() => { if (!cancelled) setPeriodData(null); })
+      .finally(() => { if (!cancelled) setPeriodLoading(false); });
+    return () => { cancelled = true; };
+  }, [expensePeriod, expenseRange.from, expenseRange.to, rows]);
+  const expenseData = periodData;
+  const fixedExpenses = rows.filter((expense: any) => Boolean(expense.isFixed) && !/^imposto$/i.test(String(expense.category || "")));
+  const taxExpenses = rows.filter((expense: any) => /^imposto$/i.test(String(expense.category || "")));
+  const variableExpenses = rows.filter((expense: any) => !fixedExpenses.includes(expense) && !taxExpenses.includes(expense));
+  const expenseAmounts = new Map((expenseData?.expenseBreakdown || []).map((line: any) => [String(line.id), Number(line.amount || 0)]));
+  const groupTotal = (groupRows: any[]) => groupRows.reduce((total, expense) => total + Number(expenseAmounts.get(String(expense.id)) || 0), 0);
+  const expenseGroups = [
+    { key: "fixed", label: "Fixas", description: "Custos operacionais e demais despesas", rows: fixedExpenses },
+    { key: "variable", label: "Variáveis", description: "Custos operacionais e demais despesas", rows: variableExpenses },
+    { key: "tax", label: "Impostos", description: "Tributos e taxas fiscais", rows: taxExpenses },
+  ].map((group) => ({ ...group, total: groupTotal(group.rows) }));
+  const expenseClassLabel = (expense: any) => taxExpenses.includes(expense) ? "Imposto" : fixedExpenses.includes(expense) ? "Fixa" : "Variável";
+  const renderExpenseRow = (expense: any) => <tr key={expense.id} className={selected.has(String(expense.id)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(expense.id)); else onEdit(expense); } }}>{selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(expense.id))} onChange={() => toggleSelected(String(expense.id))} aria-label={`Selecionar ${expense.description}`} /></td>}<td><b>{expense.description}</b></td><td>{expense.category}</td><td><span className={`expenseClass expenseClass-${expenseClassLabel(expense).toLocaleLowerCase("pt-BR")}`}>{expenseClassLabel(expense)}</span></td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && expenseData?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{!expense.isFixed && expense.category !== "Imposto" && Number(expense.installments || 1) > 1 ? <small>{expense.installments}x de {money(Number(expense.amount) / Number(expense.installments))}</small> : annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{!expense.isFixed && expense.category !== "Imposto" ? formatDashboardDate(dateKey(expense.date)) : periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{!expense.isFixed && expense.category !== "Imposto" ? `${Number(expense.installments || 1)}x` : ({ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única")}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={(event) => { event.stopPropagation(); onEdit(expense); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={(event) => { event.stopPropagation(); onDelete(expense); }}><Trash2 size={15} /></button></div></td></tr>;
   return <article className="card tableCard">
-    <div className="sectionHead"><div><h2>Despesas</h2><p>Valores fixos e percentuais que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
+    <div className="sectionHead"><div><h2>Despesas</h2><p>Fixas, variáveis e impostos que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
     <MobileBulkActions ids={rows.map((expense: any) => String(expense.id))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="despesas" />
-    <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{money(data?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
-    <div className="tableWrap"><table className="expenseTable"><thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={rows.length > 0 && rows.every((item: any) => selected.has(String(item.id)))} onChange={() => setSelected(rows.every((item: any) => selected.has(String(item.id))) ? new Set() : new Set(rows.map((item: any) => String(item.id))))} aria-label="Selecionar todas as despesas" /></th>}<th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{rows.map((expense: any) => <tr key={expense.id} className={selected.has(String(expense.id)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(expense.id)); else onEdit(expense); } }}>{selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected.has(String(expense.id))} onChange={() => toggleSelected(String(expense.id))} aria-label={`Selecionar ${expense.description}`} /></td>}<td><b>{expense.description}</b></td><td>{expense.category}</td><td>{expense.kind === "PERCENT" ? "Percentual" : "Valor fixo"}</td><td>{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && data?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(data.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</td><td>{periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</td><td>{{ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única"}</td><td><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={(event) => { event.stopPropagation(); onEdit(expense); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={(event) => { event.stopPropagation(); onDelete(expense); }}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
+    <div className="ledgerFilters expensePeriodFilter"><span className="ledgerResultCount">{expenseData ? `${formatDashboardDate(expenseData.periodFrom || selectedExpenseRange.from)} a ${formatDashboardDate(expenseData.periodTo || selectedExpenseRange.to)}` : "Carregando…"}</span><div className="dashboardFilter exportMenu"><span>Período</span><button className="filterTrigger" type="button" onClick={() => { setExpenseDraftRange(expensePeriod === "Personalizado" ? expenseRange : { from: "", to: "" }); setExpenseCalendarMonth((expenseRange.from || todayISO()).slice(0, 7)); setSelectingExpenseRangeEnd(false); setExpensePeriodOpen((open) => !open); }} aria-expanded={expensePeriodOpen}><CalendarDays size={14} />{expensePeriod}<ChevronDown size={14} /></button>{expensePeriodOpen && <div className="exportOptions dashboardOptions periodOptions">{periodOptions.map((option) => <button type="button" key={option} onClick={() => { setExpensePeriod(option); setExpenseRange({ from: "", to: "" }); setExpensePeriodOpen(false); }}>{option}</button>)}<div className="filterCustomDates"><div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setExpenseCalendarMonth(shiftCalendarMonth(expenseCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(expenseCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setExpenseCalendarMonth(shiftCalendarMonth(expenseCalendarMonth, 1))}>→</button></div><div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(expenseCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === expenseDraftRange.from || day === expenseDraftRange.to ? "selected" : ""} ${expenseDraftRange.from && expenseDraftRange.to && day > expenseDraftRange.from && day < expenseDraftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingExpenseRangeEnd || (expenseDraftRange.from && day < expenseDraftRange.from)) { setExpenseDraftRange({ from: day, to: "" }); setSelectingExpenseRangeEnd(true); } else { setExpenseDraftRange((range) => ({ ...range, to: day })); setSelectingExpenseRangeEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div><small>{expenseDraftRange.from ? `${formatDashboardDate(expenseDraftRange.from)} → ${expenseDraftRange.to ? formatDashboardDate(expenseDraftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small><button type="button" className="primary" disabled={!expenseDraftRange.from || !expenseDraftRange.to} onClick={() => { setExpenseRange(expenseDraftRange); setExpensePeriod("Personalizado"); setExpensePeriodOpen(false); }}>Aplicar</button></div></div>}</div></div>
+    <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{periodLoading ? "—" : money(expenseData?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
+    <div className="tableWrap"><table className="expenseTable"><thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={rows.length > 0 && rows.every((item: any) => selected.has(String(item.id)))} onChange={() => setSelected(rows.every((item: any) => selected.has(String(item.id))) ? new Set() : new Set(rows.map((item: any) => String(item.id))))} aria-label="Selecionar todas as despesas" /></th>}<th>Descrição</th><th>Categoria</th><th>Classificação</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{expenseGroups.map((group) => <Fragment key={group.key}><tr className={`expenseGroupRow expenseGroup-${group.key}`}><td colSpan={selecting ? 8 : 7}><span>{group.label}</span><small>{group.description}</small><b>{money(group.total)} · {group.rows.length} {group.rows.length === 1 ? "item" : "itens"}</b></td></tr>{group.rows.map(renderExpenseRow)}</Fragment>)}</tbody></table></div>
     {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
   </article>;
 }
@@ -2921,7 +3013,7 @@ function SettingsView({ onEdit }: any) {
 }
 function Modal({ kind, data, close, notify, products, inventoryFolders = [], catalogProducts, integrations, channelOptions, onSave, onDeleteIntegration }: any) {
   const [f, setF] = useState<any>(() => {
-    if (kind === "expense") return data ? { ...data, desc: data.description, value: data.amount, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", schedule: "FIXED", date: todayISO() };
+    if (kind === "expense") return data ? { ...data, desc: data.description, value: data.amount, installments: data.installments || 1, date: dateKey(data.date), schedule: data.schedule === "CUSTOM" ? "FIXED" : data.schedule } : { kind: "FIXED", category: "Operacional", isFixed: false, installments: 1, schedule: "FIXED", date: todayISO() };
     if (kind === "sale") return data ? { ...data, _edit: data.sku } : { source: "Manual", paidAt: saoPauloDateTimeLocal(), feeAmount: 0, shippingAmount: 0 };
     if (kind === "movementEdit" && data) return {
       ...data,
@@ -3052,13 +3144,15 @@ function Modal({ kind, data, close, notify, products, inventoryFolders = [], cat
           {kind === "expense" && (
             <FormGrid>
               <AnchoredSelect label="Tipo" value={f.kind || "FIXED"} onChange={(v) => set("kind", v)} options={[{ value: "FIXED", label: "Valor fixo" }, { value: "PERCENT", label: "Porcentagem do faturamento" }]} />
-              <Select label="Categoria" value={f.category} onChange={(v: any) => set("category", v)} options={["Frete", "Mídia", "Taxa", "Imposto", "Software", "Operacional", "Outro"]} />
+              <Select label="Categoria" value={f.category || "Operacional"} onChange={(v: any) => setF((current: any) => ({ ...current, category: v, isFixed: v === "Imposto" ? false : current.isFixed }))} options={["Imposto", "Operacional", "Outro"]} />
+              {f.category !== "Imposto" && <AnchoredSelect label="Classificação" value={f.isFixed ? "YES" : "NO"} onChange={(v) => setF((current: any) => ({ ...current, isFixed: v === "YES", schedule: v === "YES" ? (current.schedule === "FIXED" ? "MONTHLY" : current.schedule) : "FIXED", installments: current.installments || 1 }))} options={[{ value: "NO", label: "Variável" }, { value: "YES", label: "Fixa" }]} />}
               <Input label="Descrição" value={f.desc} onChange={(v: any) => set("desc", v)} />
               {f.kind === "PERCENT" ? <Input label="Percentual (%)" type="number" value={f.rate} onChange={(v: any) => set("rate", v)} /> : <Input label="Valor (R$)" type="number" value={f.value} onChange={(v: any) => set("value", v)} />}
-              <AnchoredSelect label="Frequência / data" value={f.schedule || "FIXED"} onChange={(v) => setF((current: any) => ({ ...current, schedule: v, date: current.date || todayISO() }))} options={[{ value: "FIXED", label: "Única" }, { value: "MONTHLY", label: "Mensal" }, { value: "QUARTERLY", label: "Trimestral" }, { value: "SEMIANNUAL", label: "Semestral" }, { value: "YEARLY", label: "Anual" }]} />
-              {f.schedule === "FIXED" && <CalendarDateField label="Data da despesa" value={f.date || ""} onChange={(value) => set("date", value)} />}
-              {["MONTHLY", "QUARTERLY", "SEMIANNUAL", "YEARLY"].includes(f.schedule) && <p className="expenseScheduleHint">{{ MONTHLY: "Mês civil: dia 01 ao último dia.", QUARTERLY: "Trimestres civis: jan–mar, abr–jun, jul–set e out–dez.", SEMIANNUAL: "Semestres civis: 01/01–30/06 e 01/07–31/12.", YEARLY: "Ano civil: 01/01–31/12." }[f.schedule as "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "YEARLY"]} {f.kind === "PERCENT" ? "O percentual incide sobre o faturamento acumulado do período." : "O valor é lançado uma vez por período."}</p>}
-              {f.schedule === "FIXED" && <p className="expenseScheduleHint">{f.kind === "PERCENT" ? "Percentual aplicado uma vez sobre o faturamento da data escolhida." : "Lançamento único na data escolhida; aparece nos períodos que incluem esse dia."}</p>}
+              {(f.isFixed || f.category === "Imposto") ? <AnchoredSelect label="Frequência / data" value={f.schedule || "FIXED"} onChange={(v) => setF((current: any) => ({ ...current, schedule: v, date: current.date || todayISO() }))} options={[{ value: "FIXED", label: "Única" }, { value: "MONTHLY", label: "Mensal" }, { value: "QUARTERLY", label: "Trimestral" }, { value: "SEMIANNUAL", label: "Semestral" }, { value: "YEARLY", label: "Anual" }]} /> : <AnchoredSelect label="Parcelas" value={String(f.installments || 1)} onChange={(v) => set("installments", Number(v))} options={Array.from({ length: 24 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}x` }))} />}
+              {(!f.isFixed && f.category !== "Imposto" || f.schedule === "FIXED") && <CalendarDateField label={!f.isFixed && f.category !== "Imposto" ? "Data da primeira parcela" : "Data da despesa"} value={f.date || ""} onChange={(value) => set("date", value)} />}
+              {(f.isFixed || f.category === "Imposto") && ["MONTHLY", "QUARTERLY", "SEMIANNUAL", "YEARLY"].includes(f.schedule) && <p className="expenseScheduleHint">{{ MONTHLY: "Mês civil: dia 01 ao último dia.", QUARTERLY: "Trimestres civis: jan–mar, abr–jun, jul–set e out–dez.", SEMIANNUAL: "Semestres civis: 01/01–30/06 e 01/07–31/12.", YEARLY: "Ano civil: 01/01–31/12." }[f.schedule as "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "YEARLY"]} {f.kind === "PERCENT" ? "O percentual incide sobre o faturamento acumulado do período." : "O valor é lançado uma vez por período."}</p>}
+              {(f.isFixed || f.category === "Imposto") && f.schedule === "FIXED" && <p className="expenseScheduleHint">{f.kind === "PERCENT" ? "Percentual aplicado uma vez sobre o faturamento da data escolhida." : "Lançamento único na data escolhida; aparece nos períodos que incluem esse dia."}</p>}
+              {!f.isFixed && f.category !== "Imposto" && <p className="expenseScheduleHint">O valor total será dividido em {Number(f.installments || 1)} parcela{Number(f.installments || 1) === 1 ? "" : "s"} mensal{Number(f.installments || 1) === 1 ? "" : "is"}, a partir da data escolhida.</p>}
             </FormGrid>
           )}
           {kind === "integration" && (

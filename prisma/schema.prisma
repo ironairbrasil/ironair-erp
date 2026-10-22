@@ -476,6 +476,8 @@ model Expense {
   description String
   amount      Decimal  @db.Decimal(12, 2)
   kind        String   @default("FIXED")
+  isFixed     Boolean  @default(false)
+  installments Int     @default(1)
   rate        Decimal? @db.Decimal(7, 4)
   schedule    String   @default("CUSTOM")
   channel     Channel?

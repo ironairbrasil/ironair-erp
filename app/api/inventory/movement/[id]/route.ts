@@ -3,6 +3,7 @@ import type { InventoryMovementType } from '@prisma/client';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 import { auditLog } from '@/lib/audit';
+import { publishAvailableStock } from '@/lib/inventory-publish';
 
 const movementTypes = new Set<InventoryMovementType>(['PURCHASE', 'SALE', 'RESERVE', 'RELEASE', 'TRANSFER_IN', 'TRANSFER_OUT', 'RETURN', 'DAMAGE', 'ADJUSTMENT']);
 const typeMap: Record<string, InventoryMovementType> = {
@@ -120,7 +121,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     } catch (auditError) {
       console.error('Falha ao registrar auditoria da movimentação', auditError);
     }
-    return NextResponse.json({ ok: true, updated: result.updated });
+    const publication = await publishAvailableStock(tenantId, sku);
+    return NextResponse.json({ ok: true, updated: result.updated, publication });
   } catch (error: any) {
     return NextResponse.json({ ok: false, error: error?.message || 'Falha ao editar movimentação' }, { status: 400 });
   }
@@ -158,7 +160,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     } catch (auditError) {
       console.error('Falha ao registrar auditoria da exclusão da movimentação', auditError);
     }
-    return NextResponse.json({ ok: true, deleted: deleted.length });
+    const affectedVariant = await db.productVariant.findFirst({ where: { id: deleted[0]?.variantId, tenantId }, select: { sku: true } });
+    const publication = affectedVariant ? await publishAvailableStock(tenantId, affectedVariant.sku) : null;
+    return NextResponse.json({ ok: true, deleted: deleted.length, publication });
   } catch (error: any) {
     return NextResponse.json({ ok: false, error: error?.message || 'Falha ao excluir movimentação' }, { status: 400 });
   }
