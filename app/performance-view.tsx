@@ -107,6 +107,18 @@ export default function PerformanceView() {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [period, dates.from, dates.to, refresh]);
+  useEffect(() => {
+    if (!data) return;
+    const loadLocations = () => {
+      const range = new URLSearchParams({ from: data.periodFrom, to: data.periodTo });
+      if (period === "Tempo todo") range.set("all", "1");
+      fetch(`/api/performance/locations?${range}`, { cache: "no-store" }).then(response => response.ok ? response.json() as Promise<LocationData> : null).then(locationData => { if (locationData) setLocations(locationData); }).catch(() => {});
+    };
+    const timer = window.setInterval(loadLocations, 60_000);
+    const visible = () => { if (document.visibilityState === "visible") loadLocations(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [data?.periodFrom, data?.periodTo, period]);
 
   const chartPoints = useMemo(() => data ? trendPoints(data.daily, data.periodFrom, data.periodTo) : [], [data]);
   const grossResult = data ? data.revenue - data.fees - data.cogs : 0;
