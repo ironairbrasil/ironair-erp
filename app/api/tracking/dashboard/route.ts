@@ -9,14 +9,18 @@ export async function GET(req: Request){
   const tenantId = await getTenantId(req);
   const url = new URL(req.url);
   const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 3650);
+  const fromParam = String(url.searchParams.get('from') || '');
+  const toParam = String(url.searchParams.get('to') || '');
   const site = String(url.searchParams.get('site') || '').replace(/^www\./, '').toLowerCase();
   const source = String(url.searchParams.get('source') || '').toLowerCase();
-  const from = startDate(days);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(fromParam) ? new Date(`${fromParam}T00:00:00.000-03:00`) : (!fromParam && !toParam ? undefined : startDate(days));
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(toParam) ? new Date(`${toParam}T23:59:59.999-03:00`) : undefined;
+  const occurredAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } : undefined;
   const [trackingIntegration, shopifyIntegration, events, orders] = await Promise.all([
     db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Tracking' } } }),
     db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Shopify' } } }),
-    db.trackingEvent.findMany({ where: { tenantId, occurredAt: { gte: from } }, orderBy: { occurredAt: 'desc' }, take: 5000 }),
-    db.order.findMany({ where: { tenantId, channel: 'SHOPIFY', status: 'PAID', paidAt: { gte: from } }, include: { attribution: true, customer: { select: { name: true } } }, orderBy: { paidAt: 'desc' } })
+    db.trackingEvent.findMany({ where: { tenantId, ...(occurredAt ? { occurredAt } : {}) }, orderBy: { occurredAt: 'desc' }, take: 5000 }),
+    db.order.findMany({ where: { tenantId, channel: 'SHOPIFY', status: 'PAID', ...(occurredAt ? { paidAt: occurredAt } : {}) }, include: { attribution: true, customer: { select: { name: true } } }, orderBy: { paidAt: 'desc' } })
   ]);
   const savedSites = Array.isArray((trackingIntegration?.config as any)?.sites) ? (trackingIntegration?.config as any).sites : [];
   const inferredDomains = [...new Set(events.map(event => domainOf(event.url)).filter(Boolean))];
