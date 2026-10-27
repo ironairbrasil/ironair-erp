@@ -40,8 +40,10 @@ export async function GET(req: Request){
     sessionMap.set(key, row);
   }
   const filteredOrders = orders.filter(order => {
-    const landingDomain = domainOf(order.attribution?.landingPage);
-    return (!site || !landingDomain || landingDomain === site) && (!source || String(order.attribution?.source || '').toLowerCase() === source);
+    // The connected Shopify orders are created by the offer checkout. New orders
+    // can carry an explicit landing page; legacy orders predate that capture.
+    const landingDomain = domainOf(order.attribution?.landingPage) || 'oferta.ironair.com.br';
+    return (!site || landingDomain === site) && (!source || String(order.attribution?.source || '').toLowerCase() === source);
   });
   const sessions = [...sessionMap.values()].sort((a,b) => +b.lastAt - +a.lastAt).slice(0, 200);
   const visitors = new Set(filteredEvents.map(event => event.visitorId).filter(Boolean)).size;
