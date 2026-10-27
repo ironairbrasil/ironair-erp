@@ -21,8 +21,12 @@ export async function GET(req: Request){
   const savedSites = Array.isArray((trackingIntegration?.config as any)?.sites) ? (trackingIntegration?.config as any).sites : [];
   const inferredDomains = [...new Set(events.map(event => domainOf(event.url)).filter(Boolean))];
   const shopifyDomain = String(shopifyIntegration?.shopDomain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
-  const shopifySite = shopifyDomain ? [{ id: `shopify:${shopifyDomain}`, name: 'Loja Shopify', domain: shopifyDomain, source: 'Shopify' }] : [];
-  const configuredSites = [...shopifySite, ...savedSites.filter((item: any) => item.domain !== shopifyDomain)];
+  const storefrontDomain = savedSites.find((item: any) => item.domain === 'ironair.com.br')?.domain || inferredDomains.find(domain => domain === 'ironair.com.br');
+  const storefrontSites = [
+    ...(storefrontDomain ? [{ id: 'shopify:ironair.com.br', name: 'Loja Iron Air', domain: storefrontDomain, source: 'Shopify' }] : []),
+    { id: 'offer:oferta.ironair.com.br', name: 'Oferta Iron Air', domain: 'oferta.ironair.com.br', source: 'Site' }
+  ];
+  const configuredSites = [...storefrontSites, ...savedSites.filter((item: any) => item.domain !== shopifyDomain && item.domain !== storefrontDomain && item.domain !== 'oferta.ironair.com.br')];
   const sites = [...configuredSites, ...inferredDomains.filter(domain => !configuredSites.some((item: any) => item.domain === domain)).map(domain => ({ id: domain, name: domain, domain }))];
   const filteredEvents = events.filter(event => (!site || domainOf(event.url) === site) && (!source || String(event.utmSource || '').toLowerCase() === source));
   const sessionMap = new Map<string, any>();
