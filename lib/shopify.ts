@@ -71,6 +71,9 @@ export async function shopifyGraphQL<T=any>(query:string, variables:Record<strin
 
 function attrs(list:any[]|undefined){return Object.fromEntries((list||[]).filter(x=>x?.name||x?.key).map(x=>[x.name||x.key,x.value]));}
 function num(v:any){const n=Number(v??0);return Number.isFinite(n)?n:0}
+export function canonicalShopifyId(value:any){
+  return String(value||'').trim().split('/').filter(Boolean).pop()||'';
+}
 function shopifySku(productTitle:string, variantTitle:string, variantId:string){
   const text=`${productTitle} ${variantTitle}`.toUpperCase();
   if(/^IRON AIR$/i.test(productTitle.trim()) && /127V|110V/.test(text)) return 'IRON-AIR-127V';
@@ -82,8 +85,9 @@ function shopifySku(productTitle:string, variantTitle:string, variantId:string){
 function orderStatus(o:any):IngestOrder['status']{
   const financial=String(o.financial_status||o.displayFinancialStatus||'').toUpperCase();
   const cancelled=!!(o.cancelled_at||o.cancelledAt);
-  if(financial.includes('REFUND')) return 'REFUNDED';
-  if(cancelled) return 'CANCELLED';
+  // A financial refund without a registered physical return is operationally a cancellation.
+  // REFUNDED is reserved for orders linked to the returns workflow.
+  if(cancelled||financial.includes('REFUND')) return 'CANCELLED';
   if(['PAID','PARTIALLY_PAID'].includes(financial)) return 'PAID';
   return 'PENDING';
 }
@@ -112,7 +116,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
   const address=o.shipping_address||o.shippingAddress||o.billing_address||o.billingAddress||{};
   return {
     tenantId,
-    externalId:String(o.id),
+    externalId:canonicalShopifyId(o.id),
     displayId:String(o.name||o.order_number||o.orderNumber||'').replace(/^#/,'')||undefined,
     channel:'SHOPIFY',
     status:orderStatus(o),
@@ -124,7 +128,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
     taxAmount:num(o.total_tax ?? o.totalTaxSet?.shopMoney?.amount),
     paymentMethod:normalizePaymentMethod((o.payment_gateway_names||o.paymentGatewayNames||[]).join(', '))||undefined,
     paidAt:o.processed_at||o.processedAt||o.created_at||o.createdAt,
-    customer:{externalId:customer.id?String(customer.id):undefined,name:[customer.first_name||customer.firstName,customer.last_name||customer.lastName].filter(Boolean).join(' ')||address.name||undefined,city:address.city,state:address.province_code||address.province,zip:address.zip},
+    customer:{externalId:customer.id?canonicalShopifyId(customer.id):undefined,name:[customer.first_name||customer.firstName,customer.last_name||customer.lastName].filter(Boolean).join(' ')||address.name||undefined,city:address.city,state:address.province_code||address.province,zip:address.zip},
     items:lineItems(o),
     attribution:{
       utm_source:a.utm_source,utm_medium:a.utm_medium,utm_campaign:a.utm_campaign,utm_content:a.utm_content,utm_term:a.utm_term,

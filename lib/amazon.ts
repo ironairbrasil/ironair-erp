@@ -409,7 +409,9 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     externalId: orderId,
     channel: 'AMAZON',
     fulfillmentOrigin: String(order?.FulfillmentChannel || v2026?.fulfillmentChannel || '').toUpperCase() === 'AFN' ? 'AMAZON_FBA' : undefined,
-    status: financials.refunded ? 'REFUNDED' : mapAmazonStatus(order),
+    // Financial reversals without a physical return record are cancellations.
+    // REFUNDED remains reserved for orders tracked by the returns workflow.
+    status: financials.refunded ? 'CANCELLED' : mapAmazonStatus(order),
     currency: order?.OrderTotal?.CurrencyCode || 'BRL',
     grossAmount: amount,
     shippingAmount: v2026Money.shippingAmount || financials.shippingAmount,
@@ -426,6 +428,7 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     },
     items: mappedItems.length ? mappedItems : [{ sku: `AMAZON-${orderId}`, name: `Pedido Amazon ${orderId}`, quantity: 1, unitPrice: amount }],
     attribution: { source: 'Amazon', medium: 'marketplace', campaign: 'Amazon' },
+    returnInfo: financials.refunded ? { status: 'REFUNDED', refundAmount: financials.refundAmount, observedAt: new Date().toISOString() } : undefined,
     skipInventory: true
   };
 }
@@ -489,7 +492,18 @@ export async function syncAmazonOrders(days = 365, tenantId?: string){
     const payload = payloadOf(response);
     const orders = Array.isArray(payload?.Orders) ? payload.Orders : [];
     for(const order of orders){
-      await ingestOrder(await mapAmazonOrder(order, conn.tenantId));
+      const mapped = await mapAmazonOrder(order, conn.tenantId);
+      await ingestOrder(mapped);
+      if(mapped.returnInfo){
+        const item = mapped.items[0];
+        const existingReturn = await db.returnCase.findFirst({ where: { tenantId: conn.tenantId, channel: 'AMAZON', orderExternalId: mapped.externalId }, orderBy: { observedAt: 'desc' } });
+        if(existingReturn){
+          await db.returnCase.update({ where: { id: existingReturn.id }, data: { status: mapped.returnInfo.status, sku: item?.sku || undefined, quantity: item?.quantity || undefined, orderAmount: mapped.grossAmount, refundAmount: mapped.returnInfo.refundAmount ?? undefined, observedAt: new Date(mapped.returnInfo.observedAt || Date.now()) } });
+        }else{
+          await db.returnCase.create({ data: { tenantId: conn.tenantId, channel: 'AMAZON', externalOrderId: mapped.externalId, orderExternalId: mapped.externalId, status: mapped.returnInfo.status, sku: item?.sku || null, quantity: item?.quantity || 1, orderAmount: mapped.grossAmount, refundAmount: mapped.returnInfo.refundAmount ?? null, sourceUrl: 'https://sellercentral.amazon.com.br/manage/returns', observedAt: new Date(mapped.returnInfo.observedAt || Date.now()) } });
+        }
+        await db.order.updateMany({ where: { tenantId: conn.tenantId, channel: 'AMAZON', externalId: mapped.externalId }, data: { status: 'REFUNDED', netRevenue: 0 } });
+      }
       count++;
     }
     nextToken = payload?.NextToken || '';

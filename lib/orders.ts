@@ -4,7 +4,7 @@ import { publishAvailableStock } from './inventory-publish';
 import { getTenantId } from './tenant';
 import type { Channel } from '@prisma/client';
 import { sendTenantPush } from './push';
-export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL'};
+export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL';returnInfo?:{status:string;refundAmount?:number|null;observedAt?:string}};
 export function canonicalSku(sku:string,name=''){
  return String(sku||'').trim();
 }

@@ -27,9 +27,11 @@ const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês 
 const integrationCategory = (name: string) => /ads|meta|pixel|tiktok/i.test(name) ? "ADS" : /shopify|mercado livre|amazon|shopee|kiwify/i.test(name) ? "Plataforma de vendas" : /banco|bank|nubank|inter|itaú|bradesco|santander|mercado pago|asaas/i.test(name) ? "Banco" : "Outros";
 const salesAndStockOptions = (connected: Set<string>) => ["Manual", ...(connected.has("Shopify") ? ["Shopify"] : []), ...(connected.has("Mercado Livre") ? ["Mercado Livre", "Mercado Livre Full"] : []), ...(connected.has("Amazon") ? ["Amazon", "Amazon FBA"] : []), ...(connected.has("Shopee") ? ["Shopee"] : [])];
 const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
-const defaultDashboardLayout = [...Array.from({ length: 16 }, (_, index) => `kpi-${index}`), "timeline", "alerts", "channels", "inventory"];
+const defaultDashboardLayout = ["kpi-0", "kpi-2", "kpi-14", "kpi-3", "kpi-1", "kpi-4", "kpi-5", "performance-margin", "kpi-7", "kpi-6", "kpi-8", "kpi-11", "performance-meta-ads", "performance-google-ads", "performance-tiktok-ads", "kpi-9", "kpi-10", "kpi-12", "kpi-13", "kpi-15", "alerts", "inventory"];
+const dashboardAvailableLayout = [...defaultDashboardLayout, "timeline", "performance-insights", "performance-location", "performance-dre", "performance-channels", "performance-campaigns"];
 const dashboardLayoutStorageKey = "ironair-dashboard-layout-v1";
 const dashboardExpandedStorageKey = "ironair-dashboard-expanded-v1";
+const dashboardWidthsStorageKey = "ironair-dashboard-widths-v1";
 const dashboardLayoutDirtyKey = "ironair-dashboard-layout-pending-v1";
 const activeViewStorageKey = "ironair-active-view-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
@@ -167,8 +169,10 @@ export default function Home() {
     if (localStorage.getItem("ironair-theme") === "light") setTheme("light");
   }, []);
   const [dashboardEditing, setDashboardEditing] = useState(false);
+  const [dashboardCardCatalogOpen, setDashboardCardCatalogOpen] = useState(false);
   const [dashboardHidden, setDashboardHidden] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const [dashboardWidths, setDashboardWidths] = useState<Record<string, number>>({});
   const [dashboardChartMode, setDashboardChartMode] = useState<SalesChartMode>("line");
   const [dashboardLayout, setDashboardLayout] = useState<string[]>(defaultDashboardLayout);
   const [dashboardLayoutReady, setDashboardLayoutReady] = useState(false);
@@ -221,6 +225,7 @@ export default function Home() {
   }, [view, modal, integrationsRefreshKey]);
   const [sales, setSales] = useState<any[]>([]);
   const [returnRows, setReturnRows] = useState<any[]>([]);
+  const [returnSyncing, setReturnSyncing] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
@@ -250,26 +255,31 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     const normalize = (value: unknown) => {
-      const known = Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && defaultDashboardLayout.includes(id)) : [];
+      const known = Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && dashboardAvailableLayout.includes(id)) : [];
       const next = [...new Set(known)];
-      next.push(...defaultDashboardLayout.filter((id) => !next.includes(id)));
+      if (!next.length || (next.length === 2 && next.includes("alerts") && next.includes("inventory"))) return defaultDashboardLayout;
       return next;
     };
     const load = async () => {
       let localLayout: string[] = defaultDashboardLayout;
       let localExpanded = false;
+      let localWidths: Record<string, number> = {};
       let pending = false;
       try {
         localLayout = normalize(JSON.parse(localStorage.getItem(dashboardLayoutStorageKey) || "[]"));
         localExpanded = localStorage.getItem(dashboardExpandedStorageKey) === "true";
+        const parsedWidths = JSON.parse(localStorage.getItem(dashboardWidthsStorageKey) || "{}");
+        if (parsedWidths && typeof parsedWidths === "object") localWidths = Object.fromEntries(Object.entries(parsedWidths).filter(([id, width]) => dashboardAvailableLayout.includes(id) && Number(width) >= 1 && Number(width) <= 4).map(([id, width]) => [id, Number(width)]));
         pending = localStorage.getItem(dashboardLayoutDirtyKey) === "true";
       } catch { /* Browser storage may be unavailable. */ }
       if (!active) return;
       setDashboardLayout(localLayout);
       setDashboardExpanded(localExpanded);
+      setDashboardWidths(localWidths);
       setDashboardLayoutReady(true);
       let layout = localLayout;
       let expanded = localExpanded;
+      let widths = localWidths;
       let needsSave = pending;
       try {
         const saved = await apiJson("/api/dashboard/layout");
@@ -280,6 +290,7 @@ export default function Home() {
           if (!(localWasCustomized && remoteIsDefault)) {
             layout = remoteLayout;
             expanded = Boolean(saved.expanded);
+            if (saved.widths && typeof saved.widths === "object") widths = Object.fromEntries(Object.entries(saved.widths).filter(([id, width]) => dashboardAvailableLayout.includes(id) && Number(width) >= 1 && Number(width) <= 4).map(([id, width]) => [id, Number(width)]));
           } else {
             needsSave = true;
           }
@@ -289,6 +300,7 @@ export default function Home() {
       dashboardLayoutSkipSave.current = !needsSave;
       setDashboardLayout(layout);
       setDashboardExpanded(expanded);
+      setDashboardWidths(widths);
       setDashboardLayoutLoaded(true);
     };
     void load();
@@ -300,18 +312,19 @@ export default function Home() {
     try {
       localStorage.setItem(dashboardLayoutStorageKey, JSON.stringify(dashboardLayout));
       localStorage.setItem(dashboardExpandedStorageKey, String(dashboardExpanded));
+      localStorage.setItem(dashboardWidthsStorageKey, JSON.stringify(dashboardWidths));
       localStorage.setItem(dashboardLayoutDirtyKey, "true");
     } catch { /* The layout remains usable when browser storage is unavailable. */ }
     const revision = ++dashboardLayoutSaveRevision.current;
     dashboardLayoutSaveQueue.current = dashboardLayoutSaveQueue.current.catch(() => undefined).then(() => apiJson("/api/dashboard/layout", {
       method: "PUT",
-      body: JSON.stringify({ layout: dashboardLayout, expanded: dashboardExpanded }),
+      body: JSON.stringify({ layout: dashboardLayout, expanded: dashboardExpanded, widths: dashboardWidths }),
     })).then(() => {
       if (revision === dashboardLayoutSaveRevision.current) {
         try { localStorage.setItem(dashboardLayoutDirtyKey, "false"); } catch { /* Browser storage may be unavailable. */ }
       }
     }).catch(() => undefined);
-  }, [dashboardLayout, dashboardExpanded, dashboardLayoutLoaded]);
+  }, [dashboardLayout, dashboardExpanded, dashboardWidths, dashboardLayoutLoaded]);
   const moveDashboardBlock = (source: string, target: string) => {
     if (source === target) return;
     setDashboardLayout((current) => {
@@ -327,6 +340,20 @@ export default function Home() {
       } catch { /* The in-memory layout still works. */ }
       return next;
     });
+  };
+  const startDashboardResize = (event: React.PointerEvent<HTMLButtonElement>, blockId: string) => {
+    event.preventDefault(); event.stopPropagation();
+    const item = event.currentTarget.closest(".dashboardLayoutItem") as HTMLElement | null;
+    const grid = item?.closest(".dashboardLayout") as HTMLElement | null;
+    if (!item || !grid) return;
+    const itemLeft = item.getBoundingClientRect().left;
+    const gridWidth = grid.getBoundingClientRect().width;
+    const update = (clientX: number) => setDashboardWidths((current) => ({ ...current, [blockId]: Math.max(1, Math.min(4, Math.ceil((clientX - itemLeft) / (gridWidth / 4)))) }));
+    const move = (pointerEvent: PointerEvent) => update(pointerEvent.clientX);
+    const finish = (pointerEvent: PointerEvent) => { update(pointerEvent.clientX); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); document.body.classList.remove("dashboardResizing"); };
+    document.body.classList.add("dashboardResizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish, { once: true });
   };
   const dashboardRowStep = () => typeof window === "undefined" ? 4 : window.innerWidth <= 650 ? 1 : window.innerWidth <= 1050 ? 2 : 4;
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
@@ -348,7 +375,27 @@ export default function Home() {
     .sort((a, b) => new Date(b.paidAt || b.createdAt).getTime() - new Date(a.paidAt || a.createdAt).getTime());
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
-  const dashboardKpiIds = dashboardLayout.filter((id) => id.startsWith("kpi-"));
+  const performanceCatalogOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "TACOS", "MPA", "ROAS total"];
+  const performanceCatalogCards = [
+    ...dashboardCards.map((card: any, index: number) => ({ id: `kpi-${index}`, label: card.label, description: card.delta, value: card.value, kind: "Performance", source: "performance" })),
+    { id: "performance-margin", label: "Margem líquida", description: "Resultado líquido ÷ faturamento", value: `${(Number(dashboard?.margin || 0) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`, kind: "Performance", source: "performance" },
+    { id: "performance-meta-ads", label: "Meta Ads", description: "Investimento e compras atribuídas", value: money(Number(dashboard?.media || 0)), kind: "Performance", source: "performance" },
+    { id: "performance-google-ads", label: "Google Ads", description: "Investimento no período", value: money(0), kind: "Performance", source: "performance" },
+    { id: "performance-tiktok-ads", label: "TikTok Ads", description: "Investimento no período", value: money(0), kind: "Performance", source: "performance" },
+  ].sort((a, b) => performanceCatalogOrder.indexOf(a.label) - performanceCatalogOrder.indexOf(b.label));
+  const dashboardCardMap = new Map(performanceCatalogCards.map((card) => [card.id, card]));
+  const dashboardKpiIds = dashboardLayout.filter((id) => dashboardCardMap.has(id));
+  const dashboardCardCatalog = [
+    ...performanceCatalogCards,
+    { id: "timeline", label: "Receita ao longo do tempo", description: "Valor de pedidos pagos por dia", value: "Gráfico", kind: "Performance", source: "performance" },
+    { id: "alerts", label: "Alertas da operação", description: "Estoque e pontos de atenção", value: `${stockAlerts.length} alertas`, kind: "Visão Geral", source: "dashboard" },
+    { id: "inventory", label: "Estoque", description: "Posição e disponibilidade dos produtos", value: "Tabela", kind: "Estoque", source: "dashboard" },
+    { id: "performance-insights", label: "Indicadores do período", description: "Quanto cada custo representa do faturamento", value: "4 indicadores", kind: "Performance", source: "performance" },
+    { id: "performance-location", label: "Resultado por local", description: "Estados e cidades com ou sem vendas", value: "Mapa interativo", kind: "Performance", source: "performance" },
+    { id: "performance-dre", label: "DRE gerencial", description: "Receita até o resultado líquido", value: "Demonstrativo", kind: "Performance", source: "performance" },
+    { id: "performance-channels", label: "Resultado por canal", description: "Receita e resultado por plataforma", value: "Canais", kind: "Performance", source: "performance" },
+    { id: "performance-campaigns", label: "Campanhas com mais investimento", description: "Investimento, vendas, receita e ROAS", value: "Tabela", kind: "Performance", source: "performance" },
+  ];
   const notify = (m: string) => {
     setToast(m);
     setTimeout(() => setToast(""), m.length > 90 ? 8000 : 3000);
@@ -513,6 +560,23 @@ export default function Home() {
       if (manual) setLoading(false);
     }
   };
+  const refreshReturns = async (manual = false) => {
+    if (returnSyncing) return;
+    setReturnSyncing(true);
+    try {
+      const result: any = await apiJson('/api/returns/sync', { method: 'POST', body: '{}' });
+      const rows = await apiJson('/api/returns');
+      setReturnRows(Array.isArray(rows) ? rows : []);
+      if (manual) {
+        const failures = (result.results || []).filter((item: any) => !item.ok);
+        notify(failures.length ? `Devoluções atualizadas parcialmente: ${failures.map((item: any) => `${item.provider} (${item.error})`).join(' | ')}` : 'Devoluções atualizadas ao vivo');
+      }
+    } catch (error: any) {
+      if (manual) notify(error?.message || 'Não foi possível atualizar as devoluções');
+    } finally {
+      setReturnSyncing(false);
+    }
+  };
   const choosePeriod = (p: string) => {
     setFilterModal(null);
     setPeriod(p);
@@ -576,6 +640,14 @@ export default function Home() {
       window.removeEventListener("focus", refreshVisible);
       document.removeEventListener("visibilitychange", refreshVisible);
     };
+  }, [view]);
+  useEffect(() => {
+    if (view !== 'Devoluções') return;
+    void refreshReturns(false);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshReturns(false);
+    }, 60_000);
+    return () => window.clearInterval(timer);
   }, [view]);
   useEffect(() => {
     const timer = window.setInterval(
@@ -673,7 +745,8 @@ export default function Home() {
           <button className="mobileMenuToggle" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} aria-controls="main-navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={22} /></button>
           <div className="desktopPageTitle">
             <h1>{title}</h1>
-            {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
+            {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => { if (editing) setDashboardCardCatalogOpen(false); return !editing; })} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"} title={dashboardEditing ? "Concluir organização" : "Organizar dashboard"}><Pencil size={16} /></button>}
+            {view === "Visão Geral" && dashboardEditing && <button type="button" className="dashboardNewCardButton" onClick={() => setDashboardCardCatalogOpen(true)}><Plus size={15} /> Novo card</button>}
             {view === "Visão Geral" && <button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden} title={dashboardHidden ? "Mostrar dados" : "Ocultar dados"}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button>}
           </div>
           <div className="topbarActions">
@@ -693,7 +766,7 @@ export default function Home() {
             </button>
           </div>
         </header>
-        <div className="mobilePageTitleRow"><h1 className="mobilePageTitle">{title}</h1>{view === "Visão Geral" && <><button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => !editing)} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"}><Pencil size={16} /></button><button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button></>}</div>
+        <div className="mobilePageTitleRow"><h1 className="mobilePageTitle">{title}</h1>{view === "Visão Geral" && <><button type="button" className={`dashboardEditToggle ${dashboardEditing ? "active" : ""}`} onClick={() => setDashboardEditing((editing) => { if (editing) setDashboardCardCatalogOpen(false); return !editing; })} aria-label={dashboardEditing ? "Concluir organização do dashboard" : "Organizar dashboard"}><Pencil size={16} /></button>{dashboardEditing && <button type="button" className="dashboardNewCardButton" onClick={() => setDashboardCardCatalogOpen(true)}><Plus size={15} /> Novo card</button>}<button type="button" className={`dashboardEditToggle ${dashboardHidden ? "active" : ""}`} onClick={() => setDashboardHidden((hidden) => !hidden)} aria-label={dashboardHidden ? "Mostrar dados do dashboard" : "Ocultar dados do dashboard"} aria-pressed={dashboardHidden}>{dashboardHidden ? <EyeOff size={17} /> : <Eye size={17} />}</button></>}</div>
         {view === "Visão Geral" && (
           <>
             <div className="filters">
@@ -724,7 +797,7 @@ export default function Home() {
             </div>
             {dashboardLayoutReady && <div className={`dashboardLayout ${dashboardEditing ? "editing" : ""}`}>
               {dashboardLayout.map((blockId, index) => {
-                const kpi = blockId.startsWith("kpi-") ? dashboardCards[Number(blockId.slice(4))] : null;
+                const kpi = dashboardCardMap.get(blockId) || null;
                 const kpiPosition = kpi ? dashboardKpiIds.indexOf(blockId) : -1;
                 if (kpiPosition > 8 && !dashboardEditing) return null;
                 return <Fragment key={blockId}>
@@ -732,8 +805,8 @@ export default function Home() {
                     <div className={`dashboardExtraCards ${dashboardExpanded ? "expanded" : ""}`} aria-hidden={!dashboardExpanded}>
                       <div className="dashboardExtraCardsInner">
                         {dashboardKpiIds.slice(8).map((id) => {
-                          const extra = dashboardCards[Number(id.slice(4))];
-                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong className={!dashboardHidden && isNegativeDisplay(extra.value) ? "negative" : extra.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.delta) : extra.delta}</small></article></div>;
+                          const extra = dashboardCardMap.get(id)!;
+                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong className={!dashboardHidden && isNegativeDisplay(extra.value) ? "negative" : extra.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.description) : extra.description}</small></article></div>;
                         })}
                       </div>
                     </div>
@@ -744,7 +817,7 @@ export default function Home() {
                       <span>{dashboardExpanded ? "Mostrar menos" : "Mostrar mais"}</span>
                     </div>
                   </div>}
-                  {(kpiPosition < 8 || dashboardEditing) && <div className={`dashboardLayoutItem ${kpi ? "dashboardKpiItem" : blockId === "timeline" || blockId === "alerts" ? "dashboardHalfItem" : "dashboardFullItem"} ${dashboardDropTarget === blockId ? "dropTarget" : ""}`}
+                  {(kpiPosition < 8 || dashboardEditing) && <div className={`dashboardLayoutItem ${kpi ? "dashboardKpiItem" : blockId === "timeline" || blockId === "alerts" ? "dashboardHalfItem" : "dashboardFullItem"} ${dashboardDropTarget === blockId ? "dropTarget" : ""}`} style={{ "--dashboard-span": dashboardWidths[blockId] || (kpi ? 1 : blockId === "timeline" || blockId === "alerts" ? 2 : 4) } as React.CSSProperties}
                   onDragOver={dashboardEditing ? (event) => { event.preventDefault(); setDashboardDropTarget(blockId); } : undefined}
                   onDragLeave={dashboardEditing ? () => setDashboardDropTarget((current) => current === blockId ? null : current) : undefined}
                   onDrop={dashboardEditing ? (event) => { event.preventDefault(); moveDashboardBlock(dashboardDragSource.current || event.dataTransfer.getData("text/plain"), blockId); dashboardDragSource.current = null; setDashboardDropTarget(null); } : undefined}>
@@ -754,8 +827,10 @@ export default function Home() {
                     <button type="button" className="dashboardHorizontalMove" disabled={index === 0} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index - 1])} aria-label={`Mover ${kpi?.label || blockId} para a esquerda`}><ArrowLeft size={16} /></button>
                     <button type="button" className="dashboardHorizontalMove" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[index + 1])} aria-label={`Mover ${kpi?.label || blockId} para a direita`}><ArrowRight size={16} /></button>
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
+                    <button type="button" className="dashboardRemoveBlock" onClick={() => setDashboardLayout((current) => current.filter((id) => id !== blockId))} aria-label={`Remover ${kpi?.label || blockId} do Dashboard`} title="Remover do Dashboard"><Trash2 size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.delta) : kpi.delta}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} /> : <Inventory products={periodInventoryProducts} folders={inventoryFolders} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} />}
+                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.description) : kpi.description}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "inventory" ? <Inventory products={periodInventoryProducts} folders={inventoryFolders} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} /> : blockId === "channels" || blockId === "performance-channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} title={blockId === "performance-channels" ? "Resultado por canal" : "Performance por canal"} /> : <DashboardPerformancePanel id={blockId} data={dashboard} campaigns={campaigns} hidden={dashboardHidden} />}
+                  {dashboardEditing && <button type="button" className="dashboardResizeHandle" data-width={`${(dashboardWidths[blockId] || (kpi ? 1 : blockId === "timeline" || blockId === "alerts" ? 2 : 4)) * 25}%`} aria-label={`Redimensionar ${kpi?.label || blockId}`} title="Arraste para alterar a largura" onPointerDown={(event) => startDashboardResize(event, blockId)}><span /></button>}
                 </div>}
                 </Fragment>;
               })}
@@ -779,7 +854,7 @@ export default function Home() {
             onExport={(rows: any[], format: "csv" | "xml") => exportFile("vendas", rows, format)}
           />
         )}{" "}
-        {view === "Devoluções" && <Returns rows={returnRows} />}{" "}
+        {view === "Devoluções" && <Returns rows={returnRows} syncing={returnSyncing} onSync={() => refreshReturns(true)} />}{" "}
         {view === "Clientes" && (
           <Customers
             rows={customers}
@@ -813,6 +888,7 @@ export default function Home() {
         {view === "Performance" && <PerformanceView />}{" "}
         {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
+      {dashboardCardCatalogOpen && <div className="modalBack dashboardCardCatalogBack" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDashboardCardCatalogOpen(false); }}><section className="modal modalWide dashboardCardCatalogModal" role="dialog" aria-modal="true" aria-labelledby="dashboard-card-catalog-title"><header className="modalHead"><div><h2 id="dashboard-card-catalog-title">Todos os cards</h2><p>Prévia dos cards do Dashboard Geral e da tela Performance.</p></div><button type="button" className="close" aria-label="Fechar" onClick={() => setDashboardCardCatalogOpen(false)}><X size={19} /></button></header><div className="modalBody"><div className="dashboardCardCatalogGrid">{dashboardCardCatalog.map((card) => { const added = dashboardLayout.includes(card.id); return <article className="dashboardCatalogCard" key={card.id}><span className="dashboardCatalogKind">{card.kind}</span><DashboardCatalogPreview card={card} hidden={dashboardHidden} /><button type="button" className="dashboardCatalogAction" disabled={added} onClick={() => { setDashboardLayout((current) => current.includes(card.id) ? current : [...current, card.id]); setDashboardCardCatalogOpen(false); }}>{added ? <><CheckCircle2 size={14} /> Adicionado</> : <><Plus size={14} /> Adicionar</>}</button></article>; })}</div></div><footer className="modalFoot"><span className="dashboardCatalogCount">{dashboardCardCatalog.length} cards disponíveis</span><button type="button" className="ghost" onClick={() => setDashboardCardCatalogOpen(false)}>Fechar</button></footer></section></div>}
       {modal && (
         <Modal
           kind={modal}
@@ -1309,6 +1385,28 @@ function salesTimeline(rows: any[] = [], period: string, range: { from: string; 
   if (!points.length) points.push({ date: r.to, revenue: 0, orders: 0 });
   return points;
 }
+function DashboardPerformancePanel({ id, data, campaigns, hidden }: { id: string; data: any; campaigns: any[]; hidden: boolean }) {
+  const revenue = Number(data?.revenue || 0), fees = Number(data?.fees || 0), cogs = Number(data?.cogs || 0), media = Number(data?.media || 0), expenses = Number(data?.expenses || 0);
+  const gross = Number(data?.grossProfit ?? revenue - fees - cogs), profit = Number(data?.profit ?? gross - media - expenses);
+  if (id === "performance-insights") return <article className="card performancePanel"><div className="sectionHead"><div><h2>Indicadores do período</h2><p>Quanto cada custo representa do faturamento</p></div></div>{[["Ticket médio por pedido", money(Number(data?.ticket || 0))], ["Gasto com anúncios sobre faturamento", revenue ? `${(media / revenue * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—"], ["Taxas e frete sobre faturamento", revenue ? `${(fees / revenue * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—"], ["Margem líquida", revenue ? `${(profit / revenue * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—"]].map(([label, value]) => <div className="performanceInsightRow" key={label}><span>{label}</span><b>{hidden ? "—" : value}</b></div>)}</article>;
+  if (id === "performance-dre") { const rows = [["Receita de vendas pagas", revenue], ["(-) Taxas, tributos e frete", -fees], ["Receita após taxas e frete", revenue - fees], ["(-) Custo dos produtos vendidos", -cogs], ["Lucro bruto gerencial", gross], ["(-) Investimento em anúncios", -media], ["(-) Despesas operacionais", -expenses], ["Resultado líquido gerencial", profit]] as const; return <article className="card performancePanel"><div className="sectionHead"><div><h2>DRE gerencial</h2><p>Receita até o resultado líquido</p></div></div><div className="performanceDre">{rows.map(([label, amount], index) => <div className={`${index === 2 || index === 4 ? "strong" : ""} ${index === rows.length - 1 ? "final" : ""}`} key={label}><span>{label}</span><b className={amount < 0 ? "negative" : undefined}>{hidden ? "—" : money(amount)}</b></div>)}</div></article>; }
+  if (id === "performance-campaigns") return <article className="card performancePanel"><div className="sectionHead"><div><h2>Campanhas com mais investimento</h2><p>Investimento, vendas, receita e ROAS</p></div></div><div className="performanceTableWrap"><table><thead><tr><th>Campanha</th><th>Plataforma</th><th>Investimento</th><th>Vendas</th><th>Receita</th><th>ROAS</th></tr></thead><tbody>{campaigns.slice(0, 8).map((campaign: any, index) => <tr key={campaign.campaignId || index}><td>{campaign.campaignName || campaign.name || "Campanha"}</td><td>{campaign.platform || "—"}</td><td>{hidden ? "—" : money(Number(campaign.spend || 0))}</td><td>{hidden ? "—" : Number(campaign.sales || 0)}</td><td>{hidden ? "—" : money(Number(campaign.revenue || 0))}</td><td>{hidden ? "—" : Number(campaign.spend) ? `${(Number(campaign.revenue || 0) / Number(campaign.spend)).toFixed(2)}x` : "—"}</td></tr>)}</tbody></table>{!campaigns.length && <div className="performanceEmpty">Nenhuma campanha encontrada no período.</div>}</div></article>;
+  if (id === "performance-location") return <article className="card performancePanel dashboardLocationPlaceholder"><div className="sectionHead"><div><h2>Resultado por local</h2><p>Estados e cidades com ou sem vendas</p></div></div><div className="catalogMap"><div aria-hidden="true"><i>AM</i><i>MT</i><i>BA</i><i>MG</i><i>SP</i><i>RS</i></div></div><p className="muted">Abra Performance para interagir com o mapa completo.</p></article>;
+  return <article className="card performancePanel"><div className="performanceEmpty">Card indisponível.</div></article>;
+}
+
+function DashboardCatalogPreview({ card, hidden }: { card: { id: string; label: string; description: string; value: string | number }; hidden: boolean }) {
+  const value = hidden ? "—" : card.value;
+  const isKpi = card.id.startsWith("kpi-") || ["performance-margin", "performance-meta-ads", "performance-google-ads", "performance-tiktok-ads"].includes(card.id);
+  if (isKpi) return <article className="card kpi dashboardCatalogReplica"><span>{card.label}</span><strong className={isNegativeDisplay(card.value) ? "negative" : undefined}>{value}</strong><small>{card.description}</small></article>;
+  if (card.id === "timeline") return <article className="card chartCard dashboardCatalogReplica catalogTimeline"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><svg viewBox="0 0 220 54" preserveAspectRatio="none" aria-hidden="true"><path d="M2 43 C24 40 27 17 49 24 S75 51 95 31 S123 8 140 28 S174 45 218 13" /></svg></article>;
+  if (card.id === "alerts") return <article className="card pad dashboardCatalogReplica"><div className="sectionHead"><div><h2>{card.label}</h2><p>Estoque de atenção</p></div><span className="badge">3</span></div><div className="alerts">{[1, 2, 3].map((number) => <div className="alert" key={number}><span>{number}</span><p>Produto com estoque de atenção.</p></div>)}</div></article>;
+  if (card.id === "inventory" || card.id === "performance-campaigns") return <article className="card dashboardCatalogReplica catalogReplicaTable"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><table><thead><tr><th>{card.id === "inventory" ? "Produto" : "Campanha"}</th><th>{card.id === "inventory" ? "SKU" : "Investimento"}</th><th>{card.id === "inventory" ? "Disponível" : "ROAS"}</th></tr></thead><tbody><tr><td>—</td><td>—</td><td>—</td></tr><tr><td>—</td><td>—</td><td>—</td></tr></tbody></table></article>;
+  if (card.id === "performance-location") return <article className="card performancePanel dashboardCatalogReplica"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><div className="catalogMap"><div aria-hidden="true"><i>AM</i><i>MT</i><i>BA</i><i>MG</i><i>SP</i><i>RS</i></div></div></article>;
+  const rows = card.id === "performance-dre" ? ["Receita", "Taxas e frete", "Lucro bruto", "Resultado líquido"] : card.id === "performance-channels" ? ["Mercado Livre", "Shopify", "Amazon"] : ["Ticket médio", "Anúncios", "Taxas e frete", "Margem líquida"];
+  return <article className="card performancePanel dashboardCatalogReplica"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><div className={card.id === "performance-dre" ? "performanceDre" : "catalogReplicaRows"}>{rows.map((row, index) => <div className={index === rows.length - 1 ? "final" : ""} key={row}><span>{row}</span><b>—</b></div>)}</div></article>;
+}
+
 function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false, mode = "line" }: any) {
   const points = salesTimeline(rows, period, range, firstSaleDate);
   const dates = periodRange(period, range, firstSaleDate);
@@ -1541,12 +1639,12 @@ function formatChannels(rows: any[]) {
     profit: money(c.salesProfit || 0),
   }));
 }
-function ChannelTable({ rows, hidden = false }: { rows: any[]; hidden?: boolean }) {
+function ChannelTable({ rows, hidden = false, title = "Performance por canal" }: { rows: any[]; hidden?: boolean; title?: string }) {
   return (
     <article className="card tableCard">
       <div className="sectionHead">
         <div>
-          <h2>Performance por canal</h2>
+          <h2>{title}</h2>
           <p>Receita e lucro de venda consolidado</p>
         </div>
       </div>
@@ -2849,12 +2947,12 @@ function Expenses({ rows, onNew, onEdit, onDelete, onDeleteMany }: any) {
     {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
   </article>;
 }
-function Returns({ rows }: { rows: any[] }) {
-  const statusLabel: Record<string, string> = { IN_TRANSIT: "Devolução a caminho", DELIVERED: "Reembolsada", REFUNDED: "Reembolsada" };
+function Returns({ rows, syncing, onSync }: { rows: any[]; syncing: boolean; onSync: () => void }) {
+  const statusLabel: Record<string, string> = { IN_TRANSIT: "Devolução a caminho", DELIVERED: "Reembolsada", REFUNDED: "Reembolsada", PENDING_REFUND: "Reembolso pendente" };
   return <article className="card tableCard">
-    <div className="sectionHead"><div><h2>Devoluções do Mercado Livre</h2><p>{rows.length} pedidos REFUNDED · {rows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {rows.filter((row) => row.refundAmount !== null).length} reembolsos confirmados</p></div></div>
+    <div className="sectionHead"><div><h2>Devoluções dos canais</h2><p>{rows.length} devoluções · {rows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {rows.filter((row) => row.refundAmount !== null).length} reembolsos confirmados · atualização automática a cada minuto</p></div><button className="ghost clickable" disabled={syncing} onClick={onSync}><RefreshCw size={14} className={syncing ? "spin" : undefined} />{syncing ? "Sincronizando…" : "Sincronizar agora"}</button></div>
     <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th>Motivo</th><th>Situação</th><th>Reembolso</th><th>Vendas</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>
-      <td><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">Pacote #{row.externalOrderId}</a></td>
+      <td><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">{originLabel(row.channel)} · #{row.externalOrderId}</a></td>
       <td>{row.customerName || "—"}</td>
       <td>{row.sku || "—"}</td><td>{row.reason || "—"}</td><td><span className={`status ${row.refundAmount !== null ? "danger" : "warn"}`}>{statusLabel[row.status] || row.status}</span></td>
       <td className={row.refundAmount === null ? undefined : "negative"}>{row.refundAmount === null ? "Pendente" : `-${money(row.refundAmount)}`}</td><td>{row.erpOrderStatus ? <span className={`status ${row.erpOrderStatus === "PAID" ? "ok" : row.erpOrderStatus === "REFUNDED" || row.erpOrderStatus === "PENDING" ? "warn" : "danger"}`}>{row.erpOrderStatus}</span> : "Verificar vínculo"}</td>

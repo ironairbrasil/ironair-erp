@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Download, RefreshCw, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, RefreshCw, TrendingUp } from "lucide-react";
 import SalesChart, { ChartStyleToggle, type SalesChartMode, type SalesPoint } from "./sales-chart";
 import LocationGlobe, { type LocationData } from "./location-globe";
 
 type Dashboard = {
   periodFrom: string; periodTo: string; revenue: number; orders: number; cogs: number;
   fees: number; media: number; expenses: number; salesProfit: number; grossProfit: number;
-  profit: number; margin: number; roas: number | null; ticket: number;
+  profit: number; margin: number; roas: number | null; ticket: number; available?: number; taxes?: number;
   daily: { date: string; revenue: number; profit: number; orders: number }[];
   channels: { name: string; invested: number; sales: number; revenue: number; cpa: number | null; roas: number | null; salesProfit: number; profit: number }[];
 };
@@ -21,10 +21,46 @@ const ratio = (value: number | null) => value === null || !Number.isFinite(value
 const day = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 const dateLabel = (value: string) => value ? `${value.slice(8, 10)}/${value.slice(5, 7)}/${value.slice(0, 4)}` : "—";
 const channelLabel = (value: string) => ({ MERCADO_LIVRE: "Mercado Livre", SHOPIFY: "Shopify", AMAZON: "Amazon", META: "Meta Ads" }[value] || value);
+const platformLogo = (value: string) => {
+  const normalized = String(value || "").toUpperCase().replaceAll("_", " ");
+  if (normalized.includes("MERCADO LIVRE")) return "/integration-logos/mercado-livre.jpg";
+  if (normalized.includes("SHOPIFY")) return "/integration-logos/shopify.png";
+  if (normalized.includes("AMAZON")) return "/integration-logos/amazon.jpg";
+  if (normalized.includes("META")) return "/integration-logos/meta-ads.webp";
+  if (normalized.includes("GOOGLE")) return "/integration-logos/google-ads.webp";
+  if (normalized.includes("TIKTOK")) return "/integration-logos/tiktok-ads.webp";
+  return "";
+};
+const PlatformName = ({ value }: { value: string }) => { const logo = platformLogo(value); return <span className="performancePlatformName">{logo && <span className="performancePlatformLogo"><img src={logo} alt="" /></span>}<span>{channelLabel(value)}</span></span>; };
 const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
 const shiftMonth = (month: string, offset: number) => { const [year, value] = month.split("-").map(Number); const date = new Date(Date.UTC(year, value - 1 + offset, 1)); return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`; };
 const monthTitle = (month: string) => { const [year, value] = month.split("-").map(Number); const name = new Intl.DateTimeFormat("pt-BR", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, value - 1, 1))); return `${name[0].toUpperCase()}${name.slice(1)} ${year}`; };
 const monthDays = (month: string) => { const [year, value] = month.split("-").map(Number); const blanks = (new Date(Date.UTC(year, value - 1, 1)).getUTCDay() + 6) % 7; const count = new Date(Date.UTC(year, value, 0)).getUTCDate(); return [...Array(blanks).fill(""), ...Array.from({ length: count }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)]; };
+const performanceCardOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "TACOS", "MPA", "ROAS total"];
+const performanceKpis = (data: Dashboard) => {
+  const revenue = Number(data.revenue || 0), cogs = Number(data.cogs || 0), media = Number(data.media || 0), fees = Number(data.fees || 0), expenses = Number(data.expenses || 0);
+  const gross = Number(data.grossProfit ?? (revenue - fees - cogs));
+  const investment = cogs + fees + media + expenses;
+  const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  return [
+    { label: "Faturamento", value: brl(revenue), delta: `${data.orders || 0} pedidos pagos` },
+    { label: "Pedidos pagos", value: String(data.orders || 0), delta: "Aprovados" },
+    { label: "Líq. do Marketplace", value: brl(data.salesProfit ?? (revenue - fees)), delta: "Faturamento − taxas e frete" },
+    { label: "Lucro líquido", value: brl(gross - expenses), delta: "Lucro bruto − despesas" },
+    { label: "Taxas + frete", value: brl(fees ? -Math.abs(fees) : 0), delta: "Plataforma / logística" },
+    { label: "Custo dos produtos", value: brl(cogs), delta: "Custo unitário × quantidade vendida" },
+    { label: "Ticket médio", value: brl(data.ticket || 0), delta: "Receita / pedidos" },
+    { label: "Estoque", value: `${data.available || 0} un.`, delta: "Disponíveis" },
+    { label: "Impostos", value: brl(data.taxes || 0), delta: "% sobre o faturamento" },
+    { label: "Lucro bruto pós Ads", value: brl(gross - media), delta: "Lucro bruto − anúncios" },
+    { label: "Valor em Ads", value: brl(media), delta: "Total investido em anúncios" },
+    { label: "ROI", value: investment > 0 ? String(Number((Math.max(0, (revenue - investment) / investment)).toFixed(2))) : "—", delta: "Retorno sobre o investimento" },
+    { label: "TACOS", value: revenue > 0 ? percent(media / revenue) : "—", delta: "Investimento em anúncios / faturamento" },
+    { label: "MPA", value: revenue > 0 ? percent((gross - media) / revenue) : "—", delta: "Lucro bruto pós Ads / faturamento" },
+    { label: "Lucro bruto", value: brl(gross), delta: "Líq. do Marketplace − produtos" },
+    { label: "ROAS total", value: media > 0 ? `${(revenue / media).toFixed(2)}x` : "—", delta: "Faturamento / investimento em anúncios" },
+  ];
+};
 
 function datesFor(period: string, from: string, to: string) {
   const today = day(new Date());
@@ -72,6 +108,7 @@ export default function PerformanceView() {
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaError, setMetaError] = useState("");
   const [periodOpen, setPeriodOpen] = useState(false);
+  const [kpisExpanded, setKpisExpanded] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => day(new Date()).slice(0, 7));
   const [draftRange, setDraftRange] = useState({ from: "", to: "" });
   const [selectingEnd, setSelectingEnd] = useState(false);
@@ -135,6 +172,14 @@ export default function PerformanceView() {
   const ranked = [...campaigns].sort((a, b) => Number(b.spend) - Number(a.spend)).slice(0, 6);
   const metaPurchases = metaMetrics ? Object.values(metaMetrics.accounts).reduce((sum, metric) => sum + metric.purchases, 0) : null;
   const metaPurchaseValue = metaMetrics ? Object.values(metaMetrics.accounts).reduce((sum, metric) => sum + metric.purchaseValue, 0) : null;
+  const spendFor = (pattern: RegExp) => campaigns.filter(campaign => pattern.test(String(campaign.platform))).reduce((sum, campaign) => sum + Number(campaign.spend || 0), 0);
+  const performanceAdCards = data ? [
+    { id: "performance-margin", label: "Margem líquida", value: pct(data.margin), delta: "Resultado líquido ÷ faturamento" },
+    { id: "performance-meta-ads", label: "Meta Ads", value: brl(spendFor(/meta/i)), delta: `${metaPurchases ?? 0} compras atribuídas` },
+    { id: "performance-google-ads", label: "Google Ads", value: brl(spendFor(/google/i)), delta: "Investimento no período" },
+    { id: "performance-tiktok-ads", label: "TikTok Ads", value: brl(spendFor(/tiktok/i)), delta: "Investimento no período" },
+  ] : [];
+  const orderedPerformanceCards = data ? [...performanceKpis(data).map((card, index) => ({ ...card, id: `kpi-${index}` })), ...performanceAdCards].sort((a, b) => performanceCardOrder.indexOf(a.label) - performanceCardOrder.indexOf(b.label)) : [];
   const exportDre = async () => {
     if (!data || loading) return;
     const { jsPDF } = await import("jspdf");
@@ -181,22 +226,25 @@ export default function PerformanceView() {
     {loading && !data && <div className="performanceLoading">Carregando análise...</div>}
     {data && <>
       <div className="performancePeriodLabel">{dateLabel(data.periodFrom)} a {dateLabel(data.periodTo)} · {data.orders} pedidos pagos {loading ? "· Atualizando..." : ""}</div>
-      <div className="performanceKpis">
-        <article className="card"><span>Faturamento</span><strong>{brl(data.revenue)}</strong><small>{data.orders} pedidos pagos</small></article>
-        <article className="card"><span>Lucro bruto</span><strong className={grossResult < 0 ? "negative" : undefined}>{brl(grossResult)}</strong><small>Após taxas e custo dos produtos</small></article>
-        <article className="card"><span>Resultado líquido</span><strong className={data.profit < 0 ? "negative" : "positive"}>{brl(data.profit)}</strong><small>Lucro bruto − despesas</small></article>
-        <article className="card"><span>Margem líquida</span><strong className={data.margin < 0 ? "negative" : "positive"}>{pct(data.margin)}</strong><small>Resultado líquido ÷ faturamento</small></article>
+      <div className="performanceKpiSection">
+        <div className="performanceKpis">
+          {orderedPerformanceCards.slice(0, 8).map((card) => <article className="card" id={card.id} key={card.id}><span className="performanceKpiLabel">{platformLogo(card.label) && <span className="performancePlatformLogo"><img src={platformLogo(card.label)} alt="" /></span>}{card.label}</span><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
+        </div>
+        <div className={`dashboardExtraCards performanceExtraCards ${kpisExpanded ? "expanded" : ""}`} aria-hidden={!kpisExpanded}><div className="performanceExtraCardsInner"><div className="performanceKpis">
+          {orderedPerformanceCards.slice(8).map((card) => <article className="card" id={card.id} key={card.id}><span className="performanceKpiLabel">{platformLogo(card.label) && <span className="performancePlatformLogo"><img src={platformLogo(card.label)} alt="" /></span>}{card.label}</span><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
+        </div></div></div>
+        <div className="dashboardMoreDivider"><button type="button" className="dashboardMoreToggle" aria-expanded={kpisExpanded} aria-label={kpisExpanded ? "Mostrar menos cards" : "Mostrar mais cards"} onClick={() => setKpisExpanded((expanded) => !expanded)}>{kpisExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}</button><span>{kpisExpanded ? "Mostrar menos" : "Mostrar mais"}</span></div>
       </div>
       <div className="performanceMainGrid">
-        <article className="card performancePanel"><div className="sectionHead"><div><h2>Receita ao longo do tempo</h2><p>Valor de pedidos pagos por dia</p></div><ChartStyleToggle mode={chartMode} onChange={setChartMode} /></div><SalesChart points={chartPoints} from={data.periodFrom} to={data.periodTo} mode={chartMode} /></article>
+        <article className="card performancePanel" id="timeline"><div className="sectionHead"><div><h2>Receita ao longo do tempo</h2><p>Valor de pedidos pagos por dia</p></div><ChartStyleToggle mode={chartMode} onChange={setChartMode} /></div><SalesChart points={chartPoints} from={data.periodFrom} to={data.periodTo} mode={chartMode} /></article>
         <article className="card performancePanel performanceInsight"><div className="sectionHead"><div><h2>Indicadores do período</h2><p>Quanto cada custo representa do faturamento</p></div></div><div className="performanceInsightRow"><span>Ticket médio por pedido</span><b>{brl(data.ticket)}</b></div><div className="performanceInsightRow"><span>Gasto com anúncios sobre faturamento</span><b>{data.revenue ? pct(data.media / data.revenue) : "—"}</b></div><div className="performanceInsightRow"><span>Taxas e frete sobre faturamento</span><b>{data.revenue ? pct(data.fees / data.revenue) : "—"}</b></div><div className="performanceInsightRow"><span>Margem líquida</span><b className={data.profit < 0 ? "negative" : "positive"}>{pct(data.margin)}</b></div><p className="performanceFootnote">Ex.: 2,6% em anúncios = R$ 2,60 gastos a cada R$ 100 faturados.</p></article>
       </div>
       {locations && <LocationGlobe data={locations} />}
       <div className="performanceMainGrid">
         <article className="card performancePanel"><div className="sectionHead"><div><h2>DRE gerencial</h2><p>Receita até o resultado líquido</p></div></div><div className="performanceDre">{rows.map(row => <div key={row.label} className={`${row.strong ? "strong" : ""} ${row.final ? "final" : ""}`}><span>{row.label}</span><b className={row.amount < 0 ? "negative" : undefined}>{brl(row.amount)}</b></div>)}</div><p className="performanceFootnote">Tributos registrados integram as taxas. Impostos estimados não são abatidos neste resultado. Base gerencial; não substitui a DRE contábil.</p></article>
-        <article className="card performancePanel"><div className="sectionHead"><div><h2>Resultado por canal</h2><p>Receita e resultado antes das despesas gerais</p></div></div><div className="performanceChannelList">{data.channels.length ? data.channels.map(channel => /meta/i.test(channel.name) ? <div className="performanceChannel" key={channel.name}><div><b>{channelLabel(channel.name)}</b><small>{metaLoading ? "Carregando compras Meta..." : metaError ? "Compras Meta indisponíveis" : `${metaPurchases ?? 0} compras Meta · ${ratio(metaPurchaseValue !== null && channel.invested ? metaPurchaseValue / channel.invested : null)} ROAS Meta`}</small></div><div><b>{metaPurchaseValue === null ? "—" : brl(metaPurchaseValue)}</b><small>Valor atribuído pela Meta</small></div></div> : <div className="performanceChannel" key={channel.name}><div><b>{channelLabel(channel.name)}</b><small>{channel.sales} vendas · {ratio(channel.roas)} ROAS</small></div><div><b>{brl(channel.revenue)}</b><small className={channel.profit < 0 ? "negative" : undefined}>Resultado {brl(channel.profit)}</small></div></div>) : <div className="performanceEmpty">Sem dados por canal neste período.</div>}</div><p className="performanceFootnote">Compras Meta são atribuições da plataforma e não são somadas novamente ao faturamento ou à DRE.</p></article>
+        <article className="card performancePanel"><div className="sectionHead"><div><h2>Resultado por canal</h2><p>Receita e resultado antes das despesas gerais</p></div></div><div className="performanceChannelList">{data.channels.length ? data.channels.map(channel => /meta/i.test(channel.name) ? <div className="performanceChannel" key={channel.name}><div><b><PlatformName value={channel.name} /></b><small>{metaLoading ? "Carregando compras Meta..." : metaError ? "Compras Meta indisponíveis" : `${metaPurchases ?? 0} compras Meta · ${ratio(metaPurchaseValue !== null && channel.invested ? metaPurchaseValue / channel.invested : null)} ROAS Meta`}</small></div><div><b>{metaPurchaseValue === null ? "—" : brl(metaPurchaseValue)}</b><small>Valor atribuído pela Meta</small></div></div> : <div className="performanceChannel" key={channel.name}><div><b><PlatformName value={channel.name} /></b><small>{channel.sales} vendas · {ratio(channel.roas)} ROAS</small></div><div><b>{brl(channel.revenue)}</b><small className={channel.profit < 0 ? "negative" : undefined}>Resultado {brl(channel.profit)}</small></div></div>) : <div className="performanceEmpty">Sem dados por canal neste período.</div>}</div><p className="performanceFootnote">Compras Meta são atribuições da plataforma e não são somadas novamente ao faturamento ou à DRE.</p></article>
       </div>
-      <article className="card performancePanel performanceCampaignPanel"><div className="sectionHead"><div><h2>Campanhas com mais investimento</h2><p>Compras da Meta atribuídas pela plataforma; outros canais usam atribuição do ERP</p></div></div><div className="performanceTableWrap"><table><thead><tr><th>Campanha</th><th>Plataforma</th><th>Investimento</th><th>Vendas atribuídas</th><th>Receita atribuída</th><th>ROAS</th></tr></thead><tbody>{ranked.map(campaign => { const isMeta = /meta/i.test(campaign.platform); const metric = isMeta ? metaMetrics?.campaigns[campaign.campaignId] : null; const sales = isMeta ? metric?.purchases : campaign.sales; const revenue = isMeta ? metric?.purchaseValue : campaign.revenue; return <tr key={`${campaign.platform}:${campaign.campaignId}`}><td><b>{campaign.campaignName}</b></td><td>{campaign.platform}</td><td>{brl(Number(campaign.spend))}</td><td>{sales ?? "—"}</td><td>{revenue == null ? "—" : brl(Number(revenue))}</td><td>{ratio(revenue == null || !Number(campaign.spend) ? null : Number(revenue) / Number(campaign.spend))}</td></tr>; })}</tbody></table>{!ranked.length && <div className="performanceEmpty">Nenhuma campanha encontrada no período.</div>}</div></article>
+      <article className="card performancePanel performanceCampaignPanel"><div className="sectionHead"><div><h2>Campanhas com mais investimento</h2><p>Compras da Meta atribuídas pela plataforma; outros canais usam atribuição do ERP</p></div></div><div className="performanceTableWrap"><table><thead><tr><th>Campanha</th><th>Plataforma</th><th>Investimento</th><th>Vendas atribuídas</th><th>Receita atribuída</th><th>ROAS</th></tr></thead><tbody>{ranked.map(campaign => { const isMeta = /meta/i.test(campaign.platform); const metric = isMeta ? metaMetrics?.campaigns[campaign.campaignId] : null; const sales = isMeta ? metric?.purchases : campaign.sales; const revenue = isMeta ? metric?.purchaseValue : campaign.revenue; return <tr key={`${campaign.platform}:${campaign.campaignId}`}><td><b>{campaign.campaignName}</b></td><td><PlatformName value={campaign.platform} /></td><td>{brl(Number(campaign.spend))}</td><td>{sales ?? "—"}</td><td>{revenue == null ? "—" : brl(Number(revenue))}</td><td>{ratio(revenue == null || !Number(campaign.spend) ? null : Number(revenue) / Number(campaign.spend))}</td></tr>; })}</tbody></table>{!ranked.length && <div className="performanceEmpty">Nenhuma campanha encontrada no período.</div>}</div></article>
     </>}
   </div>;
 }

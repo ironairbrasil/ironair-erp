@@ -250,9 +250,12 @@ function num(v: any){
 
 function mapOrderStatus(o: any): IngestOrder['status']{
   const status = String(o.status || '').toLowerCase();
-  const payments = Array.isArray(o.payments) ? o.payments : [];
-  if(payments.some((payment: any) => String(payment.status || '').toLowerCase() === 'refunded')) return 'REFUNDED';
   if(status.includes('cancel')) return 'CANCELLED';
+  // Payment refunds are frequently how cancelled sales are represented by the API.
+  // Only mapMercadoLivreOrderWithReturns may promote an order to REFUNDED after
+  // confirming that it exists in the physical returns workflow.
+  const payments = Array.isArray(o.payments) ? o.payments : [];
+  if(payments.some((payment: any) => String(payment.status || '').toLowerCase() === 'refunded')) return 'CANCELLED';
   if(status.includes('paid') || num(o.paid_amount) > 0) return 'PAID';
   return 'PENDING';
 }
