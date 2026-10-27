@@ -57,20 +57,26 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const until=allTime?new Date(`${localDay(new Date())}T23:59:59.999-03:00`):to?new Date(`${to}T23:59:59.999-03:00`):undefined;
   const range=until?{gte:since,lte:until}:{gte:since};
   const recurringSchedules=Object.keys(CALENDAR_SCHEDULE_MONTHS);
-  const [paidRows,spend,inventory,tracking,expenses,variants]=await Promise.all([
+  const [paidRows,spend,inventory,tracking,expenses,variants,adEntities]=await Promise.all([
     db.order.findMany({where:{tenantId,status:'PAID',paidAt:range,...(platform?{channel:platform as any}:{}),...(product?{items:{some:{sku:product}}}:{})},include:{items:true,attribution:true}}),
     product?Promise.resolve([]):db.adSpendDaily.findMany({where:{tenantId,date:range,...(platform?{platform:platform as any}:{})}}),
     db.inventoryMovement.findMany({where:{tenantId,type:{in:['ADJUSTMENT','SALE']}},select:{quantity:true}}),
     db.trackingEvent.groupBy({by:['type'],_count:{_all:true},where:{tenantId,occurredAt:range}}),
     db.expense.findMany({where:{tenantId,AND:[{OR:[...(product?[]:[{kind:'FIXED',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'FIXED',schedule:{in:recurringSchedules}},{kind:'FIXED',isFixed:false,category:{not:'Imposto'},date:{lte:until||new Date()}}]),{kind:'PERCENT',schedule:{in:['FIXED','CUSTOM']},date:range},{kind:'PERCENT',schedule:{in:recurringSchedules}}]},...(platform?[{OR:[{channel:null},{channel:platform as any}]}]:[])]}}),
-    db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}})
+    db.productVariant.findMany({where:{tenantId},select:{sku:true,unitCost:true}}),
+    db.adSpendDaily.findMany({where:{tenantId},select:{platform:true,campaignId:true,adsetId:true,adId:true}})
   ]);
   const paid=paymentMethod?paidRows.filter(order=>paymentMethodMatches(order.paymentMethod,paymentMethod)):paidRows;
   const costBySku=new Map(variants.map(v=>[v.sku,Number(v.unitCost)]));
   const ironAirCosts=variants.filter(v=>/^IRON-AIR-/i.test(v.sku)).map(v=>Number(v.unitCost)).filter(cost=>cost>0);
   const sharedIronAirCost=ironAirCosts.length&&ironAirCosts.every(cost=>cost===ironAirCosts[0])?ironAirCosts[0]:0;
   const itemUnitCost=(item:{sku:string;name:string;unitCost:unknown})=>Number(item.unitCost)>0?Number(item.unitCost):costBySku.get(item.sku)||(/\biron air\b/i.test(item.name||'')?sharedIronAirCost:0);
-  let revenue=0,cogs=0,fees=0,unitCostTotal=0,unitsWithCost=0;
+  const knownCampaignIds=new Set(adEntities.map(row=>row.campaignId).filter(Boolean));
+  const knownAdsetIds=new Set(adEntities.map(row=>row.adsetId).filter((value):value is string=>Boolean(value)));
+  const knownAdIds=new Set(adEntities.map(row=>row.adId).filter((value):value is string=>Boolean(value)));
+  const adPlatformById=new Map<string,string>();
+  for(const row of adEntities)for(const id of [row.campaignId,row.adsetId,row.adId])if(id&&!adPlatformById.has(id))adPlatformById.set(id,row.platform);
+  let revenue=0,cogs=0,fees=0,unitCostTotal=0,unitsWithCost=0,internalMetaRevenue=0,internalMetaCogs=0,internalMetaSales=0,googlePurchaseRevenue=0,googlePurchaseCogs=0,tiktokPurchaseRevenue=0,tiktokPurchaseCogs=0,adSales=0;
   const daily=new Map<string,{date:string;revenue:number;profit:number;salesProfit:number;orders:number}>();
   const channels=new Map<string,{name:string;invested:number;sales:number;revenue:number;cogs:number;fees:number}>();
   for(const o of paid){
@@ -86,6 +92,9 @@ async function calculateDashboard(req: Request, tenantId: string) {
       if(unitCost && unitCost>0){unitCostTotal+=unitCost*item.quantity;unitsWithCost+=item.quantity;}
     }
     revenue+=orderRevenue; cogs+=orderCogs; fees+=orderFees;
+    const attributionId=[o.attribution?.campaignId,o.attribution?.campaign,o.attribution?.adsetId,o.attribution?.adId].find(id=>id&&adPlatformById.has(id))||'';
+    const attributedToAds=Boolean(o.attribution&&(knownCampaignIds.has(o.attribution.campaignId||o.attribution.campaign||'')||knownAdsetIds.has(o.attribution.adsetId||'')||knownAdIds.has(o.attribution.adId||'')));
+    if(attributedToAds){const adPlatform=adPlatformById.get(attributionId)||'';if(/meta|facebook|instagram/i.test(adPlatform)){internalMetaRevenue+=orderRevenue;internalMetaCogs+=orderCogs;internalMetaSales++;}else if(/google/i.test(adPlatform)){googlePurchaseRevenue+=orderRevenue;googlePurchaseCogs+=orderCogs;}else if(/tiktok|tik tok/i.test(adPlatform)){tiktokPurchaseRevenue+=orderRevenue;tiktokPurchaseCogs+=orderCogs;}adSales++;}
     const salesProfit=orderRevenue-orderFees;
     const key=localDay(o.paidAt||o.createdAt);
     const d=daily.get(key)||{date:key,revenue:0,profit:0,salesProfit:0,orders:0};
@@ -138,6 +147,12 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const metaAds=spend.reduce((sum,s)=>/meta|facebook|instagram/i.test(s.platform)?sum+Number(s.spend):sum,0);
   const googleAds=spend.reduce((sum,s)=>/google/i.test(s.platform)?sum+Number(s.spend):sum,0);
   const tiktokAds=spend.reduce((sum,s)=>/tiktok|tik tok/i.test(s.platform)?sum+Number(s.spend):sum,0);
+  // Paid Shopify orders attributed in the ERP are canonical. Meta's raw Purchase
+  // action also includes historical PIX generations, so it must never drive sales.
+  const metaPurchaseRevenueValue=internalMetaRevenue;
+  const metaPurchaseCogs=internalMetaCogs;
+  const adRevenue=metaPurchaseRevenueValue+googlePurchaseRevenue+tiktokPurchaseRevenue;
+  const adCogs=metaPurchaseCogs+googlePurchaseCogs+tiktokPurchaseCogs;
   const available=inventory.reduce((sum,m)=>sum+Number(m.quantity||0),0);
   const trackingTotal=tracking.reduce((sum,t)=>sum+t._count._all,0);
   return {
@@ -155,6 +170,12 @@ async function calculateDashboard(req: Request, tenantId: string) {
     googleAds,
     tiktokAds,
     media,
+    adRevenue,
+    adCogs,
+    adSales,
+    metaPurchaseRevenue:metaPurchaseRevenueValue,
+    googlePurchaseRevenue,
+    tiktokPurchaseRevenue,
     salesProfit,
     grossProfit,
     profit,

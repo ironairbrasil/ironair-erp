@@ -9,6 +9,7 @@ type Dashboard = {
   periodFrom: string; periodTo: string; revenue: number; orders: number; cogs: number;
   fees: number; media: number; expenses: number; salesProfit: number; grossProfit: number;
   profit: number; margin: number; roas: number | null; ticket: number; available?: number; taxes?: number;
+  adRevenue?: number; adCogs?: number; metaPurchaseRevenue?: number; googlePurchaseRevenue?: number; tiktokPurchaseRevenue?: number;
   daily: { date: string; revenue: number; profit: number; orders: number }[];
   channels: { name: string; invested: number; sales: number; revenue: number; cpa: number | null; roas: number | null; salesProfit: number; profit: number }[];
 };
@@ -36,9 +37,11 @@ const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês 
 const shiftMonth = (month: string, offset: number) => { const [year, value] = month.split("-").map(Number); const date = new Date(Date.UTC(year, value - 1 + offset, 1)); return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`; };
 const monthTitle = (month: string) => { const [year, value] = month.split("-").map(Number); const name = new Intl.DateTimeFormat("pt-BR", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, value - 1, 1))); return `${name[0].toUpperCase()}${name.slice(1)} ${year}`; };
 const monthDays = (month: string) => { const [year, value] = month.split("-").map(Number); const blanks = (new Date(Date.UTC(year, value - 1, 1)).getUTCDay() + 6) % 7; const count = new Date(Date.UTC(year, value, 0)).getUTCDate(); return [...Array(blanks).fill(""), ...Array.from({ length: count }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)]; };
-const performanceCardOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "TACOS", "MPA", "ROAS total"];
+const performanceCardOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "Faturamento Meta", "Faturamento Google", "Faturamento TikTok", "Faturamento Ads", "TACOS", "MPA", "ROAS total"];
 const performanceKpis = (data: Dashboard) => {
   const revenue = Number(data.revenue || 0), cogs = Number(data.cogs || 0), media = Number(data.media || 0), fees = Number(data.fees || 0), expenses = Number(data.expenses || 0);
+  const adRevenue = Number(data.adRevenue || 0);
+  const adCogs = Number(data.adCogs || 0);
   const gross = Number(data.grossProfit ?? (revenue - fees - cogs));
   const investment = cogs + fees + media + expenses;
   const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
@@ -52,13 +55,13 @@ const performanceKpis = (data: Dashboard) => {
     { label: "Ticket médio", value: brl(data.ticket || 0), delta: "Receita / pedidos" },
     { label: "Estoque", value: `${data.available || 0} un.`, delta: "Disponíveis" },
     { label: "Impostos", value: brl(data.taxes || 0), delta: "% sobre o faturamento" },
-    { label: "Lucro bruto pós Ads", value: brl(gross - media), delta: "Lucro bruto − anúncios" },
+    { label: "Lucro bruto pós Ads", value: brl(adRevenue - media), delta: "Faturamento Ads − anúncios" },
     { label: "Valor em Ads", value: brl(media), delta: "Total investido em anúncios" },
     { label: "ROI", value: investment > 0 ? String(Number((Math.max(0, (revenue - investment) / investment)).toFixed(2))) : "—", delta: "Retorno sobre o investimento" },
-    { label: "TACOS", value: revenue > 0 ? percent(media / revenue) : "—", delta: "Investimento em anúncios / faturamento" },
-    { label: "MPA", value: revenue > 0 ? percent((gross - media) / revenue) : "—", delta: "Lucro bruto pós Ads / faturamento" },
-    { label: "Lucro bruto", value: brl(gross), delta: "Líq. do Marketplace − produtos" },
-    { label: "ROAS total", value: media > 0 ? `${(revenue / media).toFixed(2)}x` : "—", delta: "Faturamento / investimento em anúncios" },
+    { label: "TACOS", value: adRevenue > 0 ? percent(media / adRevenue) : "—", delta: "Anúncios / faturamento Ads" },
+    { label: "MPA", value: adRevenue > 0 ? percent((adRevenue - media) / adRevenue) : "—", delta: "Faturamento Ads após anúncios / faturamento Ads" },
+    { label: "Lucro bruto", value: brl(revenue - media - cogs), delta: "Faturamento − anúncios − produtos" },
+    { label: "ROAS total", value: media > 0 ? `${(adRevenue / media).toFixed(2)}x` : "—", delta: "Faturamento Ads / anúncios" },
   ];
 };
 
@@ -178,6 +181,10 @@ export default function PerformanceView() {
     { id: "performance-meta-ads", label: "Meta Ads", value: brl(spendFor(/meta/i)), delta: `${metaPurchases ?? 0} compras atribuídas` },
     { id: "performance-google-ads", label: "Google Ads", value: brl(spendFor(/google/i)), delta: "Investimento no período" },
     { id: "performance-tiktok-ads", label: "TikTok Ads", value: brl(spendFor(/tiktok/i)), delta: "Investimento no período" },
+    { id: "performance-meta-revenue", label: "Faturamento Meta", value: brl(data.metaPurchaseRevenue || 0), delta: "Valor de compras atribuído pela Meta" },
+    { id: "performance-google-revenue", label: "Faturamento Google", value: brl(data.googlePurchaseRevenue || 0), delta: "Valor de compras atribuído pelo Google Ads" },
+    { id: "performance-tiktok-revenue", label: "Faturamento TikTok", value: brl(data.tiktokPurchaseRevenue || 0), delta: "Valor de compras atribuído pelo TikTok Ads" },
+    { id: "performance-ads-revenue", label: "Faturamento Ads", value: brl(data.adRevenue || 0), delta: "Meta + Google + TikTok" },
   ] : [];
   const orderedPerformanceCards = data ? [...performanceKpis(data).map((card, index) => ({ ...card, id: `kpi-${index}` })), ...performanceAdCards].sort((a, b) => performanceCardOrder.indexOf(a.label) - performanceCardOrder.indexOf(b.label)) : [];
   const exportDre = async () => {

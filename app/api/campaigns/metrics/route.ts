@@ -18,6 +18,7 @@ const actionValue = (items: Action[] | undefined, names: string[]) => {
 };
 const purchaseActions = ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase', 'onsite_web_purchase'];
 const checkoutActions = ['omni_initiated_checkout', 'initiate_checkout', 'offsite_conversion.fb_pixel_initiate_checkout', 'onsite_web_initiate_checkout'];
+const emptyMetric = (): Metric => ({ reach: 0, frequency: null, linkClicks: 0, landingViews: 0, purchases: 0, purchaseValue: 0, checkouts: 0, checkoutValue: 0 });
 
 export async function GET(req: Request) {
   try {
@@ -70,6 +71,44 @@ export async function GET(req: Request) {
         if (page === 19) throw new Error('Limite de paginação de métricas Meta atingido');
       }
     }));
+    // Reconcile Meta's reported Purchase events with paid Shopify orders. Older
+    // PIX checkouts emitted Purchase when the QR code was generated, so raw Meta
+    // actions can be duplicated and are intentionally not used as sales here.
+    for (const group of Object.values(metrics)) for (const metric of Object.values(group)) {
+      metric.purchases = 0;
+      metric.purchaseValue = 0;
+    }
+    const paidOrders = await db.order.findMany({
+      where: {
+        tenantId,
+        channel: 'SHOPIFY',
+        status: 'PAID',
+        paidAt: { gte: new Date(`${since}T00:00:00.000-03:00`), lte: new Date(`${until}T23:59:59.999-03:00`) },
+        attribution: { isNot: null },
+      },
+      include: { attribution: true },
+    });
+    const addSale = (group: Record<string, Metric>, id: string | null | undefined, value: number) => {
+      if (!id || !/^\d+$/.test(id)) return;
+      const metric = group[id] ||= emptyMetric();
+      metric.purchases += 1;
+      metric.purchaseValue += value;
+    };
+    for (const order of paidOrders) {
+      const attribution = order.attribution;
+      if (!attribution) continue;
+      const campaignId = attribution.campaignId || (/^\d+$/.test(attribution.campaign || '') ? attribution.campaign : null);
+      const adsetId = attribution.adsetId || (/^\d+$/.test(attribution.term || '') ? attribution.term : null);
+      const adId = attribution.adId || (/^\d+$/.test(attribution.content || '') ? attribution.content : null);
+      if (!campaignId && !adsetId && !adId && !/facebook|instagram|meta/i.test(attribution.source || '')) continue;
+      const value = Number(order.grossAmount) - Number(order.discountAmount);
+      const accountMetric = metrics.accounts[account] ||= emptyMetric();
+      accountMetric.purchases += 1;
+      accountMetric.purchaseValue += value;
+      addSale(metrics.campaigns, campaignId, value);
+      addSale(metrics.adsets, adsetId, value);
+      addSale(metrics.ads, adId, value);
+    }
     const data = { metrics, since, until };
     cache.set(cacheKey, { expires: Date.now() + 5 * 60_000, data });
     if (cache.size > 100) for (const [key, value] of cache) if (value.expires < Date.now()) cache.delete(key);

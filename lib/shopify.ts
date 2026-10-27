@@ -133,7 +133,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
     attribution:{
       utm_source:a.utm_source,utm_medium:a.utm_medium,utm_campaign:a.utm_campaign,utm_content:a.utm_content,utm_term:a.utm_term,
       fbclid:a.fbclid,_fbp:a._fbp||a.fbp,_fbc:a._fbc||a.fbc,gclid:a.gclid,
-      campaign_id:a.campaign_id||a.campaignId,adset_id:a.adset_id||a.adsetId,ad_id:a.ad_id||a.adId,
+      campaign_id:a.campaign_id||a.campaignId||(/^\d{8,}$/.test(a.utm_campaign||'')?a.utm_campaign:undefined),adset_id:a.adset_id||a.adsetId||(/^\d{8,}$/.test(a.utm_term||'')?a.utm_term:undefined),ad_id:a.ad_id||a.adId||(/^\d{8,}$/.test(a.utm_content||'')?a.utm_content:undefined),
       sessionId:a.sessionId||a.session_id,visitorId:a.visitorId||a.visitor_id,
       landingPage:o.landing_site||o.customerJourneySummary?.firstVisit?.landingPage,referrer:o.referring_site||o.customerJourneySummary?.firstVisit?.referralInfoHtml,
       firstTouch:a.firstTouch,lastTouch:a.lastTouch, externalReference:a.externalReference||a.external_reference
@@ -145,7 +145,8 @@ export async function processShopifyOrder(o:any, tenantId?:string){
   const scopedTenantId=tenantId||await getTenantId();
   const mapped=mapShopifyOrder(o,scopedTenantId);
   const shopifyMethod=normalizePaymentMethod(mapped.paymentMethod);
-  mapped.paymentMethod=await findAsaasPaymentMethod(scopedTenantId,o)||(shopifyMethod.toLowerCase()==='manual'?null:shopifyMethod||null);
+  const validShopifyMethod=shopifyMethod&&shopifyMethod.toLowerCase()!=='manual'?shopifyMethod:'';
+  mapped.paymentMethod=validShopifyMethod||await findAsaasPaymentMethod(scopedTenantId,{...o,grossAmount:mapped.grossAmount,paidAt:mapped.paidAt,attribution:mapped.attribution})||null;
   return ingestOrder(mapped);
 }
 

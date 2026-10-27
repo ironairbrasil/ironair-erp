@@ -42,7 +42,11 @@ export async function ingestOrder(input:IngestOrder){
    await tx.orderItem.deleteMany({where:{orderId:existing.id}});
    return tx.order.update({where:{id:existing.id},data:{...base,currency:input.currency||existing.currency,items:{create:prepared}}});
  });
- if(input.attribution) await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...mapAttribution(input.attribution)},update:mapAttribution(input.attribution)});
+ if(input.attribution) {
+  const attribution=mapAttribution(input.attribution);
+  await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...attribution},update:attribution});
+  if(input.status==='PAID'&&attribution.sessionId) await db.trackingEvent.upsert({where:{tenantId_eventId:{tenantId,eventId:`purchase:${order.id}`}},create:{tenantId,eventId:`purchase:${order.id}`,type:'PURCHASE',occurredAt:order.paidAt||order.createdAt,orderId:order.id,sessionId:attribution.sessionId,visitorId:attribution.visitorId,url:attribution.landingPage,referrer:attribution.referrer,utmSource:attribution.source,utmMedium:attribution.medium,utmCampaign:attribution.campaign,utmContent:attribution.content,utmTerm:attribution.term,fbclid:attribution.fbclid,fbp:attribution.fbp,fbc:attribution.fbc,gclid:attribution.gclid,campaignId:attribution.campaignId,adsetId:attribution.adsetId,adId:attribution.adId,value:Math.max(0,input.grossAmount-(input.discountAmount||0)),currency:input.currency||'BRL'},update:{orderId:order.id,sessionId:attribution.sessionId,visitorId:attribution.visitorId}});
+ }
  // Inventory is deducted exactly once on the first transition into PAID. Refunds do NOT auto-restock: physical returns require an explicit RETURN movement.
  if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') {
   const changedSkus=new Set<string>();

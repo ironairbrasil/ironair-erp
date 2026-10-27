@@ -26,7 +26,7 @@ export async function GET(req:Request){
     for(const item of grouped.values())byId.set(level==='campaign'?item.campaignId:level==='adset'?item.adsetId||'':item.adId||'',item);
     for(const attr of attrs){
       if(attr.order.status!=='PAID')continue;
-      const id=level==='campaign'?attr.campaignId:level==='adset'?attr.adsetId:attr.adId;
+      const id=level==='campaign'?(attr.campaignId||attr.campaign):level==='adset'?attr.adsetId:attr.adId;
       if(!id)continue;
       const revenue=Number(attr.order.grossAmount)-Number(attr.order.discountAmount)+Number(attr.order.shippingAmount);
       const item=byId.get(id);
