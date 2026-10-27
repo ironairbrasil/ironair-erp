@@ -32,7 +32,7 @@ export async function GET(req: Request){
   const sessionMap = new Map<string, any>();
   for(const event of filteredEvents){
     const key = event.sessionId || event.visitorId || event.eventId;
-    const row = sessionMap.get(key) || { id: key, visitorId: event.visitorId, startedAt: event.occurredAt, lastAt: event.occurredAt, pages: 0, buyClicks: 0, source: event.utmSource || 'Direto', campaign: event.utmCampaign || '—', landingPage: event.url || '—' };
+    const row = sessionMap.get(key) || { id: key, visitorId: event.visitorId, startedAt: event.occurredAt, lastAt: event.occurredAt, pages: 0, buyClicks: 0, source: event.utmSource || 'Direto', campaign: event.utmCampaign || event.utmContent || event.campaignId || '—', landingPage: event.url || '—' };
     if(event.occurredAt < row.startedAt) row.startedAt = event.occurredAt;
     if(event.occurredAt > row.lastAt) row.lastAt = event.occurredAt;
     if(event.type === 'PAGE_VIEW') row.pages++;
@@ -49,8 +49,8 @@ export async function GET(req: Request){
   const visitors = new Set(filteredEvents.map(event => event.visitorId).filter(Boolean)).size;
   const buyClicks = filteredEvents.filter(event => event.type === 'INITIATE_CHECKOUT').length;
   const revenue = filteredOrders.reduce((sum, order) => sum + Number(order.grossAmount) - Number(order.discountAmount), 0);
-  const sources = [...new Set(events.map(event => event.utmSource).filter(Boolean))].sort();
-  return NextResponse.json({ sites, shopify: { connected: shopifyIntegration?.status === 'CONNECTED', shopDomain: shopifyDomain || null }, sources, periodDays: days, metrics: { visits: sessions.length, visitors, pageViews: filteredEvents.filter(event => event.type === 'PAGE_VIEW').length, buyClicks, sales: filteredOrders.length, revenue, clickRate: sessions.length ? buyClicks / sessions.length * 100 : 0, conversionRate: sessions.length ? filteredOrders.length / sessions.length * 100 : 0 }, sessions, sales: filteredOrders.map(order => ({ id: order.id, order: (order.sourceSnapshot as any)?.displayId || order.externalId, customer: order.customer?.name || 'Cliente', value: Number(order.grossAmount) - Number(order.discountAmount), occurredAt: order.paidAt, source: order.attribution?.source || 'Direto', campaign: order.attribution?.campaign || '—', sessionId: order.attribution?.sessionId })) });
+  const sources = [...new Set([...events.map(event => event.utmSource), ...orders.map(order => order.attribution?.source)].filter((value): value is string => Boolean(value)))].sort();
+  return NextResponse.json({ sites, shopify: { connected: shopifyIntegration?.status === 'CONNECTED', shopDomain: shopifyDomain || null }, sources, periodDays: days, metrics: { visits: sessions.length, visitors, pageViews: filteredEvents.filter(event => event.type === 'PAGE_VIEW').length, buyClicks, sales: filteredOrders.length, revenue, clickRate: sessions.length ? buyClicks / sessions.length * 100 : 0, conversionRate: sessions.length ? filteredOrders.length / sessions.length * 100 : 0 }, sessions, sales: filteredOrders.map(order => ({ id: order.id, order: (order.sourceSnapshot as any)?.displayId || order.externalId, customer: order.customer?.name || 'Cliente', value: Number(order.grossAmount) - Number(order.discountAmount), occurredAt: order.paidAt, source: order.attribution?.source || 'Direto', campaign: order.attribution?.campaign || order.attribution?.content || order.attribution?.campaignId || '—', sessionId: order.attribution?.sessionId })) });
 }
 
 export async function POST(req: Request){
