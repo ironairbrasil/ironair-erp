@@ -1,0 +1,64 @@
+import { NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { getTenantId } from '@/lib/tenant';
+
+function domainOf(value?: string | null){ try { return new URL(value || '').hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } }
+function startDate(days: number){ const date = new Date(); date.setHours(0,0,0,0); date.setDate(date.getDate() - Math.max(0, days - 1)); return date; }
+
+export async function GET(req: Request){
+  const tenantId = await getTenantId(req);
+  const url = new URL(req.url);
+  const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 3650);
+  const site = String(url.searchParams.get('site') || '').replace(/^www\./, '').toLowerCase();
+  const source = String(url.searchParams.get('source') || '').toLowerCase();
+  const from = startDate(days);
+  const [trackingIntegration, shopifyIntegration, events, orders] = await Promise.all([
+    db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Tracking' } } }),
+    db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Shopify' } } }),
+    db.trackingEvent.findMany({ where: { tenantId, occurredAt: { gte: from } }, orderBy: { occurredAt: 'desc' }, take: 5000 }),
+    db.order.findMany({ where: { tenantId, channel: 'SHOPIFY', status: 'PAID', paidAt: { gte: from } }, include: { attribution: true, customer: { select: { name: true } } }, orderBy: { paidAt: 'desc' } })
+  ]);
+  const savedSites = Array.isArray((trackingIntegration?.config as any)?.sites) ? (trackingIntegration?.config as any).sites : [];
+  const inferredDomains = [...new Set(events.map(event => domainOf(event.url)).filter(Boolean))];
+  const shopifyDomain = String(shopifyIntegration?.shopDomain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+  const shopifySite = shopifyDomain ? [{ id: `shopify:${shopifyDomain}`, name: 'Loja Shopify', domain: shopifyDomain, source: 'Shopify' }] : [];
+  const configuredSites = [...shopifySite, ...savedSites.filter((item: any) => item.domain !== shopifyDomain)];
+  const sites = [...configuredSites, ...inferredDomains.filter(domain => !configuredSites.some((item: any) => item.domain === domain)).map(domain => ({ id: domain, name: domain, domain }))];
+  const filteredEvents = events.filter(event => (!site || domainOf(event.url) === site) && (!source || String(event.utmSource || '').toLowerCase() === source));
+  const sessionMap = new Map<string, any>();
+  for(const event of filteredEvents){
+    const key = event.sessionId || event.visitorId || event.eventId;
+    const row = sessionMap.get(key) || { id: key, visitorId: event.visitorId, startedAt: event.occurredAt, lastAt: event.occurredAt, pages: 0, buyClicks: 0, source: event.utmSource || 'Direto', campaign: event.utmCampaign || '—', landingPage: event.url || '—' };
+    if(event.occurredAt < row.startedAt) row.startedAt = event.occurredAt;
+    if(event.occurredAt > row.lastAt) row.lastAt = event.occurredAt;
+    if(event.type === 'PAGE_VIEW') row.pages++;
+    if(event.type === 'INITIATE_CHECKOUT') row.buyClicks++;
+    sessionMap.set(key, row);
+  }
+  const filteredOrders = orders.filter(order => {
+    const landingDomain = domainOf(order.attribution?.landingPage);
+    return (!site || !landingDomain || landingDomain === site) && (!source || String(order.attribution?.source || '').toLowerCase() === source);
+  });
+  const sessions = [...sessionMap.values()].sort((a,b) => +b.lastAt - +a.lastAt).slice(0, 200);
+  const visitors = new Set(filteredEvents.map(event => event.visitorId).filter(Boolean)).size;
+  const buyClicks = filteredEvents.filter(event => event.type === 'INITIATE_CHECKOUT').length;
+  const revenue = filteredOrders.reduce((sum, order) => sum + Number(order.grossAmount) - Number(order.discountAmount), 0);
+  const sources = [...new Set(events.map(event => event.utmSource).filter(Boolean))].sort();
+  return NextResponse.json({ sites, shopify: { connected: shopifyIntegration?.status === 'CONNECTED', shopDomain: shopifyDomain || null }, sources, periodDays: days, metrics: { visits: sessions.length, visitors, pageViews: filteredEvents.filter(event => event.type === 'PAGE_VIEW').length, buyClicks, sales: filteredOrders.length, revenue, clickRate: sessions.length ? buyClicks / sessions.length * 100 : 0, conversionRate: sessions.length ? filteredOrders.length / sessions.length * 100 : 0 }, sessions, sales: filteredOrders.map(order => ({ id: order.id, order: (order.sourceSnapshot as any)?.displayId || order.externalId, customer: order.customer?.name || 'Cliente', value: Number(order.grossAmount) - Number(order.discountAmount), occurredAt: order.paidAt, source: order.attribution?.source || 'Direto', campaign: order.attribution?.campaign || '—', sessionId: order.attribution?.sessionId })) });
+}
+
+export async function POST(req: Request){
+  try{
+    const tenantId = await getTenantId(req);
+    const body = await req.json();
+    const raw = String(body.domain || '').trim();
+    const domain = domainOf(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if(!domain) throw new Error('Domínio inválido');
+    const current = await db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: 'Tracking' } } });
+    const currentSites = Array.isArray((current?.config as any)?.sites) ? (current?.config as any).sites : [];
+    const site = { id: domain, domain, name: String(body.name || domain).trim() || domain };
+    const sites = [...currentSites.filter((item: any) => item.domain !== domain), site];
+    await db.integration.upsert({ where: { tenantId_provider: { tenantId, provider: 'Tracking' } }, create: { tenantId, provider: 'Tracking', status: 'CONNECTED', connectedAt: new Date(), config: { sites } }, update: { status: 'CONNECTED', config: { sites } } });
+    return NextResponse.json({ ok: true, site });
+  }catch(error: any){ return NextResponse.json({ ok: false, error: error?.message || 'tracking_site_error' }, { status: 400 }); }
+}
