@@ -8,7 +8,7 @@ const publicApi = [
 
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  if (path.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+  if (path.startsWith('/api/') && path !== '/api/tracking' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     const origin = req.headers.get('origin');
     if (origin && origin !== req.nextUrl.origin) return NextResponse.json({ ok: false, error: 'invalid_origin' }, { status: 403 });
   }
