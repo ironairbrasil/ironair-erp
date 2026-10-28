@@ -56,6 +56,16 @@ enum IntegrationMode {
   DEV_MANUAL
 }
 
+enum BillingDocumentType {
+  SHIPPING_LABEL
+  INVOICE
+  INVOICE_PDF
+  INVOICE_XML
+  REFUNDED_LABEL
+  REFUNDED_DANFE
+  REFUNDED_XML
+}
+
 enum MembershipRole {
   OWNER
   ADMIN
@@ -91,6 +101,7 @@ model Tenant {
   dashboardLayout     DashboardLayout?
   pushSubscriptions   PushSubscription[]
   inventoryFolders    InventoryFolder[]
+  billingDocuments    BillingDocument[]
 }
 
 model PushSubscription {
@@ -339,10 +350,30 @@ model Order {
   attribution     Attribution?
   movements       InventoryMovement[]
   trackingEvents  TrackingEvent[]
+  billingDocuments BillingDocument[]
 
   @@unique([tenantId, channel, externalId])
   @@index([tenantId, status, paidAt])
   @@index([tenantId, channel, createdAt])
+}
+
+model BillingDocument {
+  id        String              @id @default(cuid())
+  tenantId  String
+  orderId   String
+  type      BillingDocumentType
+  fileName  String
+  mimeType  String
+  size      Int
+  data      Bytes
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, orderId, type])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, type])
 }
 
 model OrderItem {

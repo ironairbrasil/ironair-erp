@@ -1,27 +1,43 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, MousePointerClick, PackageCheck, PlugZap, Settings, ShoppingCart, Tag, Users, WalletCards, Search, Download, Plus, RefreshCw, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "lucide-react";
+import { Activity, BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, MousePointerClick, PackageCheck, PlugZap, Radar, Settings, ShoppingCart, Tag, TrendingUp, Users, Video, WalletCards, Search, Download, Plus, RefreshCw, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ReceiptText } from "lucide-react";
 import PerformanceView from "./performance-view";
 import SalesChart, { ChartStyleToggle, type SalesChartMode } from "./sales-chart";
 import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 import { normalizePaymentMethod } from "@/lib/payment-method";
-const menu = [
-  ["Visão Geral", LayoutDashboard],
-  ["Performance", BarChart3],
-  ["Vendas", ShoppingCart],
-  ["Devoluções", RefreshCw],
-  ["Clientes", Users],
-  ["Produtos", PackageCheck],
-  ["Estoque", Boxes],
-  ["Despesas", WalletCards],
-  ["Trackeamento", Activity],
-  ["Campanhas", Megaphone],
-  ["Criativos", Tag],
-  ["Financeiro", CircleDollarSign],
-  ["Integrações", PlugZap],
-  ["Configurações", Settings],
-] as const;
+function InvoiceNavIcon({ size = 18, className }: { size?: number; className?: string }) {
+  const iconSize = Math.max(size, 22);
+  return <svg className={`${className || ""} invoiceNavIcon`} width={iconSize} height={iconSize} viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 1.75h7.1L16 6.65v11.6H4z" stroke="currentColor" strokeWidth="1.45" strokeLinejoin="round"/><path d="M11 1.75v5h5" stroke="currentColor" strokeWidth="1.45" strokeLinejoin="round"/><text x="5.6" y="14.6" fill="currentColor" fontSize="6.6" fontWeight="800" fontFamily="Arial, sans-serif">NF</text></svg>;
+}
+type MenuEntry = { label: string; icon: typeof LayoutDashboard; view?: string; children?: Array<{ label: string; icon: typeof LayoutDashboard; view: string }> };
+const menu: MenuEntry[] = [
+  { label: "Visão Geral", icon: LayoutDashboard, view: "Visão Geral" },
+  { label: "Performance", icon: BarChart3, view: "Performance" },
+  { label: "Vendas", icon: ShoppingCart, children: [
+    { label: "Pedidos", icon: TrendingUp, view: "Pedidos" },
+    { label: "Reembolsos", icon: RefreshCw, view: "Reembolsos" },
+  ] },
+  { label: "Clientes", icon: Users, view: "Clientes" },
+  { label: "Estoque", icon: Boxes, children: [
+    { label: "Produtos", icon: PackageCheck, view: "Produtos" },
+    { label: "Controle de estoque", icon: Boxes, view: "Estoque" },
+  ] },
+  { label: "Faturamento", icon: ReceiptText, children: [
+    { label: "Nota Fiscal Eletrônica (NF-e)", icon: InvoiceNavIcon as typeof LayoutDashboard, view: "Nota Fiscal Eletrônica (NF-e)" },
+    { label: "Etiquetas", icon: Tag, view: "Etiquetas" },
+    { label: "Despesas", icon: WalletCards, view: "Despesas" },
+  ] },
+  { label: "Trackeamento", icon: Radar, children: [
+    { label: "Eventos", icon: Activity, view: "Eventos" },
+    { label: "Campanhas", icon: Megaphone, view: "Campanhas" },
+    { label: "Criativos", icon: Video, view: "Criativos" },
+  ] },
+  { label: "Financeiro", icon: CircleDollarSign, view: "Financeiro" },
+  { label: "Integrações", icon: PlugZap, view: "Integrações" },
+  { label: "Configurações", icon: Settings, view: "Configurações" },
+];
+const menuViews = menu.flatMap((item) => item.children?.map((child) => child.view) || (item.view ? [item.view] : []));
 const money = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
 const isNegativeDisplay = (value: string | number) => typeof value === "number" ? value < 0 : /^\s*[-−]/.test(value);
 const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
@@ -149,8 +165,9 @@ export default function Home() {
   const [campaignNavigation, setCampaignNavigation] = useState<{ level: "Campanhas" | "Conjuntos" | "Anúncios"; date: string; query: string; platform: string; nonce: number } | null>(null);
   const [viewStorageReady, setViewStorageReady] = useState(false);
   useEffect(() => {
-    const savedView = sessionStorage.getItem(activeViewStorageKey);
-    if (savedView && menu.some(([label]) => label === savedView)) setView(savedView);
+    const storedView = sessionStorage.getItem(activeViewStorageKey);
+    const savedView = storedView === "Devoluções" ? "Reembolsos" : storedView === "Vendas" ? "Pedidos" : storedView === "Faturamento" ? "Nota Fiscal Eletrônica (NF-e)" : storedView === "Trackeamento" ? "Eventos" : storedView;
+    if (savedView && menuViews.includes(savedView)) setView(savedView);
     setViewStorageReady(true);
   }, []);
   useEffect(() => {
@@ -158,6 +175,7 @@ export default function Home() {
     sessionStorage.setItem(activeViewStorageKey, view);
   }, [view, viewStorageReady]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [openNavGroups, setOpenNavGroups] = useState<Set<string>>(() => new Set(["Vendas", "Estoque", "Faturamento", "Trackeamento"]));
   const [period, setPeriod] = useState("Hoje");
   const [platform, setPlatform] = useState("");
   const [product, setProduct] = useState("");
@@ -493,16 +511,18 @@ export default function Home() {
     const byView: Record<string, string[]> = {
       "Visão Geral": ["orders", "inventory", "products", "integrations"],
       "Performance": ["campaigns"],
-      "Vendas": ["orders", "inventory", "products", "customers", "integrations"],
-      "Devoluções": ["returns", "orders"],
+      "Pedidos": ["orders", "inventory", "products", "customers", "integrations"],
+      "Reembolsos": ["returns", "orders"],
       "Clientes": ["customers"],
       "Produtos": ["products", "inventory", "orders"],
       "Estoque": ["inventory", "orders", "products", "integrations"],
       "Despesas": ["expenses"],
+      "Nota Fiscal Eletrônica (NF-e)": [],
+      "Etiquetas": [],
       "Campanhas": [],
       "Criativos": ["campaigns"],
       "Financeiro": ["expenses"],
-      "Trackeamento": [],
+      "Eventos": [],
       "Integrações": [],
       "Configurações": [],
     };
@@ -579,7 +599,7 @@ export default function Home() {
       setReturnRows(Array.isArray(rows) ? rows : []);
       if (manual) {
         const failures = (result.results || []).filter((item: any) => !item.ok);
-        notify(failures.length ? `Devoluções atualizadas parcialmente: ${failures.map((item: any) => `${item.provider} (${item.error})`).join(' | ')}` : 'Devoluções atualizadas ao vivo');
+        notify(failures.length ? `Reembolsos atualizados parcialmente: ${failures.map((item: any) => `${item.provider} (${item.error})`).join(' | ')}` : 'Reembolsos atualizados ao vivo');
       }
     } catch (error: any) {
       if (manual) notify(error?.message || 'Não foi possível atualizar as devoluções');
@@ -642,7 +662,7 @@ export default function Home() {
     loadData(false, "view");
   }, [view]);
   useEffect(() => {
-    if (view !== "Vendas" && view !== "Devoluções") return;
+    if (view !== "Pedidos" && view !== "Reembolsos") return;
     const refreshVisible = () => { if (document.visibilityState === "visible") loadData(false, "view"); };
     window.addEventListener("focus", refreshVisible);
     document.addEventListener("visibilitychange", refreshVisible);
@@ -652,7 +672,7 @@ export default function Home() {
     };
   }, [view]);
   useEffect(() => {
-    if (view !== 'Devoluções') return;
+    if (view !== 'Reembolsos') return;
     void refreshReturns(false);
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshReturns(false);
@@ -729,12 +749,16 @@ export default function Home() {
           <button className="mobileMenuClose" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button>
         </div>
         <nav>
-          {menu.map(([label, Icon]) => (
-            <button onClick={() => { setView(label); setMobileMenuOpen(false); }} className={view === label ? "active" : ""} key={label}>
-              <Icon size={18} />
-              <span>{label}</span>
-            </button>
-          ))}
+          {menu.map((item) => {
+            const Icon = item.icon;
+            if (item.children?.length) return <div className="navGroup" key={item.label}>
+              <button type="button" className="navGroupLabel" aria-expanded={openNavGroups.has(item.label)} onClick={() => setOpenNavGroups((current) => { const next = new Set(current); next.has(item.label) ? next.delete(item.label) : next.add(item.label); return next; })}><Icon size={18} /><span>{item.label}</span><ChevronDown className={`navGroupArrow ${openNavGroups.has(item.label) ? "open" : ""}`} size={15} /></button>
+              {openNavGroups.has(item.label) && item.children.map((child) => { const ChildIcon = child.icon; return <button onClick={() => { setView(child.view); setMobileMenuOpen(false); }} className={`navSubItem ${view === child.view ? "active" : ""}`} key={child.view}><ChildIcon size={15} /><span>{child.label}</span></button>; })}
+            </div>;
+            return <button onClick={() => { if (item.view) setView(item.view); setMobileMenuOpen(false); }} className={view === item.view ? "active" : ""} key={item.label}>
+              <Icon size={18} /><span>{item.label}</span>
+            </button>;
+          })}
         </nav>
         <div className="accountCard">
           <div className="accountCardHeader">
@@ -847,7 +871,7 @@ export default function Home() {
             </div>}
           </>
         )}
-        {view === "Vendas" && (
+        {view === "Pedidos" && (
           <Sales
             q={q}
             setQ={setQ}
@@ -862,9 +886,10 @@ export default function Home() {
               )
             }
             onExport={(rows: any[], format: "csv" | "xml") => exportFile("vendas", rows, format)}
+            notify={notify}
           />
         )}{" "}
-        {view === "Devoluções" && <Returns rows={returnRows} syncing={returnSyncing} onSync={() => refreshReturns(true)} />}{" "}
+        {view === "Reembolsos" && <Returns rows={returnRows} syncing={returnSyncing} onSync={() => refreshReturns(true)} />}{" "}
         {view === "Clientes" && (
           <Customers
             rows={customers}
@@ -894,9 +919,11 @@ export default function Home() {
           </>
         )}{" "}
         {view === "Despesas" && <Expenses rows={expenseRows} data={dashboard} onNew={() => open("expense")} onEdit={(expense: any) => open("expense", expense)} onDelete={(expense: any) => remove(`/api/expenses?id=${encodeURIComponent(expense.id)}`)} onDeleteMany={(ids: string[]) => removeMany("/api/expenses", ids, "despesas")} />}
+        {view === "Nota Fiscal Eletrônica (NF-e)" && <BillingDocuments key="invoices" mode="invoices" notify={notify} />}
+        {view === "Etiquetas" && <BillingDocuments key="labels" mode="labels" notify={notify} />}
         {view === "Produtos" && <Products products={catalogRows} orders={orderRows} platforms={[...connectedProviders].filter((provider) => ["Shopify", "Mercado Livre", "Amazon", "Shopee"].includes(provider))} onImported={() => loadData(false, "view")} onNew={() => open("product")} onEdit={(p: any) => open("product", p)} onDelete={(p: any) => remove(`/api/products?sku=${encodeURIComponent(p.sku)}`)} onDeleteMany={(skus: string[]) => removeMany("/api/products", skus, "produtos", "skus")} />} {view === "Campanhas" && <Campaigns manager campaigns={campaigns} adsets={adsets} ads={ads} navigationTarget={campaignNavigation} onNavigationConsumed={() => setCampaignNavigation(null)} onNew={() => open("campaign")} onDelete={(c: any) => remove(`/api/campaigns?campaignId=${encodeURIComponent(c.campaignId)}&platform=${encodeURIComponent(c.platform)}`)} />}{" "}
         {view === "Performance" && <PerformanceView />}{" "}
-        {view === "Trackeamento" && <TrackingView notify={notify} onOpenCampaign={(target) => { setCampaignNavigation({ ...target, nonce: Date.now() }); setView("Campanhas"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}{" "}
+        {view === "Eventos" && <TrackingView notify={notify} onOpenCampaign={(target) => { setCampaignNavigation({ ...target, nonce: Date.now() }); setView("Campanhas"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}{" "}
         {view === "Financeiro" && <Finance />} {view === "Integrações" && <Integrations refreshKey={integrationsRefreshKey} onNew={() => open("integration")} onOpen={(i: Integration) => open("integrationDetail", i)} />} {view === "Criativos" && <Creatives rows={ads} />} {view === "Configurações" && <SettingsView onEdit={() => open("settings")} />}
       </section>
       {dashboardCardCatalogOpen && <div className="modalBack dashboardCardCatalogBack" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDashboardCardCatalogOpen(false); }}><section className="modal modalWide dashboardCardCatalogModal" role="dialog" aria-modal="true" aria-labelledby="dashboard-card-catalog-title"><header className="modalHead"><div><h2 id="dashboard-card-catalog-title">Todos os cards</h2><p>Prévia dos cards do Dashboard Geral e da tela Performance.</p></div><button type="button" className="close" aria-label="Fechar" onClick={() => setDashboardCardCatalogOpen(false)}><X size={19} /></button></header><div className="modalBody"><div className="dashboardCardCatalogGrid">{dashboardCardCatalog.map((card) => { const added = dashboardLayout.includes(card.id); return <article className="dashboardCatalogCard" key={card.id}><span className="dashboardCatalogKind">{card.kind}</span><DashboardCatalogPreview card={card} hidden={dashboardHidden} /><button type="button" className="dashboardCatalogAction" disabled={added} onClick={() => { setDashboardLayout((current) => current.includes(card.id) ? current : [...current, card.id]); setDashboardCardCatalogOpen(false); }}>{added ? <><CheckCircle2 size={14} /> Adicionado</> : <><Plus size={14} /> Adicionar</>}</button></article>; })}</div></div><footer className="modalFoot"><span className="dashboardCatalogCount">{dashboardCardCatalog.length} cards disponíveis</span><button type="button" className="ghost" onClick={() => setDashboardCardCatalogOpen(false)}>Fechar</button></footer></section></div>}
@@ -1265,6 +1292,8 @@ function dashboardKpis(d: any) {
   const adCogs = Number(d?.adCogs || 0);
   const cogs = Number(d?.cogs || 0);
   const media = Number(d?.media || 0);
+  const marketplaceNet = Number(d?.salesProfit ?? (revenue - Number(d?.fees || 0)));
+  const grossProfitAfterAds = marketplaceNet - media - cogs;
   const investment = cogs + Number(d?.fees || 0) + media + Number(d?.expenses || 0);
   const ratio = (value: number) => String(Number(value.toFixed(2)));
   const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
@@ -1281,12 +1310,12 @@ function dashboardKpis(d: any) {
     },
     {
       label: "Líq. do Marketplace",
-      value: money(d?.salesProfit ?? (revenue - Number(d?.fees || 0))),
+      value: money(marketplaceNet),
       delta: "Faturamento − taxas e frete",
     },
     {
       label: "Lucro líquido",
-      value: money((d?.grossProfit ?? (revenue - Number(d?.fees || 0) - cogs)) - Number(d?.expenses || 0)),
+      value: money(d?.profit ?? (grossProfitAfterAds - Number(d?.expenses || 0))),
       delta: "Lucro bruto − despesas",
     },
     {
@@ -1341,8 +1370,8 @@ function dashboardKpis(d: any) {
     },
     {
       label: "Lucro bruto",
-      value: money(revenue - media - cogs),
-      delta: "Faturamento − anúncios − produtos",
+      value: money(grossProfitAfterAds),
+      delta: "Líq. do marketplace − anúncios − produtos",
     },
     {
       label: "ROAS total",
@@ -2100,7 +2129,7 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
     </div>
   );
 }
-function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport }: any) {
+function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport, notify }: any) {
   const [status, setStatus] = useState("PAID");
   const [source, setSource] = useState("Todas");
   const [product, setProduct] = useState("");
@@ -2119,6 +2148,51 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   const [selecting, setSelecting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
+  const pendingDocumentRef = useRef<{ sale: any; type: "SHIPPING_LABEL" | "REFUNDED_LABEL" | "INVOICE_PDF" | "INVOICE_XML" | "REFUNDED_DANFE" | "REFUNDED_XML" } | null>(null);
+  const [billingDocuments, setBillingDocuments] = useState<any[]>([]);
+  const [uploadingDocument, setUploadingDocument] = useState("");
+  const [invoiceMenuSale, setInvoiceMenuSale] = useState("");
+  const loadBillingDocuments = async () => {
+    try {
+      const data = await apiJson("/api/billing-documents");
+      setBillingDocuments(data.documents || []);
+    } catch (error: any) {
+      notify?.(error.message || "Não foi possível carregar os documentos");
+    }
+  };
+  useEffect(() => { loadBillingDocuments(); }, []);
+  const documentMap = useMemo(() => new Map(billingDocuments.map((document: any) => [`${document.orderId}:${document.type}`, document])), [billingDocuments]);
+  const chooseDocument = (sale: any, type: "SHIPPING_LABEL" | "REFUNDED_LABEL" | "INVOICE_PDF" | "INVOICE_XML" | "REFUNDED_DANFE" | "REFUNDED_XML") => {
+    pendingDocumentRef.current = { sale, type };
+    if (documentInputRef.current) {
+      documentInputRef.current.value = "";
+      documentInputRef.current.accept = type === "INVOICE_XML" || type === "REFUNDED_XML" ? ".xml,application/xml,text/xml" : ".pdf,application/pdf";
+      documentInputRef.current.click();
+    }
+  };
+  const uploadDocument = async (file?: File) => {
+    const pending = pendingDocumentRef.current;
+    if (!pending || !file) return;
+    const uploadKey = `${keyOf(pending.sale)}:${pending.type}`;
+    setUploadingDocument(uploadKey);
+    try {
+      const form = new FormData();
+      form.set("orderId", keyOf(pending.sale));
+      form.set("type", pending.type);
+      form.set("file", file);
+      const response = await fetch("/api/billing-documents", { method: "POST", body: form });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) throw new Error(result.error || "Falha no upload");
+      await loadBillingDocuments();
+      notify?.(`${pending.type === "SHIPPING_LABEL" ? "Etiqueta" : pending.type === "REFUNDED_LABEL" ? "Etiqueta Refunded" : pending.type === "REFUNDED_XML" ? "XML de devolução" : pending.type === "REFUNDED_DANFE" ? "DANFE de devolução" : pending.type === "INVOICE_XML" ? "XML da nota fiscal" : "DANFE PDF"} adicionado ao pedido ${pending.sale.id}`);
+    } catch (error: any) {
+      notify?.(error.message || "Não foi possível enviar o documento");
+    } finally {
+      setUploadingDocument("");
+      pendingDocumentRef.current = null;
+    }
+  };
   useEffect(() => {
     if (!salesPeriodOpen && !exportOpen) return;
     const dismiss = (event: PointerEvent) => {
@@ -2203,6 +2277,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
   };
   return (
     <div className={`salesPage ${selecting ? "mobileSelectionActive" : ""}`}>
+      <input ref={documentInputRef} className="billingFileInput" type="file" onChange={(event) => uploadDocument(event.target.files?.[0])} />
       <div className="sectionHead salesPageHeader">
         <div className="rowActions">
           <button className="ghost clickable salesDeleteButton" disabled={!selected.size} onClick={() => setPendingDelete({ kind: "many", sales: [...selectedRows] })}>
@@ -2318,6 +2393,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
               <th>Taxa ML Full</th>
               <th>Lucro vendas</th>
               <th>Status</th>
+              <th className="salesDocumentsHead">Documentos</th>
               <th></th>
             </tr>
           </thead>
@@ -2347,6 +2423,33 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
                 <td className={Number(s.profit || 0) < 0 || s.status === "CANCELLED" ? "negative" : s.status === "REFUNDED" ? "refundedProfit" : "positive"}>{money(s.profit || 0)}</td>
                 <td>
                   <span className={`status ${statusClass(s.status)}`}>{s.status}</span>
+                </td>
+                <td onClick={(event) => event.stopPropagation()}>
+                  <div className="salesDocumentActions">
+                    {(() => {
+                      const labelDocument = documentMap.get(`${keyOf(s)}:SHIPPING_LABEL`) || documentMap.get(`${keyOf(s)}:REFUNDED_LABEL`);
+                      const busy = uploadingDocument === `${keyOf(s)}:SHIPPING_LABEL`;
+                      return labelDocument ? <a className="salesDocumentButton added" href={`/api/billing-documents/${labelDocument.id}`} title="Baixar etiqueta" aria-label="Baixar etiqueta"><BillingDocumentIcon type="SHIPPING_LABEL" /></a> : <button type="button" className="salesDocumentButton" disabled={busy} onClick={() => chooseDocument(s, "SHIPPING_LABEL")} title="Adicionar etiqueta" aria-label="Adicionar etiqueta">{busy ? <RefreshCw className="spin" size={18} /> : <span className="salesDocumentGlyph"><BillingDocumentIcon type="SHIPPING_LABEL" /><Plus size={9} /></span>}</button>;
+                    })()}
+                    {(() => {
+                      const legacy = documentMap.get(`${keyOf(s)}:INVOICE`);
+                      const pdfDocument = documentMap.get(`${keyOf(s)}:INVOICE_PDF`) || (legacy?.mimeType === "application/pdf" ? legacy : null);
+                      const xmlDocument = documentMap.get(`${keyOf(s)}:INVOICE_XML`) || (legacy?.mimeType?.includes("xml") ? legacy : null);
+                      const refundedDanfe = documentMap.get(`${keyOf(s)}:REFUNDED_DANFE`);
+                      const refundedXml = documentMap.get(`${keyOf(s)}:REFUNDED_XML`);
+                      const menuOpen = invoiceMenuSale === keyOf(s);
+                      const complete = Boolean(pdfDocument && xmlDocument);
+                      return <div className="invoiceDocumentMenu">
+                        <button type="button" className={`salesDocumentButton ${pdfDocument || xmlDocument ? "added" : ""}`} onClick={() => setInvoiceMenuSale(menuOpen ? "" : keyOf(s))} title="DANFE PDF e XML" aria-label="Abrir arquivos da nota fiscal" aria-expanded={menuOpen}>{complete ? <BillingDocumentIcon type="INVOICE" /> : <span className="salesDocumentGlyph"><BillingDocumentIcon type="INVOICE" /><Plus size={9} /></span>}</button>
+                        {menuOpen && <div className="invoiceDocumentOptions">
+                          {pdfDocument ? <a href={`/api/billing-documents/${pdfDocument.id}`} title="Baixar DANFE"><Download size={14} /><b>DANFE</b></a> : <button type="button" title="Adicionar DANFE" disabled={uploadingDocument === `${keyOf(s)}:INVOICE_PDF`} onClick={() => { setInvoiceMenuSale(""); chooseDocument(s, "INVOICE_PDF"); }}><Upload size={14} /><b>DANFE</b></button>}
+                          {xmlDocument ? <a href={`/api/billing-documents/${xmlDocument.id}`} title="Baixar XML"><Download size={14} /><b>XML</b></a> : <button type="button" title="Adicionar XML" disabled={uploadingDocument === `${keyOf(s)}:INVOICE_XML`} onClick={() => { setInvoiceMenuSale(""); chooseDocument(s, "INVOICE_XML"); }}><Upload size={14} /><b>XML</b></button>}
+                          {s.status === "REFUNDED" && (refundedDanfe ? <a href={`/api/billing-documents/${refundedDanfe.id}`} title="Baixar DANFE de devolução"><Download size={14} /><b>DANFE DEV.</b></a> : <button type="button" title="Adicionar DANFE de devolução" disabled={uploadingDocument === `${keyOf(s)}:REFUNDED_DANFE`} onClick={() => { setInvoiceMenuSale(""); chooseDocument(s, "REFUNDED_DANFE"); }}><Upload size={14} /><b>DANFE DEV.</b></button>)}
+                          {s.status === "REFUNDED" && (refundedXml ? <a href={`/api/billing-documents/${refundedXml.id}`} title="Baixar XML de devolução"><Download size={14} /><b>XML DEV.</b></a> : <button type="button" title="Adicionar XML de devolução" disabled={uploadingDocument === `${keyOf(s)}:REFUNDED_XML`} onClick={() => { setInvoiceMenuSale(""); chooseDocument(s, "REFUNDED_XML"); }}><Upload size={14} /><b>XML DEV.</b></button>)}
+                        </div>}
+                      </div>;
+                    })()}
+                  </div>
                 </td>
                 <td>
                   <div className="rowActions">
@@ -2409,6 +2512,132 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport 
       </div>}
     </div>
   );
+}
+function BillingDocumentIcon({ type }: { type: "SHIPPING_LABEL" | "REFUNDED_LABEL" | "INVOICE" | "INVOICE_PDF" | "INVOICE_XML" | "REFUNDED_DANFE" | "REFUNDED_XML" }) {
+  if (type === "SHIPPING_LABEL" || type === "REFUNDED_LABEL") return <Tag className="billingDocumentTypeIcon" size={19} aria-hidden="true" />;
+  return <svg className="billingDocumentTypeIcon billingInvoiceIcon" width="19" height="19" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 1.75h7.1L16 6.65v11.6H4z" stroke="currentColor" strokeWidth="1.45" strokeLinejoin="round"/><path d="M11 1.75v5h5" stroke="currentColor" strokeWidth="1.45" strokeLinejoin="round"/><text x="5.6" y="14.6" fill="currentColor" fontSize="6.6" fontWeight="800" fontFamily="Arial, sans-serif">NF</text></svg>;
+}
+function BillingDocuments({ notify, mode }: { notify?: (message: string) => void; mode: "invoices" | "labels" }) {
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState("ALL");
+  const [channel, setChannel] = useState("");
+  const [period, setPeriod] = useState("Tempo todo");
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(todayISO().slice(0, 7));
+  const [draftRange, setDraftRange] = useState({ from: "", to: "" });
+  const [selectingEnd, setSelectingEnd] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  const pageSize = 25;
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    apiJson("/api/billing-documents")
+      .then((data) => { if (active) setDocuments(data.documents || []); })
+      .catch((error) => { if (active) notify?.(error.message || "Não foi possível carregar o faturamento"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+  const scopedDocuments = useMemo(() => documents.filter((document) => mode === "labels" ? document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" : document.type !== "SHIPPING_LABEL" && document.type !== "REFUNDED_LABEL"), [documents, mode]);
+  const channels = useMemo(() => [...new Set<string>(scopedDocuments.map((document) => String(document.order?.channel || "")).filter(Boolean))].sort(), [scopedDocuments]);
+  const selectedDates = period === "Tempo todo" ? null : periodRange(period, { from, to });
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    return scopedDocuments.filter((document) => {
+      const matchesType = type === "ALL" || document.type === type || (document.type === "INVOICE" && type === "INVOICE_PDF" && document.mimeType === "application/pdf") || (document.type === "INVOICE" && type === "INVOICE_XML" && document.mimeType?.includes("xml"));
+      if (!matchesType) return false;
+      if (channel && document.order?.channel !== channel) return false;
+      const documentDay = dateKey(document.updatedAt);
+      if (selectedDates && (documentDay < selectedDates.from || documentDay > selectedDates.to)) return false;
+      if (!needle) return true;
+      return [document.fileName, document.order?.externalId, document.order?.customer?.name, document.order?.channel]
+        .some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(needle));
+    });
+  }, [scopedDocuments, query, type, channel, period, from, to]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const allSelected = filtered.length > 0 && filtered.every((document) => selected.has(document.id));
+  const toggleSelected = (id: string) => setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(filtered.map((document) => document.id)));
+  const deleteDocuments = async () => {
+    if (!pendingDelete.length || deleting) return;
+    setDeleting(true);
+    try {
+      const result = await apiJson("/api/billing-documents", { method: "DELETE", body: JSON.stringify({ ids: pendingDelete }) });
+      setDocuments((current) => current.filter((document) => !pendingDelete.includes(document.id)));
+      setSelected(new Set());
+      setPendingDelete([]);
+      notify?.(`${result.deleted || pendingDelete.length} ${pendingDelete.length === 1 ? "documento excluído" : "documentos excluídos"}`);
+    } catch (error: any) {
+      notify?.(error.message || "Não foi possível excluir os documentos");
+    } finally {
+      setDeleting(false);
+    }
+  };
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [query, type, channel, period, from, to]);
+  const fileSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB` : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString("pt-BR")} KB`;
+  return <div className="billingPage">
+    <div className="sectionHead billingActions"><p className="billingIntro">{mode === "labels" ? "Etiquetas vinculadas às vendas e aos clientes" : "DANFEs e XMLs vinculados às vendas e aos clientes"}</p><button type="button" className="ghost clickable salesDeleteButton" disabled={!selected.size} onClick={() => setPendingDelete([...selected])}><Trash2 size={14} />Excluir selecionados</button></div>
+    <section className="card salesSearchSection" aria-label="Busca e filtros de faturamento">
+      <div className="salesSearchRow">
+        <label className="search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar arquivo, venda ou cliente..." aria-label="Buscar documentos" /></label>
+        <button type="button" className="mobileSalesFilterButton ghost" onClick={() => setFiltersOpen(true)}><Filter size={16} />Filtros</button>
+      </div>
+      {filtersOpen && <button type="button" className="mobileSalesFilterBackdrop" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)} />}
+      <div className={`salesFilters ${filtersOpen ? "mobileFiltersOpen" : ""}`}>
+        <div className="mobileSalesFilterHead"><b>Filtros</b><button type="button" className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)}><X size={20} /></button></div>
+        <div className="salesPeriodControl">
+          <button type="button" className="salesPeriodTrigger" aria-expanded={periodOpen} onClick={() => { setPeriodOpen((open) => !open); setCalendarMonth((from || todayISO()).slice(0, 7)); setDraftRange(period === "Personalizado" ? { from, to } : { from: "", to: "" }); setSelectingEnd(false); }}><span>Período</span><b>{period}</b><ChevronDown size={15} /></button>
+          {periodOpen && <div className="salesPeriodOptions">
+            {periodOptions.map((option) => <button type="button" key={option} className={period === option ? "active" : ""} onClick={() => { setPeriod(option); setFrom(""); setTo(""); setPeriodOpen(false); }}>{option}</button>)}
+            <div className="salesPeriodCalendar">
+              <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, -1))}>←</button><b>{calendarMonthTitle(calendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, 1))}>→</button></div>
+              <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(calendarMonth).map((day, index) => day ? <button key={day} type="button" className={`${day === draftRange.from || day === draftRange.to ? "selected" : ""} ${draftRange.from && draftRange.to && day > draftRange.from && day < draftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingEnd || (draftRange.from && day < draftRange.from)) { setDraftRange({ from: day, to: "" }); setSelectingEnd(true); } else { setDraftRange((range) => ({ ...range, to: day })); setSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div>
+              <small>{draftRange.from ? `${formatDashboardDate(draftRange.from)} → ${draftRange.to ? formatDashboardDate(draftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small>
+              <button type="button" className="primary" disabled={!draftRange.from || !draftRange.to} onClick={() => { setFrom(draftRange.from); setTo(draftRange.to); setPeriod("Personalizado"); setPeriodOpen(false); }}>Aplicar período</button>
+            </div>
+          </div>}
+        </div>
+        <div className="salesSelectField"><span>Canal</span><AnchoredSelect value={channel} onChange={setChannel} options={[{ value: "", label: "TODOS" }, ...channels.map((value) => ({ value, label: originLabel(value), icon: salesOriginLogo(value) }))]} compact /></div>
+        {mode === "invoices" && <div className="salesSelectField"><span>Tipo</span><AnchoredSelect value={type} onChange={setType} options={[{ value: "ALL", label: "Todos" }, { value: "INVOICE_PDF", label: "DANFE" }, { value: "INVOICE_XML", label: "XML da NF" }, { value: "REFUNDED_DANFE", label: "DANFE devolução" }, { value: "REFUNDED_XML", label: "XML devolução" }]} compact /></div>}
+        <button type="button" className="ghost" onClick={() => { setPeriod("Tempo todo"); setFrom(""); setTo(""); setPeriodOpen(false); setChannel(""); setType("ALL"); }}>Limpar</button>
+        <button type="button" className="mobileSalesFilterApply primary" onClick={() => setFiltersOpen(false)}>Aplicar</button>
+      </div>
+    </section>
+    <section className="billingSummary">
+      <article className="card kpi"><span>{mode === "labels" ? "Etiquetas" : "Documentos fiscais"}</span><strong>{scopedDocuments.length}</strong></article>
+      {mode === "invoices" && <article className="card kpi"><span>DANFEs</span><strong>{scopedDocuments.filter((document) => document.type === "INVOICE_PDF" || document.type === "REFUNDED_DANFE" || (document.type === "INVOICE" && document.mimeType === "application/pdf")).length}</strong></article>}
+      {mode === "invoices" && <article className="card kpi"><span>XMLs</span><strong>{scopedDocuments.filter((document) => document.type === "INVOICE_XML" || document.type === "REFUNDED_XML" || (document.type === "INVOICE" && document.mimeType?.includes("xml"))).length}</strong></article>}
+    </section>
+    <article className="card tableCard">
+      <div className="sectionHead"><div><h2>{mode === "labels" ? "Etiquetas" : "Documentos fiscais"}</h2><p>{filtered.length} {filtered.length === 1 ? "documento" : "documentos"}</p></div></div>
+      <div className="tableWrap"><table className="billingTable"><thead><tr><th className="checkCol"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Selecionar todos os documentos exibidos" /></th><th>Data</th><th>Tipo</th><th>Arquivo</th><th>Venda</th><th>Cliente</th><th>Canal</th><th>Tamanho</th><th></th></tr></thead><tbody>
+        {pageRows.map((document) => <tr key={document.id} className={selected.has(document.id) ? "mobileSelectedRow" : undefined}>
+          <td className="checkCol"><input type="checkbox" checked={selected.has(document.id)} onChange={() => toggleSelected(document.id)} aria-label={`Selecionar ${document.fileName}`} /></td>
+          <td>{new Date(document.updatedAt).toLocaleDateString("pt-BR")}</td>
+          <td><span className={`billingType ${document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" ? "label" : document.type.startsWith("REFUNDED") ? "refunded" : "invoice"}`}><BillingDocumentIcon type={document.type} />{document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" ? "Etiqueta" : document.type === "REFUNDED_DANFE" ? "DANFE devolução" : document.type === "REFUNDED_XML" ? "XML devolução" : document.type === "INVOICE_XML" || (document.type === "INVOICE" && document.mimeType?.includes("xml")) ? "XML da NF" : "DANFE"}</span></td>
+          <td><strong>{document.fileName}</strong></td>
+          <td><strong>#{document.order?.externalId || "—"}</strong><small>{document.order?.paidAt ? new Date(document.order.paidAt).toLocaleDateString("pt-BR") : ""}</small></td>
+          <td>{document.order?.customer?.name || "Cliente não informado"}</td>
+          <td>{originLabel(document.order?.channel)}</td>
+          <td>{fileSize(document.size)}</td>
+          <td><div className="rowActions"><a className="mini billingDownload" href={`/api/billing-documents/${document.id}`} title="Baixar documento" aria-label={`Baixar ${document.fileName}`}><Download size={15} /></a><button type="button" className="mini danger" title="Excluir documento" aria-label={`Excluir ${document.fileName}`} onClick={() => setPendingDelete([document.id])}><Trash2 size={15} /></button></div></td>
+        </tr>)}
+      </tbody></table></div>
+      {!loading && !filtered.length && <div className="catalogEmpty">Nenhum documento encontrado. Adicione uma etiqueta ou nota fiscal na tela de Vendas.</div>}
+      {loading && <div className="catalogEmpty">Carregando documentos…</div>}
+      {totalPages > 1 && <div className="pagination"><span>Página {safePage} de {totalPages}</span><div><button className="ghost clickable pageArrow" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>‹</button>{paginationNumbers(safePage, totalPages).map((number: any, index: number) => number === "…" ? <span className="pageDots" key={`dots-${index}`}>…</span> : <button key={number} className={`ghost clickable pageNumber ${safePage === number ? "selected" : ""}`} onClick={() => setPage(number)}>{number}</button>)}<button className="ghost clickable pageArrow" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>›</button></div></div>}
+    </article>
+    {pendingDelete.length > 0 && <div className="salesConfirmBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setPendingDelete([]); }}><div className="salesConfirmDialog" role="alertdialog" aria-modal="true" aria-labelledby="billing-confirm-title"><h2 id="billing-confirm-title">Confirmar exclusão</h2><p>Excluir {pendingDelete.length === 1 ? "este documento" : `${pendingDelete.length} documentos selecionados`}? Essa ação não pode ser desfeita.</p><div className="salesConfirmActions"><button className="ghost clickable" disabled={deleting} onClick={() => setPendingDelete([])}>Cancelar</button><button className="salesDeleteButton" disabled={deleting} onClick={deleteDocuments}><Trash2 size={16} />{deleting ? "Excluindo..." : "Excluir"}</button></div></div></div>}
+  </div>;
 }
 function AdThumbnail({ url, small = false, platform = "meta" }: { url?: string; small?: boolean; platform?: string }) {
   const [failed, setFailed] = useState(false);
@@ -2912,8 +3141,8 @@ function Finance() {
       </section>
       <section className="kpiGrid">
         {[
-          ["Receita", data?.revenue || 0],
-          ["A receber nas plataformas", data && transfers?.companyCash ? Number(data.salesProfit || 0) - Number(transfers.companyCash.amount || 0) : null],
+          ["Líq. do marketplace", data?.salesProfit ?? (Number(data?.revenue || 0) - Number(data?.fees || 0))],
+          ["A receber nas plataformas", data && transfers?.companyCash ? Number(data.salesProfit ?? (Number(data.revenue || 0) - Number(data.fees || 0))) - Number(transfers.companyCash.amount || 0) : null],
           ["Ads", data?.media || 0],
           ["Despesas", data?.expenses || 0],
         ].map(([a, b]: any) => (
@@ -2992,15 +3221,77 @@ function Expenses({ rows, onNew, onEdit, onDelete, onDeleteMany }: any) {
 }
 function Returns({ rows, syncing, onSync }: { rows: any[]; syncing: boolean; onSync: () => void }) {
   const statusLabel: Record<string, string> = { IN_TRANSIT: "Devolução a caminho", DELIVERED: "Reembolsada", REFUNDED: "Reembolsada", PENDING_REFUND: "Reembolso pendente" };
-  return <article className="card tableCard">
-    <div className="sectionHead"><div><h2>Devoluções dos canais</h2><p>{rows.length} devoluções · {rows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {rows.filter((row) => row.refundAmount !== null).length} reembolsos confirmados · atualização automática a cada minuto</p></div><button className="ghost clickable returnsSyncButton" disabled={syncing} onClick={onSync}><RefreshCw size={14} className={syncing ? "spin" : undefined} /><span>{syncing ? "Sincronizando…" : "Sincronizar agora"}</span></button></div>
-    <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th>Motivo</th><th>Situação</th><th>Reembolso</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>
+  const [query, setQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [origin, setOrigin] = useState("Todas");
+  const [status, setStatus] = useState("Todos");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [returnPeriod, setReturnPeriod] = useState("Tempo todo");
+  const [returnPeriodOpen, setReturnPeriodOpen] = useState(false);
+  const [returnDraftRange, setReturnDraftRange] = useState({ from: "", to: "" });
+  const [returnCalendarMonth, setReturnCalendarMonth] = useState(todayISO().slice(0, 7));
+  const [returnSelectingEnd, setReturnSelectingEnd] = useState(false);
+  const origins = useMemo(() => ["Todas", ...Array.from(new Set<string>(rows.map((row) => String(row.channel || "")).filter(Boolean)))], [rows]);
+  const filteredRows = useMemo(() => rows.filter((row) => {
+    const day = dateKey(row.observedAt);
+    const text = `${row.orderExternalId || ""} ${row.externalOrderId || ""} ${row.customerName || ""} ${row.sku || ""} ${row.reason || ""} ${originLabel(row.channel)}`.toLocaleLowerCase("pt-BR");
+    return (!query.trim() || text.includes(query.trim().toLocaleLowerCase("pt-BR")))
+      && (origin === "Todas" || row.channel === origin)
+      && (status === "Todos" || row.status === status)
+      && (!from || day >= from)
+      && (!to || day <= to);
+  }), [rows, query, origin, status, from, to]);
+  const confirmedRows = filteredRows.filter((row) => row.refundAmount !== null);
+  const pendingRefundRows = filteredRows.filter((row) => row.status === "PENDING_REFUND" && row.refundAmount === null);
+  const totalRefunded = confirmedRows.reduce((total, row) => total + Number(row.refundAmount || 0), 0);
+  return <div className="returnsView">
+    <section className="card salesSearchSection" aria-label="Busca e filtros de reembolsos">
+      <div className="salesSearchRow">
+        <div className="search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pedido, cliente ou produto..." /></div>
+        <button type="button" className="mobileSalesFilterButton ghost" onClick={() => setFiltersOpen(true)}><Filter size={16} />Filtros</button>
+      </div>
+      {filtersOpen && <button type="button" className="mobileSalesFilterBackdrop" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)} />}
+      <div className={`salesFilters ${filtersOpen ? "mobileFiltersOpen" : ""}`}>
+        <div className="mobileSalesFilterHead"><b>Filtros</b><button type="button" className="mobileSalesFilterClose" aria-label="Fechar filtros" onClick={() => setFiltersOpen(false)}><X size={20} /></button></div>
+        <div className="salesSelectField"><span>Situação</span><AnchoredSelect value={status} onChange={setStatus} options={[{ value: "Todos", label: "Todas" }, ...Object.entries(statusLabel).map(([value, label]) => ({ value, label }))]} compact /></div>
+        <div className="salesPeriodControl">
+          <button type="button" className="salesPeriodTrigger" aria-expanded={returnPeriodOpen} onClick={() => { setReturnPeriodOpen((open) => !open); setReturnCalendarMonth((from || todayISO()).slice(0, 7)); setReturnDraftRange({ from: returnPeriod === "Personalizado" ? from : "", to: returnPeriod === "Personalizado" ? to : "" }); setReturnSelectingEnd(false); }}><span>Período</span><b>{returnPeriod}</b><ChevronDown size={15} /></button>
+          {returnPeriodOpen && <div className="salesPeriodOptions">
+            {periodOptions.map((option) => <button type="button" key={option} className={returnPeriod === option ? "active" : ""} onClick={() => { const dates = periodRange(option, { from: "", to: "" }); setReturnPeriod(option); setFrom(option === "Tempo todo" ? "" : dates.from); setTo(option === "Tempo todo" ? "" : dates.to); setReturnPeriodOpen(false); }}>{option}</button>)}
+            <div className="salesPeriodCalendar">
+              <div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setReturnCalendarMonth(shiftCalendarMonth(returnCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(returnCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setReturnCalendarMonth(shiftCalendarMonth(returnCalendarMonth, 1))}>→</button></div>
+              <div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(returnCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === returnDraftRange.from || day === returnDraftRange.to ? "selected" : ""} ${returnDraftRange.from && returnDraftRange.to && day > returnDraftRange.from && day < returnDraftRange.to ? "inRange" : ""}`} onClick={() => { if (!returnSelectingEnd || (returnDraftRange.from && day < returnDraftRange.from)) { setReturnDraftRange({ from: day, to: "" }); setReturnSelectingEnd(true); } else { setReturnDraftRange((range) => ({ ...range, to: day })); setReturnSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div>
+              <small>{returnDraftRange.from ? `${formatDashboardDate(returnDraftRange.from)} → ${returnDraftRange.to ? formatDashboardDate(returnDraftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small>
+              <button type="button" className="primary" disabled={!returnDraftRange.from || !returnDraftRange.to} onClick={() => { setFrom(returnDraftRange.from); setTo(returnDraftRange.to); setReturnPeriod("Personalizado"); setReturnPeriodOpen(false); }}>Aplicar</button>
+            </div>
+          </div>}
+        </div>
+        <div className="salesSelectField"><span>Origem</span><AnchoredSelect value={origin} onChange={setOrigin} options={origins.map((channel) => ({ value: channel, label: channel === "Todas" ? "Todas" : originLabel(channel), icon: channel === "Todas" ? undefined : salesOriginLogo(channel) }))} compact /></div>
+        <button type="button" className="ghost clickable" onClick={() => { setStatus("Todos"); setOrigin("Todas"); setFrom(""); setTo(""); setReturnPeriod("Tempo todo"); setReturnPeriodOpen(false); setQuery(""); }}>Limpar filtros</button>
+        <button type="button" className="primary mobileSalesFilterApply" onClick={() => setFiltersOpen(false)}>Aplicar filtros</button>
+      </div>
+    </section>
+    <section className="returnsSummary">
+      <article className="card kpi"><span>Pedidos de reembolso</span><strong>{filteredRows.length}</strong></article>
+      <article className="card kpi"><span>Reembolsados</span><strong>{confirmedRows.length}</strong></article>
+      <article className="card kpi"><span>Reembolso pendente</span><strong>{pendingRefundRows.length}</strong></article>
+      <article className="card kpi"><span>Valor total reembolsado</span><strong className="negative">-{money(totalRefunded)}</strong></article>
+    </section>
+    <article className="card tableCard">
+    <div className="sectionHead"><div><h2>Reembolsos dos canais</h2><p>{filteredRows.length} pedidos · {filteredRows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {confirmedRows.length} reembolsos confirmados · atualização automática a cada minuto</p></div><button className="ghost clickable returnsSyncButton" disabled={syncing} onClick={onSync}><RefreshCw size={14} className={syncing ? "spin" : undefined} /><span>{syncing ? "Sincronizando…" : "Sincronizar agora"}</span></button></div>
+    <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Data</th><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th className="salesOriginCell">Origem</th><th>Motivo</th><th>Situação</th><th>Reembolso</th></tr></thead><tbody>{filteredRows.map((row) => <tr key={row.id}>
+      <td>{fmtDate(row.observedAt)}</td>
       <td><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">{originLabel(row.channel)} · #{row.externalOrderId}</a></td>
       <td>{row.customerName || "—"}</td>
-      <td>{row.sku || "—"}</td><td>{row.reason || "—"}</td><td><span className={`status ${row.refundAmount !== null ? "danger" : "warn"}`}>{statusLabel[row.status] || row.status}</span></td>
+      <td>{row.sku || "—"}</td>
+      <td className="salesOriginCell"><span className="salesOrigin">{salesOriginLogo(row.channel) && <span className="salesOriginLogo"><img src={salesOriginLogo(row.channel)} alt="" /></span>}<span>{originLabel(row.channel)}</span></span></td>
+      <td>{row.reason || "—"}</td><td><span className={`status ${row.refundAmount !== null ? "danger" : "warn"}`}>{statusLabel[row.status] || row.status}</span></td>
       <td className={row.refundAmount === null ? undefined : "negative"}>{row.refundAmount === null ? "Pendente" : `-${money(row.refundAmount)}`}</td>
     </tr>)}</tbody></table></div>
-  </article>;
+    {!filteredRows.length && <div className="catalogEmpty">Nenhum reembolso encontrado com esses filtros.</div>}
+    </article>
+  </div>;
 }
 function TrackingView({ notify, onOpenCampaign }: { notify: (message: string) => void; onOpenCampaign: (target: { level: "Campanhas" | "Conjuntos" | "Anúncios"; date: string; query: string; platform: string }) => void }) {
   const [data, setData] = useState<any>(null);

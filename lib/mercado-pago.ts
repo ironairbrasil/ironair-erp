@@ -148,6 +148,10 @@ export async function listMercadoPagoWithdrawals(tenantId: string) {
     const downloaded = await mpFetch(token, `/statements/${encodeURIComponent(reportId)}/download?format=csv`);
     if ((downloaded.headers.get('content-type') || '').includes('zip')) throw new Error('O relatório veio compactado; download ZIP ainda não é suportado.');
     const rows = readWithdrawals(await downloaded.text()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    if (metadata.withdrawFallbackReportId !== reportId) {
+      const current = await db.integration.findUnique({ where: { id: integration.id }, select: { metadata: true } });
+      await db.integration.update({ where: { id: integration.id }, data: { metadata: { ...((current?.metadata || {}) as object), withdrawFallbackReportId: reportId } } });
+    }
     return { status: 'connected', rows, message: `${rows.length} saques encontrados` };
   } catch (error) {
     return { status: 'unavailable', rows: [] as Withdrawal[], message: error instanceof Error ? error.message : 'Consulta ao Mercado Pago indisponível' };
