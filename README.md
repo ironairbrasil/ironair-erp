@@ -23,6 +23,8 @@ npm run db:seed
 npm run dev
 ```
 
+Em um banco novo, use `npm run db:bootstrap` para materializar o schema atual. Em bancos já provisionados, use `npm run db:deploy` para aplicar somente as migrações pendentes.
+
 Leia `docs/SHOPIFY_INTEGRATION.md` e `docs/CODEX_HANDOFF.md` antes de produção. A carga histórica de pedidos pagos exige estratégia de corte para não alterar o estoque atual.
 
 ## V4 Local Interactive UI

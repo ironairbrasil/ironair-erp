@@ -23,7 +23,10 @@ export async function GET(req:Request){
     const clientId=process.env.SHOPIFY_CLIENT_ID;
     const clientSecret=process.env.SHOPIFY_CLIENT_SECRET;
     if(!clientId||!clientSecret) return NextResponse.json({ok:false,error:'Credenciais OAuth Shopify ausentes no servidor'},{status:500});
-    const tenantId=readSignedState(url.searchParams.get('state')).tenantId;
+    const state=readSignedState(url.searchParams.get('state'));
+    const nonce=req.headers.get('cookie')?.split(';').map(value=>value.trim()).find(value=>value.startsWith('shopify_oauth_nonce='))?.slice('shopify_oauth_nonce='.length);
+    if(!nonce||!crypto.timingSafeEqual(Buffer.from(nonce),Buffer.from(state.nonce))) return NextResponse.json({ok:false,error:'state não corresponde à sessão'},{status:401});
+    const tenantId=state.tenantId;
     const shop=normalizeShopDomain(url.searchParams.get('shop')||'');
     const code=url.searchParams.get('code');
     if(!isValidShopDomain(shop)||!code) return NextResponse.json({ok:false,error:'callback inválido'},{status:400});
@@ -37,7 +40,9 @@ export async function GET(req:Request){
     });
     await upsertPreparedShopifyWebhooks(tenantId,integration.id,new URL(req.url).origin);
     await registerShopifyWebhookSubscriptions({tenantId,integrationId:integration.id,shopDomain:shop,accessToken:tokenJson.access_token,mode:'OAUTH'},new URL(req.url).origin);
-    return NextResponse.redirect(new URL('/?integration=shopify-connected',req.url));
+    const response=NextResponse.redirect(new URL('/?integration=shopify-connected',req.url));
+    response.cookies.set('shopify_oauth_nonce','',{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/api/integrations/shopify/callback',maxAge:0});
+    return response;
   }catch(e:any){
     return NextResponse.json({ok:false,error:e?.message||'shopify_callback_failed'},{status:400});
   }

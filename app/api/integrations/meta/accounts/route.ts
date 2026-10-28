@@ -33,7 +33,7 @@ export async function POST(req: Request) {
     insightsUrl.searchParams.set('fields', 'spend'); insightsUrl.searchParams.set('limit', '1');
     const check = await fetch(insightsUrl, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
     if (!check.ok) return NextResponse.json({ ok: false, error: 'Token sem permissão para ler métricas desta conta' }, { status: 400 });
-    const { oauthPending: _pending, ...metadata } = root;
+    const metadata = { ...root }; delete metadata.oauthPending;
     await db.integration.update({ where: { id: integration.id }, data: { mode: 'OAUTH', status: 'CONNECTED', externalAccountId: accountId, accessTokenEncrypted: pending.tokenEncrypted, scopes: 'ads_read,read_insights', connectedAt: new Date(), disconnectedAt: null, lastError: null, config: { hidden: false }, metadata: { ...metadata, accountName: selected.name, expiresAt: pending.expiresAt } } });
     let rows: number | null = null;
     try { rows = await syncMetaAds(90, tenantId); } catch { /* connection stays visible with its sync error */ }

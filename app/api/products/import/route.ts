@@ -51,7 +51,6 @@ async function syncMercadoLivreProducts(tenantId:string){
     if(item.variations?.length){
       for(const variation of item.variations){
         const label=(variation.attribute_combinations||[]).map((a:any)=>a.value_name).join(' ');
-        const title=`${item.title} ${label}`.trim();
         const sku=String(variation.seller_custom_field||attributeSku(variation.attributes)||attributeSku(item.attributes)||`${item.id}-${variation.id}`).trim();
         rows.push({sku,product:sku==='IRON-AIR-127V'||sku==='IRON-AIR-220V'?'Passador De Roupas Automático Iron Air 5 Em 1':item.title,name:label||item.title,price:Number(variation.price||item.price||0),quantity:Number(variation.available_quantity||0),imageUrl:image,fulfillment:'Mercado Livre',externalUrl:item.permalink,source:'MERCADO_LIVRE'});
       }

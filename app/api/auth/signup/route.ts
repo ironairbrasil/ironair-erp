@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { supabaseSignUp } from '@/lib/supabase-auth';
+import { enforceBodyLimit, enforceDistributedRateLimit, guardStatus } from '@/lib/request-guard';
 
 export async function POST(req: Request) {
   try {
+    enforceBodyLimit(req, 8 * 1024); await enforceDistributedRateLimit(req, 'auth-signup', 5, 60 * 60_000);
     const { email, password, confirmPassword, companyName } = await req.json();
     if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || typeof password !== 'string' || password.length < 8) {
       return NextResponse.json({ ok: false, error: 'Informe um e-mail válido e uma senha de pelo menos 8 caracteres' }, { status: 400 });
@@ -13,6 +15,6 @@ export async function POST(req: Request) {
     await supabaseSignUp(email.trim().toLowerCase(), password, name);
     return NextResponse.json({ ok: true, message: 'Confira seu e-mail para confirmar a conta' });
   } catch (error: any) {
-    return NextResponse.json({ ok: false, error: error?.message || 'Falha ao criar conta' }, { status: 400 });
+    return NextResponse.json({ ok: false, error: error?.message || 'Falha ao criar conta' }, { status: guardStatus(error) });
   }
 }

@@ -13,7 +13,8 @@ export async function GET(req:Request){
   if(!clientId) return NextResponse.json({ok:false,error:'SHOPIFY_CLIENT_ID ausente no servidor'},{status:500});
   if(!isValidShopDomain(shop)) return NextResponse.json({ok:false,error:'Informe a loja no formato loja.myshopify.com'},{status:400});
   const tenantId=await requireTenantAdmin(req);
-  const state=signState({tenantId,nonce:crypto.randomBytes(16).toString('hex'),createdAt:Date.now()});
+  const nonce=crypto.randomBytes(16).toString('hex');
+  const state=signState({tenantId,nonce,createdAt:Date.now()});
   const scopes=process.env.SHOPIFY_SCOPES || 'read_orders,read_products,write_inventory,write_webhooks';
   const redirectUri=`${appUrl}/api/integrations/shopify/callback`;
   const url=new URL(`https://${shop}/admin/oauth/authorize`);
@@ -21,5 +22,7 @@ export async function GET(req:Request){
   url.searchParams.set('scope',scopes);
   url.searchParams.set('redirect_uri',redirectUri);
   url.searchParams.set('state',state);
-  return NextResponse.redirect(url);
+  const response=NextResponse.redirect(url);
+  response.cookies.set('shopify_oauth_nonce',nonce,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/api/integrations/shopify/callback',maxAge:600});
+  return response;
 }

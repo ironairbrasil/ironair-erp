@@ -172,6 +172,16 @@ model User {
   pushSubscriptions PushSubscription[]
 }
 
+model RateLimitBucket {
+  key         String
+  windowStart DateTime
+  count       Int      @default(1)
+  expiresAt   DateTime
+
+  @@id([key, windowStart])
+  @@index([expiresAt])
+}
+
 model Membership {
   id        String         @id @default(cuid())
   tenantId  String

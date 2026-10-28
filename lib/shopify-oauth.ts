@@ -1,7 +1,9 @@
 import crypto from 'crypto';
 
 function signingSecret(){
-  return process.env.SHOPIFY_CLIENT_SECRET || process.env.ERP_INGEST_SECRET || 'ironair-local-dev';
+  const value=process.env.SHOPIFY_CLIENT_SECRET || process.env.ERP_INGEST_SECRET;
+  if(!value) throw new Error('Segredo OAuth Shopify ausente no servidor');
+  return value;
 }
 
 export function normalizeShopDomain(shop:string){

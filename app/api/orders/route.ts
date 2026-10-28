@@ -30,7 +30,7 @@ export async function GET(req:Request){
   if(unlinked.length){
     const variants=await db.productVariant.findMany({where:{tenantId,active:true},select:{id:true,sku:true,name:true,unitCost:true}});
     const bySku=new Map(variants.map(variant=>[variant.sku.toUpperCase(),variant]));
-    const links=unlinked.map(item=>({item,variant:bySku.get(canonicalSku(item.sku,item.name).toUpperCase())})).filter(entry=>Boolean(entry.variant));
+    const links=unlinked.map(item=>({item,variant:bySku.get(canonicalSku(item.sku).toUpperCase())})).filter(entry=>Boolean(entry.variant));
     if(links.length) await db.$transaction(links.map(({item,variant})=>db.orderItem.update({where:{id:item.id},data:{variantId:variant!.id,sku:variant!.sku,unitCost:variant!.unitCost}})));
   }
   const [rows,shopify]=await Promise.all([

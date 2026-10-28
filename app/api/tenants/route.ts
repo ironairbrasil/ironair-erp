@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getAuthUser } from '@/lib/supabase-auth';
+import { enforceBodyLimit, enforceDistributedRateLimit, guardStatus } from '@/lib/request-guard';
 
 export async function POST(req: Request) {
   try {
+    enforceBodyLimit(req, 4 * 1024); await enforceDistributedRateLimit(req, 'tenant-create', 3, 24 * 60 * 60_000);
     const auth = await getAuthUser(req);
     if (!auth?.id || !auth.email || !auth.email_confirmed_at) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
     const body = await req.json();
@@ -21,6 +23,6 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ ok: true, tenantId: tenant.id });
   } catch (error: any) {
-    return NextResponse.json({ ok: false, error: error?.message === 'forbidden' ? 'forbidden' : 'Falha ao criar empresa' }, { status: error?.message === 'forbidden' ? 403 : 500 });
+    return NextResponse.json({ ok: false, error: error?.message === 'forbidden' ? 'forbidden' : error?.message || 'Falha ao criar empresa' }, { status: error?.message === 'forbidden' ? 403 : ['rate_limited','payload_too_large'].includes(error?.message) ? guardStatus(error) : 500 });
   }
 }

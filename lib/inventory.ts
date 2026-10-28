@@ -2,10 +2,12 @@ import { db } from './db';
 import { getTenantId } from './tenant';
 import type { InventoryMovementType, Prisma } from '@prisma/client';
 import { sendTenantPush } from './push';
-export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string;createdAt?:Date|string;metadata?:Prisma.InputJsonObject}){
+type MoveStockInput={tenantId?:string;sku:string;warehouseCode:string;quantity:number;type:InventoryMovementType;reference?:string;orderId?:string;note?:string;idempotencyKey?:string;createdAt?:Date|string;metadata?:Prisma.InputJsonObject};
+export async function moveStock(input:MoveStockInput){
  if(!Number.isInteger(input.quantity)||input.quantity===0) throw new Error('quantity must be a non-zero integer');
  const tenantId=input.tenantId||await getTenantId();
  const result=await db.$transaction(async tx=>{
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))`;
   if(input.idempotencyKey){const prior=await tx.inventoryMovement.findUnique({where:{tenantId_idempotencyKey:{tenantId,idempotencyKey:input.idempotencyKey}}});if(prior)return {movement:prior,alert:null}}
   const variant=await tx.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:input.sku}}});if(!variant)throw new Error(`Unknown SKU ${input.sku}`);
   const warehouse=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId,code:input.warehouseCode}}});if(!warehouse)throw new Error(`Unknown warehouse ${input.warehouseCode}`);
@@ -20,6 +22,31 @@ export async function moveStock(input:{tenantId?:string;sku:string;warehouseCode
  });
  if(result.alert) await sendTenantPush(tenantId,{title:'Estoque de atenção',body:`${result.alert.name} (${result.alert.sku}): ${result.alert.available} disponíveis`,tag:`stock:${result.alert.sku}`,url:'/'}).catch(error=>console.error('Push stock failed',error));
  return result.movement;
+}
+
+export async function moveStocks(inputs:MoveStockInput[]){
+ if(!inputs.length)return [];
+ const tenantId=inputs[0].tenantId||await getTenantId();
+ if(inputs.some(input=>(input.tenantId||tenantId)!==tenantId||!Number.isInteger(input.quantity)||input.quantity===0))throw new Error('invalid stock batch');
+ return db.$transaction(async tx=>{
+  const movements=[];
+  for(const input of [...inputs].sort((a,b)=>`${a.sku}:${a.warehouseCode}`.localeCompare(`${b.sku}:${b.warehouseCode}`))){
+   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))`;
+   if(input.idempotencyKey){const prior=await tx.inventoryMovement.findUnique({where:{tenantId_idempotencyKey:{tenantId,idempotencyKey:input.idempotencyKey}}});if(prior){movements.push(prior);continue}}
+   const variant=await tx.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:input.sku}}});
+   const warehouse=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId,code:input.warehouseCode}}});
+   if(!variant||!warehouse)throw new Error(`Unknown SKU or warehouse ${input.sku}`);
+   const balance=await tx.inventoryBalance.upsert({where:{tenantId_variantId_warehouseId:{tenantId,variantId:variant.id,warehouseId:warehouse.id}},create:{tenantId,variantId:variant.id,warehouseId:warehouse.id,onHand:0,reserved:0},update:{}});
+   const reserveDelta=input.type==='RESERVE'?Math.abs(input.quantity):input.type==='RELEASE'?-Math.abs(input.quantity):0;
+   const onHandDelta=['RESERVE','RELEASE'].includes(input.type)?0:input.quantity;
+   const nextOnHand=balance.onHand+onHandDelta, nextReserved=balance.reserved+reserveDelta;
+   if(nextOnHand<0&&input.type!=='SALE')throw new Error(`Insufficient stock for ${input.sku}`);
+   if(nextReserved<0||(input.type!=='SALE'&&nextReserved>nextOnHand))throw new Error(`Invalid reservation for ${input.sku}`);
+   await tx.inventoryBalance.update({where:{id:balance.id},data:{onHand:nextOnHand,reserved:nextReserved}});
+   movements.push(await tx.inventoryMovement.create({data:{tenantId,variantId:variant.id,warehouseId:warehouse.id,type:input.type,quantity:input.quantity,reference:input.reference,orderId:input.orderId,note:input.note,idempotencyKey:input.idempotencyKey,source:String(input.idempotencyKey||'').startsWith('manual')?'MANUAL':'SYNC',metadata:input.metadata,createdAt:input.createdAt?new Date(input.createdAt):undefined}}));
+  }
+  return movements;
+ });
 }
 export async function transferStock(input:{tenantId:string;sku:string;toWarehouseCode:string;quantity:number;reference?:string;createdAt?:Date|string;idempotencyKey:string}){
  if(!Number.isInteger(input.quantity)||input.quantity<=0||input.toWarehouseCode==='CENTRAL') throw new Error('Transferência inválida');

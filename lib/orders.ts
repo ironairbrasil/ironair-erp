@@ -1,11 +1,12 @@
 import { db } from './db';
-import { moveStock } from './inventory';
+import { moveStocks } from './inventory';
 import { publishAvailableStock } from './inventory-publish';
 import { getTenantId } from './tenant';
 import type { Channel } from '@prisma/client';
 import { sendTenantPush } from './push';
+import { paidOrderStockDeltas } from './order-stock';
 export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL';returnInfo?:{status:string;refundAmount?:number|null;observedAt?:string}};
-export function canonicalSku(sku:string,name=''){
+export function canonicalSku(sku:string){
  return String(sku||'').trim();
 }
 function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
@@ -47,13 +48,12 @@ export async function ingestOrder(input:IngestOrder){
   await db.attribution.upsert({where:{orderId:order.id},create:{tenantId,orderId:order.id,...attribution},update:attribution});
   if(input.status==='PAID'&&attribution.sessionId) await db.trackingEvent.upsert({where:{tenantId_eventId:{tenantId,eventId:`purchase:${order.id}`}},create:{tenantId,eventId:`purchase:${order.id}`,type:'PURCHASE',occurredAt:order.paidAt||order.createdAt,orderId:order.id,sessionId:attribution.sessionId,visitorId:attribution.visitorId,url:attribution.landingPage,referrer:attribution.referrer,utmSource:attribution.source,utmMedium:attribution.medium,utmCampaign:attribution.campaign,utmContent:attribution.content,utmTerm:attribution.term,fbclid:attribution.fbclid,fbp:attribution.fbp,fbc:attribution.fbc,gclid:attribution.gclid,campaignId:attribution.campaignId,adsetId:attribution.adsetId,adId:attribution.adId,value:Math.max(0,input.grossAmount-(input.discountAmount||0)),currency:input.currency||'BRL'},update:{orderId:order.id,sessionId:attribution.sessionId,visitorId:attribution.visitorId}});
  }
- // Inventory is deducted exactly once on the first transition into PAID. Refunds do NOT auto-restock: physical returns require an explicit RETURN movement.
- if(!input.skipInventory&&input.status==='PAID'&&existing?.status!=='PAID') {
+ // Apply the first sale or the exact item delta of an already-paid order as one atomic stock batch.
+ if(!input.skipInventory&&input.status==='PAID') {
   const changedSkus=new Set<string>();
-  for(const item of prepared.filter(i=>i.variantId)) {
-   await moveStock({tenantId,sku:item.sku,warehouseCode:input.warehouseCode||'CENTRAL',quantity:-Math.abs(item.quantity),type:'SALE',reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${item.sku}`});
-   changedSkus.add(item.sku);
-  }
+  const changes=paidOrderStockDeltas(existing?.status==='PAID'?existing.items:[],prepared);
+  await moveStocks(changes.map(change=>({tenantId,sku:change.sku,warehouseCode:input.warehouseCode||'CENTRAL',quantity:-change.delta,type:'SALE' as const,reference:input.externalId,orderId:order.id,createdAt:order.paidAt||order.createdAt,idempotencyKey:`sale:${input.channel}:${input.externalId}:${change.sku}:${change.previous}:${change.current}`})));
+  for(const change of changes)changedSkus.add(change.sku);
   for(const sku of changedSkus) await publishAvailableStock(tenantId,sku).catch(error=>console.error(`Inventory publish failed for ${sku}`,error));
  }
  if(input.status==='PAID'&&existing?.status!=='PAID'&&(!input.paidAt||Date.now()-new Date(input.paidAt).getTime()<15*60*1000)) {

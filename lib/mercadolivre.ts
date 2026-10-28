@@ -5,6 +5,7 @@ import { ingestOrder, type IngestOrder } from './orders';
 import { normalizePaymentMethod } from './payment-method';
 import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
+import { verifyMercadoLivreSignature } from './mercadolivre-webhook';
 
 const PROVIDER = 'Mercado Livre';
 const WEBHOOK_PROVIDER = 'MERCADO_LIVRE';
@@ -209,15 +210,21 @@ export function mercadoLivreEventId(payload: any, fallback?: string | null){
   return String(fallback || parts.join(':') || crypto.createHash('sha256').update(JSON.stringify(payload || {})).digest('hex'));
 }
 
+export function verifyMercadoLivreWebhook(req: Request, payload: any){
+  const signature = req.headers.get('x-signature') || '';
+  const requestId = req.headers.get('x-request-id') || '';
+  const secret = clientSecret();
+  const dataId = new URL(req.url).searchParams.get('data.id') ?? payload?.data?.id ?? payload?.id;
+  return verifyMercadoLivreSignature({signature,requestId,dataId,secret});
+}
+
 export async function findMercadoLivreTenant(payload: any){
   const userId = payload?.user_id ? String(payload.user_id) : null;
   if(userId){
     const integration = await db.integration.findFirst({ where: { provider: PROVIDER, status: 'CONNECTED', externalAccountId: userId } });
     if(integration) return { tenantId: integration.tenantId, integrationId: integration.id };
   }
-  const tenantId = await getTenantId();
-  const integration = await db.integration.findUnique({ where: { tenantId_provider: { tenantId, provider: PROVIDER } } });
-  return { tenantId, integrationId: integration?.id };
+  throw new Error('mercado_livre_account_not_found');
 }
 
 export async function registerMercadoLivreWebhookReceipt(input: { tenantId: string; integrationId?: string; eventId: string; topic: string; payload: any }){

@@ -76,7 +76,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
   const knownAdIds=new Set(adEntities.map(row=>row.adId).filter((value):value is string=>Boolean(value)));
   const adPlatformById=new Map<string,string>();
   for(const row of adEntities)for(const id of [row.campaignId,row.adsetId,row.adId])if(id&&!adPlatformById.has(id))adPlatformById.set(id,row.platform);
-  let revenue=0,cogs=0,fees=0,unitCostTotal=0,unitsWithCost=0,internalMetaRevenue=0,internalMetaCogs=0,internalMetaSales=0,googlePurchaseRevenue=0,googlePurchaseCogs=0,tiktokPurchaseRevenue=0,tiktokPurchaseCogs=0,adSales=0;
+  let revenue=0,cogs=0,fees=0,unitCostTotal=0,unitsWithCost=0,internalMetaRevenue=0,internalMetaCogs=0,googlePurchaseRevenue=0,googlePurchaseCogs=0,tiktokPurchaseRevenue=0,tiktokPurchaseCogs=0,adSales=0;
   const daily=new Map<string,{date:string;revenue:number;profit:number;salesProfit:number;orders:number}>();
   const channels=new Map<string,{name:string;invested:number;sales:number;revenue:number;cogs:number;fees:number}>();
   for(const o of paid){
@@ -94,7 +94,7 @@ async function calculateDashboard(req: Request, tenantId: string) {
     revenue+=orderRevenue; cogs+=orderCogs; fees+=orderFees;
     const attributionId=[o.attribution?.campaignId,o.attribution?.campaign,o.attribution?.adsetId,o.attribution?.adId].find(id=>id&&adPlatformById.has(id))||'';
     const attributedToAds=Boolean(o.attribution&&(knownCampaignIds.has(o.attribution.campaignId||o.attribution.campaign||'')||knownAdsetIds.has(o.attribution.adsetId||'')||knownAdIds.has(o.attribution.adId||'')));
-    if(attributedToAds){const adPlatform=adPlatformById.get(attributionId)||'';if(/meta|facebook|instagram/i.test(adPlatform)){internalMetaRevenue+=orderRevenue;internalMetaCogs+=orderCogs;internalMetaSales++;}else if(/google/i.test(adPlatform)){googlePurchaseRevenue+=orderRevenue;googlePurchaseCogs+=orderCogs;}else if(/tiktok|tik tok/i.test(adPlatform)){tiktokPurchaseRevenue+=orderRevenue;tiktokPurchaseCogs+=orderCogs;}adSales++;}
+    if(attributedToAds){const adPlatform=adPlatformById.get(attributionId)||'';if(/meta|facebook|instagram/i.test(adPlatform)){internalMetaRevenue+=orderRevenue;internalMetaCogs+=orderCogs;}else if(/google/i.test(adPlatform)){googlePurchaseRevenue+=orderRevenue;googlePurchaseCogs+=orderCogs;}else if(/tiktok|tik tok/i.test(adPlatform)){tiktokPurchaseRevenue+=orderRevenue;tiktokPurchaseCogs+=orderCogs;}adSales++;}
     const salesProfit=orderRevenue-orderFees;
     const key=localDay(o.paidAt||o.createdAt);
     const d=daily.get(key)||{date:key,revenue:0,profit:0,salesProfit:0,orders:0};
