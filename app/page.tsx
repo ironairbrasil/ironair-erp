@@ -398,7 +398,7 @@ export default function Home() {
   const dashboardRowStep = () => typeof window === "undefined" ? 4 : window.innerWidth <= 650 ? 1 : window.innerWidth <= 1050 ? 2 : 4;
   const filtered = useMemo(() => sales.filter((s) => Object.values(s).join(" ").toLowerCase().includes(q.toLowerCase())), [q, sales]);
   const dashboardPlatforms = useMemo(() => [...new Set(orderRows.map((o) => String(o.channel || "")))].filter(Boolean).sort(), [orderRows]);
-  const dashboardProducts = useMemo(() => availableCatalogProductOptions(catalogRows).map((option) => [option.value, option.label] as [string, string]), [catalogRows]);
+  const dashboardProducts = useMemo(() => catalogProductOptions(catalogRows).map((option) => [option.value, option.label] as [string, string]), [catalogRows]);
   const dashboardPaymentMethods = useMemo(() => [...new Set(orderRows.map((o) => normalizePaymentMethod(o.paymentMethod)).filter((method) => method && method.toLowerCase() !== "manual"))].sort(), [orderRows]);
   const scopedOrders = (orders: any[]) => {
     const { platform: selectedPlatform, product: selectedProduct, paymentMethod: selectedPaymentMethod } = dashboardSelection.current;
@@ -1488,14 +1488,9 @@ function SalesTimeline({ rows, period, range, firstSaleDate, hidden = false, mod
 function orderItemProductLabel(item:any){
   return String(item?.name||'').trim();
 }
-function availableCatalogProductOptions(catalogProducts: any[]) {
+function catalogProductOptions(catalogProducts: any[]) {
   return [...new Map<string, { value: string; label: string }>((catalogProducts || [])
-    .filter((product: any) => {
-      const available = Array.isArray(product.balances)
-        ? product.balances.reduce((total: number, balance: any) => total + Number(balance.available || 0), 0)
-        : Number(product.availableQuantity || 0);
-      return String(product.sku || '').trim() && available > 0;
-    })
+    .filter((product: any) => String(product.sku || '').trim())
     .map((product: any) => {
       const sku = String(product.sku).trim();
       const productName = String(product.product || product.name || sku).trim();
@@ -3553,7 +3548,7 @@ function Modal({ kind, data, close, notify, products, inventoryFolders = [], cat
     ...inventoryFolders.map((folder: any) => ({ value: `folder:${folder.id}`, label: `Pasta: ${folder.name}` })),
     ...products.map((product: any) => ({ value: `sku:${product.sku}`, label: `${product.product || product.name || product.sku} · ${product.sku}` })),
   ];
-  const manualSaleProductOptions = availableCatalogProductOptions(catalogProducts);
+  const manualSaleProductOptions = catalogProductOptions(catalogProducts);
   const setMovementProduct = (value: string) => setF((current: any) => value.startsWith("folder:")
     ? { ...current, productTarget: value, folderId: value.slice(7), sku: "" }
     : { ...current, productTarget: value, folderId: null, sku: value.replace(/^sku:/, "") });
