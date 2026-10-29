@@ -256,14 +256,31 @@ export default function Home() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushSupported, setPushSupported] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
+  const getPushDeviceId = () => {
+    const storageKey = 'ironair-push-device-id-v1';
+    let deviceId = localStorage.getItem(storageKey);
+    if (!deviceId) {
+      deviceId = crypto.randomUUID();
+      localStorage.setItem(storageKey, deviceId);
+    }
+    return deviceId;
+  };
+  const registerPushSubscription = async (subscription: PushSubscription) => apiJson('/api/push/subscription', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...subscription.toJSON(),
+      deviceId: getPushDeviceId(),
+      deviceLabel: `${navigator.platform || 'Dispositivo'} · ${navigator.userAgent}`
+    })
+  });
   useEffect(() => {
     if (!sessionInfo || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
     setPushSupported(true);
     navigator.serviceWorker.register('/sw.js').then(async registration => {
       const subscription = await registration.pushManager.getSubscription();
       if (!subscription) return;
-      const response = await fetch(`/api/push/subscription?endpoint=${encodeURIComponent(subscription.endpoint)}`, { cache: 'no-store' });
-      if (response.ok) setPushEnabled(Boolean((await response.json()).enabled));
+      await registerPushSubscription(subscription);
+      setPushEnabled(true);
     }).catch(() => undefined);
   }, [sessionInfo]);
   const [catalogRows, setCatalogRows] = useState<any[]>([]);
@@ -447,7 +464,7 @@ export default function Home() {
         if (!config.publicKey) throw new Error('Notificações ainda não configuradas no servidor.');
         const key = Uint8Array.from(atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
         const subscription = existing || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-        await apiJson('/api/push/subscription', { method: 'POST', body: JSON.stringify(subscription.toJSON()) });
+        await registerPushSubscription(subscription);
         setPushEnabled(true);
         notify('Notificações ativadas neste aparelho.');
       }

@@ -108,16 +108,20 @@ model PushSubscription {
   id        String   @id @default(cuid())
   tenantId  String
   userId    String
+  deviceId  String?
+  deviceLabel String?
   endpoint  String   @unique
   p256dh    String
   auth      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  lastSeenAt DateTime @default(now())
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([userId])
+  @@index([tenantId, userId, deviceId])
 }
 
 model DashboardLayout {
