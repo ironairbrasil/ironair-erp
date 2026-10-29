@@ -11,3 +11,15 @@ export function verifyMercadoLivreSignature(input:{signature:string;requestId:st
   const expected=crypto.createHmac('sha256',input.secret).update(manifest).digest('hex');
   try{return expected.length===received.length&&crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(received))}catch{return false}
 }
+
+export function trustMercadoLivreWebhook(input:{signature:string;requestId:string;dataId?:string|number|null;secret:string;userId?:string|number|null;applicationId?:string|number|null;clientId:string;now?:number}){
+  // Newer Mercado Livre notifications are signed. If either signature header is
+  // present, require the complete, valid signature instead of falling back.
+  if(input.signature || input.requestId){
+    return verifyMercadoLivreSignature(input);
+  }
+  // Some notification topics/accounts still use the legacy unsigned payload.
+  // Accept it only when it identifies both a seller and this exact application;
+  // the route additionally resolves the seller to a connected integration.
+  return Boolean(input.userId && input.applicationId && input.clientId && String(input.applicationId) === String(input.clientId));
+}

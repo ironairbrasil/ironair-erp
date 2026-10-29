@@ -5,7 +5,7 @@ import { ingestOrder, type IngestOrder } from './orders';
 import { normalizePaymentMethod } from './payment-method';
 import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
-import { verifyMercadoLivreSignature } from './mercadolivre-webhook';
+import { trustMercadoLivreWebhook } from './mercadolivre-webhook';
 
 const PROVIDER = 'Mercado Livre';
 const WEBHOOK_PROVIDER = 'MERCADO_LIVRE';
@@ -215,7 +215,15 @@ export function verifyMercadoLivreWebhook(req: Request, payload: any){
   const requestId = req.headers.get('x-request-id') || '';
   const secret = clientSecret();
   const dataId = new URL(req.url).searchParams.get('data.id') ?? payload?.data?.id ?? payload?.id;
-  return verifyMercadoLivreSignature({signature,requestId,dataId,secret});
+  return trustMercadoLivreWebhook({
+    signature,
+    requestId,
+    dataId,
+    secret,
+    userId: payload?.user_id,
+    applicationId: payload?.application_id,
+    clientId: clientId()
+  });
 }
 
 export async function findMercadoLivreTenant(payload: any){

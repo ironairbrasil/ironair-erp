@@ -12,9 +12,9 @@ export async function POST(req: Request){
   }catch{
     return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 });
   }
-  if(!verifyMercadoLivreWebhook(req,payload)) return NextResponse.json({ok:false,error:'invalid_signature'},{status:401});
   let tenantId:string, integrationId:string|undefined;
   try{({tenantId,integrationId}=await findMercadoLivreTenant(payload))}catch{return NextResponse.json({ok:false,error:'account_not_found'},{status:404})}
+  if(!verifyMercadoLivreWebhook(req,payload)) return NextResponse.json({ok:false,error:'invalid_signature'},{status:401});
   const topic = String(payload?.topic || payload?.resource || 'notifications');
   const eventId = mercadoLivreEventId(payload, req.headers.get('x-request-id'));
   const receipt = await registerMercadoLivreWebhookReceipt({ tenantId, integrationId, eventId, topic, payload });
