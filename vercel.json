@@ -1,6 +1,7 @@
 {
   "regions": ["gru1"],
   "crons": [
+    { "path": "/api/cron/sync-orders", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/sync-meta", "schedule": "0 6 * * *" }
   ]
 }

@@ -5,6 +5,7 @@ import { getTenantId } from './tenant';
 import type { Channel } from '@prisma/client';
 import { sendTenantPush } from './push';
 import { paidOrderStockDeltas } from './order-stock';
+import { shouldNotifyPaidOrder } from './order-notification';
 export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL';returnInfo?:{status:string;refundAmount?:number|null;observedAt?:string}};
 export function canonicalSku(sku:string){
  return String(sku||'').trim();
@@ -56,7 +57,7 @@ export async function ingestOrder(input:IngestOrder){
   for(const change of changes)changedSkus.add(change.sku);
   for(const sku of changedSkus) await publishAvailableStock(tenantId,sku).catch(error=>console.error(`Inventory publish failed for ${sku}`,error));
  }
- if(input.status==='PAID'&&existing?.status!=='PAID'&&(!input.paidAt||Date.now()-new Date(input.paidAt).getTime()<15*60*1000)) {
+ if(input.status==='PAID'&&shouldNotifyPaidOrder({previousStatus:existing?.status,paidAt:input.paidAt})) {
   const amount=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(input.grossAmount-(input.discountAmount||0));
   const paidAt=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(order.paidAt||order.createdAt);
   await sendTenantPush(tenantId,{title:`Venda aprovada · ${amount}`,body:`${input.customer?.name||`Pedido ${input.externalId}`} · ${paidAt}`,tag:`sale:${order.id}`,url:'/'}).catch(error=>console.error('Push sale failed',error));
