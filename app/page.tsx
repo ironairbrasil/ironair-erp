@@ -276,9 +276,20 @@ export default function Home() {
   useEffect(() => {
     if (!sessionInfo || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
     setPushSupported(true);
-    navigator.serviceWorker.register('/sw.js').then(async registration => {
-      const subscription = await registration.pushManager.getSubscription();
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(async registration => {
+      await registration.update().catch(() => undefined);
+      let subscription = await registration.pushManager.getSubscription();
       if (!subscription) return;
+      const subscriptionVersion = '2';
+      if (Notification.permission === 'granted' && localStorage.getItem('ironair-push-subscription-version') !== subscriptionVersion) {
+        await apiJson('/api/push/subscription', { method: 'DELETE', body: JSON.stringify({ endpoint: subscription.endpoint }) }).catch(() => undefined);
+        await subscription.unsubscribe();
+        const config = await apiJson('/api/push/subscription');
+        if (!config.publicKey) throw new Error('Notificações ainda não configuradas no servidor.');
+        const key = Uint8Array.from(atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        localStorage.setItem('ironair-push-subscription-version', subscriptionVersion);
+      }
       await registerPushSubscription(subscription);
       setPushEnabled(true);
     }).catch(() => undefined);
@@ -465,6 +476,7 @@ export default function Home() {
         const key = Uint8Array.from(atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
         const subscription = existing || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
         await registerPushSubscription(subscription);
+        localStorage.setItem('ironair-push-subscription-version', '2');
         setPushEnabled(true);
         notify('Notificações ativadas neste aparelho.');
       }
