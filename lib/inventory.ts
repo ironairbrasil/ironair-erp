@@ -7,7 +7,7 @@ export async function moveStock(input:MoveStockInput){
  if(!Number.isInteger(input.quantity)||input.quantity===0) throw new Error('quantity must be a non-zero integer');
  const tenantId=input.tenantId||await getTenantId();
  const result=await db.$transaction(async tx=>{
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))`;
+  await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))) AS stock_lock`;
   if(input.idempotencyKey){const prior=await tx.inventoryMovement.findUnique({where:{tenantId_idempotencyKey:{tenantId,idempotencyKey:input.idempotencyKey}}});if(prior)return {movement:prior,alert:null}}
   const variant=await tx.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:input.sku}}});if(!variant)throw new Error(`Unknown SKU ${input.sku}`);
   const warehouse=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId,code:input.warehouseCode}}});if(!warehouse)throw new Error(`Unknown warehouse ${input.warehouseCode}`);
@@ -31,7 +31,7 @@ export async function moveStocks(inputs:MoveStockInput[]){
  return db.$transaction(async tx=>{
   const movements=[];
   for(const input of [...inputs].sort((a,b)=>`${a.sku}:${a.warehouseCode}`.localeCompare(`${b.sku}:${b.warehouseCode}`))){
-   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))`;
+   await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(hashtext(${`${tenantId}:${input.sku}:${input.warehouseCode}`}))) AS stock_lock`;
    if(input.idempotencyKey){const prior=await tx.inventoryMovement.findUnique({where:{tenantId_idempotencyKey:{tenantId,idempotencyKey:input.idempotencyKey}}});if(prior){movements.push(prior);continue}}
    const variant=await tx.productVariant.findUnique({where:{tenantId_sku:{tenantId,sku:input.sku}}});
    const warehouse=await tx.warehouse.findUnique({where:{tenantId_code:{tenantId,code:input.warehouseCode}}});
