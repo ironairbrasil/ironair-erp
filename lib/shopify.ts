@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { db } from './db';
 import { decryptSecret } from './crypto-secrets';
-import { ingestOrder, type IngestOrder } from './orders';
+import { ingestOrder, normalizeCustomerPhone, type IngestOrder } from './orders';
 import { getTenantId } from './tenant';
 import { findAsaasPaymentMethod } from './asaas';
 import { normalizePaymentMethod } from './payment-method';
@@ -128,7 +128,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
     taxAmount:num(o.total_tax ?? o.totalTaxSet?.shopMoney?.amount),
     paymentMethod:normalizePaymentMethod((o.payment_gateway_names||o.paymentGatewayNames||[]).join(', '))||undefined,
     paidAt:o.processed_at||o.processedAt||o.created_at||o.createdAt,
-    customer:{externalId:customer.id?canonicalShopifyId(customer.id):undefined,name:[customer.first_name||customer.firstName,customer.last_name||customer.lastName].filter(Boolean).join(' ')||address.name||undefined,city:address.city,state:address.province_code||address.province,zip:address.zip},
+    customer:{externalId:customer.id?canonicalShopifyId(customer.id):undefined,name:[customer.first_name||customer.firstName,customer.last_name||customer.lastName].filter(Boolean).join(' ')||address.name||undefined,phone:address.phone||customer.phone||customer.default_address?.phone||customer.defaultAddress?.phone||o.phone,city:address.city,state:address.province_code||address.province,zip:address.zip},
     items:lineItems(o),
     attribution:{
       utm_source:a.utm_source,utm_medium:a.utm_medium,utm_campaign:a.utm_campaign,utm_content:a.utm_content,utm_term:a.utm_term,
@@ -159,7 +159,7 @@ export async function finishWebhook(id:string,status:'PROCESSED'|'FAILED',error?
 export async function handleShopifyComplianceWebhook(topic:string, payload:any, tenantId:string){
   if(topic==='customers/redact'){
     const customerId=payload?.customer?.id ? `SHOPIFY:${payload.customer.id}` : undefined;
-    if(customerId) await db.customer.updateMany({where:{tenantId,sourceKey:customerId},data:{name:null,city:null,state:null,zip:null,externalId:null,emailHash:null,phoneHash:null}});
+    if(customerId) await db.customer.updateMany({where:{tenantId,sourceKey:customerId},data:{name:null,phone:null,city:null,state:null,zip:null,externalId:null,emailHash:null,phoneHash:null}});
   }
   if(topic==='shop/redact'){
     await db.integration.updateMany({where:{tenantId,provider:'Shopify'},data:{status:'DISCONNECTED',disconnectedAt:new Date(),accessTokenEncrypted:null,refreshTokenEncrypted:null,webhookSecretEncrypted:null}});
@@ -242,10 +242,29 @@ export async function syncShopifyOrders(days=90, tenantId?:string){
   const conn=await getShopifyConnection(tenantId);
   let cursor:string|null=null,count=0; const since=new Date(Date.now()-days*86400000).toISOString();
   do{
-    const data:any=await shopifyGraphQL(`query($after:String,$q:String!){orders(first:50,after:$after,query:$q,sortKey:CREATED_AT){pageInfo{hasNextPage endCursor}nodes{id name createdAt processedAt cancelledAt currencyCode displayFinancialStatus totalDiscountsSet{shopMoney{amount}} totalTaxSet{shopMoney{amount}} totalShippingPriceSet{shopMoney{amount}} currentTotalPriceSet{shopMoney{amount}} paymentGatewayNames customAttributes{key value} customer{id firstName lastName} shippingAddress{name city province provinceCode zip} lineItems(first:100){nodes{id name sku quantity originalUnitPriceSet{shopMoney{amount}}}}}}}`,{after:cursor,q:`created_at:>=${since}`},conn);
+    const data:any=await shopifyGraphQL(`query($after:String,$q:String!){orders(first:50,after:$after,query:$q,sortKey:CREATED_AT){pageInfo{hasNextPage endCursor}nodes{id name createdAt processedAt cancelledAt currencyCode displayFinancialStatus totalDiscountsSet{shopMoney{amount}} totalTaxSet{shopMoney{amount}} totalShippingPriceSet{shopMoney{amount}} currentTotalPriceSet{shopMoney{amount}} paymentGatewayNames customAttributes{key value} customer{id firstName lastName phone defaultAddress{phone}} shippingAddress{name phone city province provinceCode zip} billingAddress{name phone city province provinceCode zip} lineItems(first:100){nodes{id name sku quantity originalUnitPriceSet{shopMoney{amount}}}}}}}`,{after:cursor,q:`created_at:>=${since}`},conn);
     for(const o of data.orders.nodes){await processShopifyOrder(o,conn.tenantId);count++}
     cursor=data.orders.pageInfo.hasNextPage?data.orders.pageInfo.endCursor:null;
   }while(cursor);
   if(conn.integrationId) await db.integration.update({where:{id:conn.integrationId},data:{lastSyncAt:new Date(),lastError:null}});
   return count;
+}
+
+export async function backfillShopifyCustomerPhones(days=365, tenantId?:string){
+  const conn=await getShopifyConnection(tenantId);
+  let cursor:string|null=null,checked=0,updated=0; const since=new Date(Date.now()-days*86400000).toISOString();
+  do{
+    const data:any=await shopifyGraphQL(`query($after:String,$q:String!){orders(first:50,after:$after,query:$q,sortKey:CREATED_AT){pageInfo{hasNextPage endCursor}nodes{id customer{id phone defaultAddress{phone}} shippingAddress{phone} billingAddress{phone}}}}`,{after:cursor,q:`created_at:>=${since}`},conn);
+    for(const order of data.orders.nodes){
+      checked++;
+      const phone=normalizeCustomerPhone(order.shippingAddress?.phone||order.billingAddress?.phone||order.customer?.defaultAddress?.phone||order.customer?.phone);
+      if(!phone) continue;
+      const existing=await db.order.findUnique({where:{tenantId_channel_externalId:{tenantId:conn.tenantId,channel:'SHOPIFY',externalId:canonicalShopifyId(order.id)}},select:{customerId:true}});
+      if(!existing?.customerId) continue;
+      const result=await db.customer.updateMany({where:{id:existing.customerId,tenantId:conn.tenantId,phone:null},data:{phone,phoneHash:crypto.createHash('sha256').update(phone).digest('hex')}});
+      updated+=result.count;
+    }
+    cursor=data.orders.pageInfo.hasNextPage?data.orders.pageInfo.endCursor:null;
+  }while(cursor);
+  return {checked,updated};
 }

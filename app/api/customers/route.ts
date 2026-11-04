@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 import { auditLog, mergeManualOverrides } from '@/lib/audit';
+import { sha256 } from '@/lib/security';
+
+const normalizedPhone=(value:unknown)=>String(value||'').replace(/\D/g,'').replace(/^55(?=\d{10,11}$)/,'').slice(0,11);
 
 export async function GET(req:Request){
   try{
@@ -21,6 +24,7 @@ export async function GET(req:Request){
         state:c.state,
         zip:c.zip,
         externalId:c.externalId,
+        phone:c.phone,
         createdAt:c.createdAt,
         orders:c.orders.length,
         paidOrders:c.orders.filter(o=>o.status==='PAID').length,
@@ -41,15 +45,18 @@ export async function POST(req:Request){
   try{
     const tenantId=await getTenantId(req);
     const b=await req.json();
+    const phone=normalizedPhone(b.phone);
     const customer=await db.customer.create({data:{
       tenantId,
       sourceKey:b.sourceKey||undefined,
       externalId:b.externalId||undefined,
       name:b.name||undefined,
+      phone:phone||undefined,
+      phoneHash:phone?sha256(phone):undefined,
       city:b.city||undefined,
       state:b.state||undefined,
       zip:b.zip||undefined,
-      manualOverrides:mergeManualOverrides(null,['externalId','name','city','state','zip']) as any
+      manualOverrides:mergeManualOverrides(null,['externalId','name','phone','city','state','zip']) as any
     }});
     await auditLog({tenantId,entityType:'Customer',entityId:customer.id,action:'create_manual_customer',after:{externalId:b.externalId,name:b.name,city:b.city,state:b.state,zip:b.zip}});
     return NextResponse.json({ok:true,id:customer.id});
@@ -67,9 +74,10 @@ export async function PATCH(req:Request){
     if(!current) return NextResponse.json({ok:false,error:'cliente não encontrado'},{status:404});
     const data:Record<string,any>={};
     const fields:string[]=[];
-    for(const key of ['externalId','name','city','state','zip']){
-      if(Object.prototype.hasOwnProperty.call(b,key)){data[key]=b[key]||null;fields.push(key)}
+    for(const key of ['externalId','name','phone','city','state','zip']){
+      if(Object.prototype.hasOwnProperty.call(b,key)){data[key]=key==='phone'?(normalizedPhone(b[key])||null):(b[key]||null);fields.push(key)}
     }
+    if(Object.prototype.hasOwnProperty.call(b,'phone')) data.phoneHash=data.phone?sha256(data.phone):null;
     if(!Object.keys(data).length) return NextResponse.json({ok:false,error:'nenhum campo para atualizar'},{status:400});
     data.manualOverrides=mergeManualOverrides(current.manualOverrides,fields);
     await db.customer.update({where:{id:b.id},data});

@@ -323,6 +323,7 @@ model Customer {
   externalId      String?
   emailHash       String?
   phoneHash       String?
+  phone           String?
   name            String?
   city            String?
   state           String?

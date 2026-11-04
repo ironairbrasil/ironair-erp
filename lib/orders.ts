@@ -6,7 +6,13 @@ import type { Channel } from '@prisma/client';
 import { sendTenantPush } from './push';
 import { paidOrderStockDeltas } from './order-stock';
 import { shouldNotifyPaidOrder } from './order-notification';
-export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL';returnInfo?:{status:string;refundAmount?:number|null;observedAt?:string}};
+import { sha256 } from './security';
+export type IngestOrder={tenantId?:string;externalId:string;displayId?:string;channel:Channel;status:'PENDING'|'PAID'|'CANCELLED'|'REFUNDED'|'CHARGEBACK';currency?:string;grossAmount:number;discountAmount?:number;shippingAmount?:number;feeAmount?:number;taxAmount?:number;paymentMethod?:string|null;paidAt?:string;customer?:{externalId?:string;name?:string;emailHash?:string;phone?:string;phoneHash?:string;city?:string;state?:string;zip?:string};items:Array<{sku:string;name:string;quantity:number;unitPrice:number;unitCost?:number}>;attribution?:Record<string,any>;skipInventory?:boolean;warehouseCode?:string;fulfillmentOrigin?:'AMAZON_FBA'|'ML_FULL';returnInfo?:{status:string;refundAmount?:number|null;observedAt?:string}};
+export function normalizeCustomerPhone(value:unknown){
+ let digits=String(value||'').replace(/\D/g,'');
+ if(digits.startsWith('55')&&(digits.length===12||digits.length===13)) digits=digits.slice(2);
+ return /^\d{10,11}$/.test(digits)&&!/^0+$/.test(digits)?digits:'';
+}
 export function canonicalSku(sku:string){
  return String(sku||'').trim();
 }
@@ -16,6 +22,8 @@ function cleanCustomerUpdate(customer:NonNullable<IngestOrder['customer']>){
   const value=customer[key];
   if(typeof value==='string'&&value.trim()) data[key]=value.trim();
  }
+ const phone=normalizeCustomerPhone(customer.phone);
+ if(phone){data.phone=phone;data.phoneHash=sha256(phone)}
  return data;
 }
 function overrideFields(value:unknown){

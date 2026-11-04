@@ -1,6 +1,7 @@
 import { db } from './db';
 import { decryptSecret, encryptSecret } from './crypto-secrets';
-import { ingestOrder, type IngestOrder } from './orders';
+import { ingestOrder, normalizeCustomerPhone, type IngestOrder } from './orders';
+import { sha256 } from './security';
 import { normalizePaymentMethod } from './payment-method';
 import { getTenantId } from './tenant';
 
@@ -422,6 +423,7 @@ async function mapAmazonOrder(order: any, tenantId: string): Promise<IngestOrder
     customer: {
       externalId: orderId,
       name: firstOf(buyer?.buyerName, buyer?.name, buyerInfo?.BuyerName, deliveryAddress?.name, restrictedAddress?.Name, order.BuyerInfo?.BuyerName, order.ShippingAddress?.Name, 'Cliente Amazon'),
+      phone: firstOf(deliveryAddress?.phoneNumber, deliveryAddress?.phone, restrictedAddress?.Phone, restrictedAddress?.PhoneNumber, order.ShippingAddress?.Phone, order.ShippingAddress?.PhoneNumber),
       city: firstOf(deliveryAddress?.city, restrictedAddress?.City, order.ShippingAddress?.City),
       state: firstOf(deliveryAddress?.stateOrRegion, deliveryAddress?.state, restrictedAddress?.StateOrRegion, order.ShippingAddress?.StateOrRegion),
       zip: firstOf(deliveryAddress?.postalCode, restrictedAddress?.PostalCode, order.ShippingAddress?.PostalCode)
@@ -510,6 +512,29 @@ export async function syncAmazonOrders(days = 365, tenantId?: string){
   }while(nextToken && count < 1000);
   await db.integration.update({ where: { id: conn.integrationId }, data: { lastSyncAt: new Date(), lastError: null } });
   return count;
+}
+
+export async function backfillAmazonCustomerPhones(tenantId?:string){
+  const conn=await getAmazonConnection(tenantId);
+  const orders=await db.order.findMany({where:{tenantId:conn.tenantId,channel:'AMAZON',customerId:{not:null}},select:{externalId:true,customerId:true}});
+  let checked=0,available=0,updated=0;
+  for(const order of orders){
+    checked++;
+    try{
+      const modern=await amazonOrderV2026(order.externalId,conn.tenantId);
+      const deliveryAddress=modern?.recipient?.deliveryAddress||{};
+      const addressPath=`/orders/v0/orders/${encodeURIComponent(order.externalId)}/address`;
+      const restrictedToken=await amazonRestrictedDataToken(addressPath,'GET',conn.tenantId);
+      const addressPayload:any=await amazonRequest(addressPath,{accessToken:restrictedToken},conn.tenantId);
+      const address=payloadOf(addressPayload)?.ShippingAddress||{};
+      const phone=normalizeCustomerPhone(deliveryAddress?.phoneNumber||deliveryAddress?.phone||address?.Phone||address?.PhoneNumber);
+      if(!phone||!order.customerId) continue;
+      available++;
+      const result=await db.customer.updateMany({where:{id:order.customerId,tenantId:conn.tenantId,phone:null},data:{phone,phoneHash:sha256(phone)}});
+      updated+=result.count;
+    }catch{}
+  }
+  return {checked,available,updated};
 }
 
 export async function amazonStatus(tenantId?: string){
