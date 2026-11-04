@@ -74,7 +74,11 @@ export async function syncMetaAds(days = 30, tenantId: string) {
         })), skipDuplicates: true });
       }
     }, { timeout: 120000 });
-    const ids = [...new Set(rows.flatMap((row) => [row.campaign_id, row.adset_id, row.ad_id]))];
+    const knownEntities = await db.adSpendDaily.findMany({
+      where: { tenantId, platform: 'Meta', accountId: account },
+      select: { campaignId: true, adsetId: true, adId: true },
+    });
+    const ids = [...new Set(knownEntities.flatMap((row) => [row.campaignId, row.adsetId, row.adId]).filter((id): id is string => Boolean(id)))];
     const entityStatuses: Record<string, string> = {};
     try {
       for (let i = 0; i < ids.length; i += 50) {

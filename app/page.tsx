@@ -106,6 +106,28 @@ function TableColumnAlignment() {
   }, []);
   return null;
 }
+function FilterOutsideDismiss() {
+  useEffect(() => {
+    const selector = ".filterTrigger[aria-expanded='true'],.salesPeriodTrigger[aria-expanded='true'],.trackingPeriodTrigger[aria-expanded='true'],.adDateTrigger[aria-expanded='true']";
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node;
+      document.querySelectorAll<HTMLButtonElement>(selector).forEach((trigger) => {
+        const boundary = trigger.closest(".exportMenu,.salesPeriodControl,.trackingPeriodControl,.adDateFilter") || trigger.parentElement;
+        if (!boundary?.contains(target)) trigger.click();
+      });
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") document.querySelectorAll<HTMLButtonElement>(selector).forEach((trigger) => trigger.click());
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, []);
+  return null;
+}
 const maskDashboardNumbers = (value: string) => value.replace(/(?:R\$\s*)?\d+(?:[.,]\d+)*(?:%|x)?/g, "—");
 const formatBrazilPhone = (value: unknown) => {
   const digits = String(value || "").replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
@@ -603,7 +625,7 @@ export default function Home() {
       orders: { url: "/api/orders", fallback: [], apply: (data) => { setOrderRows(data || []); setSales(formatOrders(data)); } },
       inventory: { url: "/api/inventory", fallback: { balances: [], movements: [], folders: [] }, apply: (data) => { setInventoryRows(data.balances || []); setInventoryMovementRows(data.movements || []); setInventoryFolders(data.folders || []); setProducts(formatInventory(data.balances || [], data.movements || [])); setMovements(formatMovements(data.movements || [], data.balances || [], data.folders || [])); } },
       customers: { url: "/api/customers", fallback: [], apply: (data) => setCustomers(data || []) },
-      campaigns: { url: "/api/campaigns?hierarchy=1", fallback: { campaigns: [], adsets: [], ads: [] }, apply: (data) => { setCampaigns(formatCampaigns(data.campaigns || [], "campaign")); setAdsets(formatCampaigns(data.adsets || [], "adset")); setAds(formatCampaigns(data.ads || [], "ad")); } },
+      campaigns: { url: "/api/campaigns?hierarchy=1&fresh=1", fallback: { campaigns: [], adsets: [], ads: [] }, apply: (data) => { setCampaigns(formatCampaigns(data.campaigns || [], "campaign")); setAdsets(formatCampaigns(data.adsets || [], "adset")); setAds(formatCampaigns(data.ads || [], "ad")); } },
       products: { url: "/api/products", fallback: [], apply: (data) => setCatalogRows(data || []) },
       expenses: { url: "/api/expenses", fallback: [], apply: (data) => setExpenseRows(data || []) },
       returns: { url: "/api/returns", fallback: [], apply: (data) => setReturnRows(data || []) },
@@ -620,7 +642,7 @@ export default function Home() {
       "Despesas": ["expenses"],
       "Nota Fiscal Eletrônica (NF-e)": [],
       "Etiquetas": [],
-      "Campanhas": [],
+      "Campanhas": ["campaigns"],
       "Criativos": ["campaigns"],
       "Financeiro": ["expenses"],
       "Eventos": [],
@@ -844,6 +866,7 @@ export default function Home() {
   return (
     <main className={`shell theme-${theme}`}>
       <TableColumnAlignment />
+      <FilterOutsideDismiss />
       {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <aside className={`sidebar ${mobileMenuOpen ? "mobileOpen" : ""}`} id="main-navigation">
         <div className="brand">

@@ -2,9 +2,16 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getTenantId } from '@/lib/tenant';
 import { adDateRange } from '@/lib/ad-date-range';
+import { syncMetaAds } from '@/lib/meta-ads';
 
 export async function GET(req:Request){
   const tenantId=await getTenantId(req);
+  const url=new URL(req.url);
+  if(url.searchParams.get('fresh')==='1'){
+    const integration=await db.integration.findUnique({where:{tenantId_provider:{tenantId,provider:'Meta Ads'}},select:{lastSyncAt:true,status:true}});
+    const stale=!integration?.lastSyncAt||Date.now()-integration.lastSyncAt.getTime()>2*60_000;
+    if(stale&&integration&&['CONNECTED','ERROR'].includes(integration.status)) await syncMetaAds(3,tenantId).catch(()=>undefined);
+  }
   const dateRange=adDateRange(req);
   const rows=await db.adSpendDaily.findMany({where:{tenantId},select:{date:true,platform:true,accountId:true,campaignId:true,campaignName:true,adsetId:true,adsetName:true,adId:true,adName:true,spend:true,clicks:true,impressions:true}});
   const [attrs,metaIntegration]=await Promise.all([db.attribution.findMany({where:{tenantId,...(dateRange?{order:{status:'PAID' as const,paidAt:{gte:new Date(`${dateRange.from}T00:00:00.000-03:00`),lte:new Date(`${dateRange.to}T23:59:59.999-03:00`)}}}:{})},include:{order:true}}),db.integration.findUnique({where:{tenantId_provider:{tenantId,provider:'Meta Ads'}},select:{metadata:true}})]);
@@ -35,7 +42,7 @@ export async function GET(req:Request){
     return [...grouped.values()].map(item=>({...item,status:statuses[level==='campaign'?item.campaignId:level==='adset'?item.adsetId||'':item.adId||'']||null,cpa:item.sales?item.spend/item.sales:null,roas:item.spend?item.revenue/item.spend:null}));
   };
   const campaigns=totals('campaign');
-  if(new URL(req.url).searchParams.get('hierarchy')==='1')return NextResponse.json({campaigns,adsets:totals('adset'),ads:totals('ad')});
+  if(url.searchParams.get('hierarchy')==='1')return NextResponse.json({campaigns,adsets:totals('adset'),ads:totals('ad')});
   return NextResponse.json(campaigns);
 }
 
