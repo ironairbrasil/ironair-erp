@@ -408,3 +408,11 @@ nav button,.filters button,.ghost,.iconBtn,.primary,.tabs button{font-size:13px}
 @media(max-width:650px){.sidebar.mobileOpen nav .navGroupLabel{justify-content:flex-start}.sidebar.mobileOpen nav .navGroupLabel span{display:inline}.sidebar.mobileOpen nav .navGroup .navSubItem{justify-content:flex-start;padding-left:34px}}
 .sidebar nav .navGroup .navSubItem,.sidebar.mobileOpen nav .navGroup .navSubItem{padding:11px 12px 11px 34px}
 .sidebar nav button.navSubItem svg.invoiceNavIcon{width:22px;height:22px;margin-left:-2px;margin-right:-2px}
+.shell{grid-template-columns:230px minmax(0,1fr)}
+.content,.trackingView,.trackingKpis>article,.trackingFunnel>.card{min-width:0}
+.trackingKpis{grid-template-columns:repeat(6,minmax(0,1fr))}
+.trackingFunnel{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.trackingCode{width:100%;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:1050px){.shell{grid-template-columns:78px minmax(0,1fr)}}
+@media(max-width:1100px){.trackingKpis{grid-template-columns:repeat(3,minmax(0,1fr))}.trackingFunnel{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:700px){.trackingKpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
