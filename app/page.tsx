@@ -1,8 +1,9 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import TableScroll from "@/components/table-scroll";
 import { Activity, BarChart3, Bell, Boxes, CircleDollarSign, LayoutDashboard, LogOut, Megaphone, MousePointerClick, PackageCheck, PlugZap, Radar, Settings, ShoppingCart, Tag, TrendingUp, Users, Video, WalletCards, Search, Download, Plus, RefreshCw, X, Menu, Save, Link2, Copy, CheckCircle2, PackagePlus, Pencil, Eye, EyeOff, Trash2, Upload, Filter, MoreHorizontal, Sun, Moon, ChevronDown, ChevronUp, CalendarDays, GripVertical, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ReceiptText } from "lucide-react";
-import PerformanceView from "./performance-view";
+import PerformanceView, { PlatformKpiLabel } from "./performance-view";
 import SalesChart, { ChartStyleToggle, type SalesChartMode } from "./sales-chart";
 import { campaigns as seedCampaigns, channels, inventory as seedInventory, movements as seedMovements, sales as seedSales } from "@/lib/mock";
 import { normalizePaymentMethod } from "@/lib/payment-method";
@@ -56,56 +57,6 @@ const brazilStateCode = (value: unknown) => {
 const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
 const integrationCategory = (name: string) => /ads|meta|pixel|tiktok/i.test(name) ? "ADS" : /shopify|mercado livre|amazon|shopee|kiwify/i.test(name) ? "Plataforma de vendas" : /banco|bank|nubank|inter|itaú|bradesco|santander|mercado pago|asaas/i.test(name) ? "Banco" : "Outros";
 const salesAndStockOptions = (connected: Set<string>) => ["Manual", ...(connected.has("Shopify") ? ["Shopify"] : []), ...(connected.has("Mercado Livre") ? ["Mercado Livre", "Mercado Livre Full"] : []), ...(connected.has("Amazon") ? ["Amazon", "Amazon FBA"] : []), ...(connected.has("Shopee") ? ["Shopee"] : [])];
-function TableColumnAlignment() {
-  useEffect(() => {
-    let frame = 0;
-    const align = () => {
-      document.querySelectorAll<HTMLTableElement>(".tableWrap table").forEach((table) => {
-        const columns = new Map<number, Array<{ cell: HTMLTableCellElement; rail: HTMLElement }>>();
-        Array.from(table.rows).forEach((row) => {
-          let column = 0;
-          Array.from(row.cells).forEach((cell) => {
-            const span = cell.colSpan || 1;
-            const rail = cell.querySelector<HTMLElement>(":scope > .tableCellRail");
-            if (cell.tagName === "TD" && span === 1 && rail && !cell.classList.contains("checkCol")) {
-              const entries = columns.get(column) || [];
-              entries.push({ cell, rail });
-              columns.set(column, entries);
-            }
-            column += span;
-          });
-        });
-        columns.forEach((entries) => {
-          entries.forEach(({ rail }) => {
-            rail.style.width = "max-content";
-            rail.style.maxWidth = "none";
-          });
-          const naturalWidth = Math.max(...entries.map(({ rail }) => Math.ceil(rail.scrollWidth)));
-          entries.forEach(({ cell, rail }) => {
-            const style = getComputedStyle(cell);
-            const available = Math.max(0, cell.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
-            rail.style.width = `${Math.min(naturalWidth, available)}px`;
-            rail.style.maxWidth = "100%";
-          });
-        });
-      });
-    };
-    const schedule = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(align);
-    };
-    const observer = new MutationObserver(schedule);
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    window.addEventListener("resize", schedule);
-    schedule();
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      window.removeEventListener("resize", schedule);
-    };
-  }, []);
-  return null;
-}
 function FilterOutsideDismiss() {
   useEffect(() => {
     const selector = ".filterTrigger[aria-expanded='true'],.salesPeriodTrigger[aria-expanded='true'],.trackingPeriodTrigger[aria-expanded='true'],.adDateTrigger[aria-expanded='true']";
@@ -144,9 +95,11 @@ const dashboardWidthsStorageKey = "ironair-dashboard-widths-v1";
 const dashboardLayoutDirtyKey = "ironair-dashboard-layout-pending-v1";
 const activeViewStorageKey = "ironair-active-view-v1";
 const apiJson = async (url: string, init?: RequestInit) => {
+  const headers = new Headers(init?.headers);
+  if (init?.body != null && !headers.has("content-type")) headers.set("content-type", "application/json");
   const r = await fetch(url, {
     ...init,
-    headers: { "content-type": "application/json", ...(init?.headers || {}) },
+    headers,
     cache: "no-store",
   });
   const j = await r.json().catch(() => ({}));
@@ -520,7 +473,7 @@ export default function Home() {
     .sort((a, b) => new Date(b.paidAt || b.createdAt).getTime() - new Date(a.paidAt || a.createdAt).getTime());
   const title = view === "Visão Geral" ? "Dashboard Geral" : view;
   const dashboardCards = dashboardKpis(dashboard);
-  const performanceCatalogOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "Faturamento Meta", "Faturamento Google", "Faturamento TikTok", "Faturamento Ads", "TACOS", "MPA", "ROAS total"];
+  const performanceCatalogOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Faturamento Shopify", "Margem líquida", "Estoque", "Lucro bruto Shopify", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "Faturamento Meta", "Faturamento Google", "Faturamento TikTok", "Faturamento Ads", "TACOS", "MPA", "ROAS total"];
   const performanceCatalogCards = [
     ...dashboardCards.map((card: any, index: number) => ({ id: `kpi-${index}`, label: card.label, description: card.delta, value: card.value, kind: "Performance", source: "performance" })),
     { id: "performance-margin", label: "Margem líquida", description: "Resultado líquido ÷ faturamento", value: `${(Number(dashboard?.margin || 0) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`, kind: "Performance", source: "performance" },
@@ -865,7 +818,6 @@ export default function Home() {
   const accountInitials = accountName.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join("");
   return (
     <main className={`shell theme-${theme}`}>
-      <TableColumnAlignment />
       <FilterOutsideDismiss />
       {mobileMenuOpen && <button className="mobileMenuBackdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <aside className={`sidebar ${mobileMenuOpen ? "mobileOpen" : ""}`} id="main-navigation">
@@ -965,7 +917,7 @@ export default function Home() {
                       <div className="dashboardExtraCardsInner">
                         {dashboardKpiIds.slice(8).map((id) => {
                           const extra = dashboardCardMap.get(id)!;
-                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><span>{extra.label}</span><strong className={!dashboardHidden && isNegativeDisplay(extra.value) ? "negative" : extra.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.description) : extra.description}</small></article></div>;
+                          return <div key={id} className="dashboardLayoutItem dashboardKpiItem"><article className="card kpi"><PlatformKpiLabel label={extra.label} /><strong className={!dashboardHidden && isNegativeDisplay(extra.value) ? "negative" : extra.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : extra.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(extra.description) : extra.description}</small></article></div>;
                         })}
                       </div>
                     </div>
@@ -988,7 +940,7 @@ export default function Home() {
                     <button type="button" disabled={index === dashboardLayout.length - 1} onClick={() => moveDashboardBlock(blockId, dashboardLayout[Math.min(dashboardLayout.length - 1, index + dashboardRowStep())])} aria-label={`Mover ${kpi?.label || blockId} para baixo`}><ArrowDown size={16} /></button>
                     <button type="button" className="dashboardRemoveBlock" onClick={() => setDashboardLayout((current) => current.filter((id) => id !== blockId))} aria-label={`Remover ${kpi?.label || blockId} do Dashboard`} title="Remover do Dashboard"><Trash2 size={16} /></button>
                   </div>}
-                  {kpi ? <article className="card kpi"><span>{kpi.label}</span><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.description) : kpi.description}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "inventory" ? <Inventory products={periodInventoryProducts} folders={inventoryFolders} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} /> : blockId === "channels" || blockId === "performance-channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} title={blockId === "performance-channels" ? "Resultado por canal" : "Performance por canal"} /> : <DashboardPerformancePanel id={blockId} data={dashboard} campaigns={campaigns} hidden={dashboardHidden} />}
+                  {kpi ? <article className="card kpi"><PlatformKpiLabel label={kpi.label} /><strong className={!dashboardHidden && isNegativeDisplay(kpi.value) ? "negative" : kpi.label === "Lucro líquido" && !dashboardHidden ? "dashboardProfitPositive" : undefined}>{dashboardHidden ? "—" : kpi.value}</strong><small>{dashboardHidden ? maskDashboardNumbers(kpi.description) : kpi.description}</small></article> : blockId === "timeline" ? <article className="card chartCard"><div className="sectionHead"><div><h2>Vendas no tempo</h2><p>{period === "Personalizado" ? `${range.from} → ${range.to}` : period}</p></div><ChartStyleToggle mode={dashboardChartMode} onChange={setDashboardChartMode} /></div><SalesTimeline rows={dashboard?.daily || []} period={period} range={range} firstSaleDate={allTimeStart} hidden={dashboardHidden} mode={dashboardChartMode} /></article> : blockId === "alerts" ? <article className="card pad"><div className="sectionHead"><div><h2>Alertas da operação</h2><p>Estoque de atenção · atualização automática</p></div><span className="badge">{dashboardHidden ? "—" : stockAlerts.length}</span></div><div className="alerts">{stockAlerts.length ? stockAlerts.map((a, i) => <div className="alert" key={a}><span>{dashboardHidden ? "—" : i + 1}</span><p>{dashboardHidden ? maskDashboardNumbers(a) : a}</p></div>) : <p className="muted">Nenhum alerta de estoque.</p>}</div></article> : blockId === "inventory" ? <Inventory products={periodInventoryProducts} folders={inventoryFolders} salesPeriod={period} onEdit={(p: any) => open("product", p)} hidden={dashboardHidden} showShopee={connectedProviders.has("Shopee")} /> : blockId === "channels" || blockId === "performance-channels" ? <ChannelTable rows={channelRows} hidden={dashboardHidden} title={blockId === "performance-channels" ? "Resultado por canal" : "Performance por canal"} /> : <DashboardPerformancePanel id={blockId} data={dashboard} campaigns={campaigns} hidden={dashboardHidden} />}
                   {dashboardEditing && <button type="button" className="dashboardResizeHandle" data-width={`${(dashboardWidths[blockId] || (kpi ? 1 : blockId === "timeline" || blockId === "alerts" ? 2 : 4)) * 25}%`} aria-label={`Redimensionar ${kpi?.label || blockId}`} title="Arraste para alterar a largura" onPointerDown={(event) => startDashboardResize(event, blockId)}><span /></button>}
                 </div>}
                 </Fragment>;
@@ -1417,8 +1369,22 @@ function dashboardKpis(d: any) {
   const adCogs = Number(d?.adCogs || 0);
   const cogs = Number(d?.cogs || 0);
   const media = Number(d?.media || 0);
-  const marketplaceNet = Number(d?.salesProfit ?? (revenue - Number(d?.fees || 0)));
-  const grossProfitAfterAds = marketplaceNet - media - cogs;
+  const marketplaceNet = Array.isArray(d?.channels)
+    ? d.channels
+        .filter((channel: any) => ['MERCADO_LIVRE', 'AMAZON'].includes(String(channel.name || '').toUpperCase()))
+        .reduce((total: number, channel: any) => total + Number(channel.salesProfit || 0), 0)
+    : Number(d?.salesProfit ?? (revenue - Number(d?.fees || 0)));
+  const shopifyRevenue = Array.isArray(d?.channels)
+    ? d.channels
+        .filter((channel: any) => String(channel.name || '').toUpperCase() === 'SHOPIFY')
+        .reduce((total: number, channel: any) => total + Number(channel.revenue || 0), 0)
+    : 0;
+  const shopifyGrossProfit = Array.isArray(d?.channels)
+    ? d.channels
+        .filter((channel: any) => String(channel.name || '').toUpperCase() === 'SHOPIFY')
+        .reduce((total: number, channel: any) => total + Number(channel.salesProfit || 0), 0) - media
+    : 0;
+  const grossProfitAfterAds = marketplaceNet + shopifyRevenue - media - cogs;
   const investment = cogs + Number(d?.fees || 0) + media + Number(d?.expenses || 0);
   const ratio = (value: number) => String(Number(value.toFixed(2)));
   const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
@@ -1426,7 +1392,7 @@ function dashboardKpis(d: any) {
     {
       label: "Faturamento",
       value: money(d?.revenue || 0),
-      delta: `${d?.orders || 0} pedidos pagos`,
+      delta: "Vendas − taxas e fretes",
     },
     {
       label: "Pedidos pagos",
@@ -1436,11 +1402,11 @@ function dashboardKpis(d: any) {
     {
       label: "Líq. do Marketplace",
       value: money(marketplaceNet),
-      delta: "Faturamento − taxas e frete",
+      delta: "Mercado Livre + Amazon − taxas e fretes ML/Amazon",
     },
     {
       label: "Lucro líquido",
-      value: money(d?.profit ?? (grossProfitAfterAds - Number(d?.expenses || 0))),
+      value: money(d?.profit ?? (marketplaceNet - media - cogs - Number(d?.expenses || 0))),
       delta: "Lucro bruto − despesas",
     },
     {
@@ -1449,14 +1415,14 @@ function dashboardKpis(d: any) {
       delta: "Plataforma / logística",
     },
     {
-      label: "Custo dos produtos",
-      value: money(d?.cogs || 0),
-      delta: "Custo unitário × quantidade vendida",
+      label: "Faturamento Shopify",
+      value: money(shopifyRevenue),
+      delta: "Vendas pagas na Shopify",
     },
     {
-      label: "Ticket médio",
-      value: money(d?.ticket || 0),
-      delta: "Receita / pedidos",
+      label: "Lucro bruto Shopify",
+      value: money(shopifyGrossProfit),
+      delta: "Faturamento Shopify − taxas − fretes − Ads",
     },
     {
       label: "Estoque",
@@ -1496,7 +1462,7 @@ function dashboardKpis(d: any) {
     {
       label: "Lucro bruto",
       value: money(grossProfitAfterAds),
-      delta: "Líq. do marketplace − anúncios − produtos",
+      delta: "Líq. marketplace + Shopify − anúncios − produtos",
     },
     {
       label: "ROAS total",
@@ -1578,8 +1544,8 @@ function DashboardPerformancePanel({ id, data, campaigns, hidden }: { id: string
 
 function DashboardCatalogPreview({ card, hidden }: { card: { id: string; label: string; description: string; value: string | number }; hidden: boolean }) {
   const value = hidden ? "—" : card.value;
-  const isKpi = card.id.startsWith("kpi-") || ["performance-margin", "performance-meta-ads", "performance-google-ads", "performance-tiktok-ads"].includes(card.id);
-  if (isKpi) return <article className="card kpi dashboardCatalogReplica"><span>{card.label}</span><strong className={isNegativeDisplay(card.value) ? "negative" : undefined}>{value}</strong><small>{card.description}</small></article>;
+  const isKpi = card.id.startsWith("kpi-") || ["performance-margin", "performance-meta-ads", "performance-google-ads", "performance-tiktok-ads", ...adRevenueCardIds].includes(card.id);
+  if (isKpi) return <article className="card kpi dashboardCatalogReplica"><PlatformKpiLabel label={card.label} /><strong className={isNegativeDisplay(card.value) ? "negative" : undefined}>{value}</strong><small>{card.description}</small></article>;
   if (card.id === "timeline") return <article className="card chartCard dashboardCatalogReplica catalogTimeline"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><svg viewBox="0 0 220 54" preserveAspectRatio="none" aria-hidden="true"><path d="M2 43 C24 40 27 17 49 24 S75 51 95 31 S123 8 140 28 S174 45 218 13" /></svg></article>;
   if (card.id === "alerts") return <article className="card pad dashboardCatalogReplica"><div className="sectionHead"><div><h2>{card.label}</h2><p>Estoque de atenção</p></div><span className="badge">3</span></div><div className="alerts">{[1, 2, 3].map((number) => <div className="alert" key={number}><span>{number}</span><p>Produto com estoque de atenção.</p></div>)}</div></article>;
   if (card.id === "inventory" || card.id === "performance-campaigns") return <article className="card dashboardCatalogReplica catalogReplicaTable"><div className="sectionHead"><div><h2>{card.label}</h2><p>{card.description}</p></div></div><table><thead><tr><th>{card.id === "inventory" ? "Produto" : "Campanha"}</th><th>{card.id === "inventory" ? "SKU" : "Investimento"}</th><th>{card.id === "inventory" ? "Disponível" : "ROAS"}</th></tr></thead><tbody><tr><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td></tr><tr><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td></tr></tbody></table></article>;
@@ -1840,7 +1806,7 @@ function ChannelTable({ rows, hidden = false, title = "Performance por canal" }:
           <p>Receita e lucro de venda consolidado</p>
         </div>
       </div>
-      <div className="tableWrap">
+      <TableScroll>
         <table className="channelTable">
           <thead>
             <tr>
@@ -1869,7 +1835,7 @@ function ChannelTable({ rows, hidden = false, title = "Performance por canal" }:
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
     </article>
   );
 }
@@ -1975,7 +1941,7 @@ function Inventory({ products, folders = [], onRefresh, onEdit, onDeleteMany, bu
               <th>Envio FBA</th>
               <th>Envio Full</th>
               <th>Status</th>
-              <th></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>{voltageFolders.map(([folder,items])=>{if(folder==='Sem pasta')return <Fragment key={folder}>{items.map(productRow)}</Fragment>;const open=openVoltageFolders.has(folder);const sales=folderMetric(folder,items,"shopify")+folderMetric(folder,items,"ml")+folderMetric(folder,items,"amazon")+folderMetric(folder,items,"shopee")+folderMetric(folder,items,"manual");return <Fragment key={folder}><tr className="inventoryFolderRow" onClick={()=>toggleVoltageFolder(folder)}>{bulkEnabled&&selecting&&<td/>}<td><div className="tableCellRail"><button type="button" className="inventoryFolderButton">{open?<ChevronUp size={16}/>:<ChevronDown size={16}/>}<span><b>{folder}</b><small>{items.length} {items.length===1?"produto":"produtos"}</small></span></button></div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">{folder}</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail"><b>{hidden?"—":folderStock(folder,items,"physical")}</b></div></td><td><div className="tableCellRail">{hidden?"—":folderStock(folder,items,"available")}</div></td><td><div className="tableCellRail">{hidden?"—":folderMetric(folder,items,"shopify")}</div></td><td><div className="tableCellRail">{hidden?"—":folderMetric(folder,items,"ml")}</div></td><td><div className="tableCellRail">{hidden?"—":folderMetric(folder,items,"amazon")}</div></td>{showShopee&&<td><div className="tableCellRail">{hidden?"—":folderMetric(folder,items,"shopee")}</div></td>}<td><div className="tableCellRail"><b>{hidden?"—":sales}</b></div></td><td><div className="tableCellRail">{hidden?"—":folderTotal(items,"fbaQty")}</div></td><td><div className="tableCellRail">{hidden?"—":folderTotal(items,"fullQty")}</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail"></div></td></tr>{open&&items.map(productRow)}</Fragment>})}</tbody>
@@ -2075,7 +2041,7 @@ function Products({ products, orders = [], onNew, onEdit, onDelete, onDeleteMany
     }catch(error:any){setSystemNotice({title:'Não foi possível sincronizar',message:error.message||'Não foi possível importar os produtos.'});}finally{setImporting(false);}
   };
   return (
-    <article className="card tableCard">
+    <article className="card tableCard productCatalogCard">
       <div className="sectionHead">
         <div>
           <h2>Catálogo de produtos</h2>
@@ -2088,16 +2054,16 @@ function Products({ products, orders = [], onNew, onEdit, onDelete, onDeleteMany
         <label className="catalogSearch"><Search size={15} /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Pesquisar produto ou SKU..." /></label>
         <div className="catalogPageSize">Itens por página <AnchoredSelect value={String(pageSize)} onChange={(v) => { setPageSize(Number(v)); setPage(1); }} options={["10", "25", "50"]} compact /></div>
       </div>
-      <div className="tableWrap">
+      <TableScroll>
         <table className="catalogTable">
-          <colgroup>{selecting&&<col style={{width:42}}/>}<col style={{width:64}}/><col style={{width:420}}/><col style={{width:360}}/><col style={{width:180}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:160}}/><col style={{width:112}}/></colgroup>
-          <thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={visible.some((item:any)=>!item.isParent) && visible.filter((item:any)=>!item.isParent).every((item: any) => selected.has(String(item.sku)))} onChange={() => {const variants=visible.filter((item:any)=>!item.isParent);setSelected(variants.every((item:any)=>selected.has(String(item.sku)))?new Set():new Set(variants.map((item:any)=>String(item.sku))))}} aria-label="Selecionar todos os produtos exibidos" /></th>}<th></th><th>Nome</th><th>SKU</th><th className="salesOriginCell">Origem</th><th>Preço</th><th>Custo</th><th className="catalogMetricHeader">Unidades vendidas</th><th className="catalogMetricHeader">Total faturado</th><th>Taxas</th><th>Frete</th><th className="catalogMargin">Margem</th><th aria-label="Ações"></th></tr></thead>
-          <tbody>{visible.map((p: any) => p.isParent?<tr key={p.sku} className="catalogParentRow" onClick={()=>setOpenParents(current=>{const next=new Set(current);next.has(p.parentKey)?next.delete(p.parentKey):next.add(p.parentKey);return next})}>{selecting&&<td/>}<td><div className="tableCellRail"><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span></div></td><td><div className="tableCellRail"><button type="button" className="catalogParentButton">{openParents.has(p.parentKey)||normalizedProductQuery?<ChevronUp size={16}/>:<ChevronDown size={16}/>}<span><b>{p.product}</b><small>{p.variantCount} variações</small></span></button></div></td><td><div className="tableCellRail"><b>{p.parentSku||'—'}</b></div></td><td className="salesOriginCell"><div className="tableCellRail"><span className="salesOrigin catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment||(p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">{productMetrics(p).units}</div></td><td><div className="tableCellRail">{money(productMetrics(p).revenue)}</div></td><td className={productMetrics(p).fees ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</div></td><td className={productMetrics(p).shipping ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</div></td><td><div className="tableCellRail">{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</div></td><td/></tr>:<tr key={p.sku} className={`${p.parentKey?'catalogVariationRow ':''}${selected.has(String(p.sku)) ? "mobileSelectedRow" : ''}`} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(p.sku)); else onEdit(editable(p)); } }}>
-            {selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><div className="tableCellRail"><input type="checkbox" checked={selected.has(String(p.sku))} onChange={() => toggleSelected(String(p.sku))} aria-label={`Selecionar ${p.product}`} /></div></td>}<td><div className="tableCellRail"><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span></div></td><td className="catalogProductName" title={p.product}><div className="tableCellRail">{p.externalUrl?<a href={p.externalUrl} target="_blank" rel="noreferrer" onClick={(event)=>event.stopPropagation()}>{p.product}</a>:p.product}</div></td><td><div className="tableCellRail"><b>{p.sku}</b></div></td><td className="salesOriginCell"><div className="tableCellRail"><span className="salesOrigin catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment|| (p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></div></td><td><div className="tableCellRail">{money(Number(p.salePrice || 0))}</div></td><td><div className="tableCellRail">{money(Number(p.unitCost || 0))}</div></td><td><div className="tableCellRail">{productMetrics(p).units}</div></td><td><div className="tableCellRail">{money(productMetrics(p).revenue)}</div></td><td className={productMetrics(p).fees ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</div></td><td className={productMetrics(p).shipping ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</div></td><td className="catalogMargin"><div className="tableCellRail">{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</div></td>
-            <td><div className="tableCellRail"><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={(event) => { event.stopPropagation(); onEdit(editable(p)); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={(event) => { event.stopPropagation(); onDelete(p); }}><Trash2 size={15} /></button></div></div></td>
+          <colgroup>{selecting&&<col style={{width:42}}/>}{[340,220,160,110,100,130,130,110,110,90,104].map((width,index)=><col key={index} style={{width}}/>)}</colgroup>
+          <thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={visible.some((item:any)=>!item.isParent) && visible.filter((item:any)=>!item.isParent).every((item: any) => selected.has(String(item.sku)))} onChange={() => {const variants=visible.filter((item:any)=>!item.isParent);setSelected(variants.every((item:any)=>selected.has(String(item.sku)))?new Set():new Set(variants.map((item:any)=>String(item.sku))))}} aria-label="Selecionar todos os produtos exibidos" /></th>}<th>Nome</th><th>SKU</th><th className="salesOriginCell">Origem</th><th>Preço</th><th>Custo</th><th className="catalogMetricHeader">Unidades vendidas</th><th className="catalogMetricHeader">Total faturado</th><th>Taxas</th><th>Frete</th><th className="catalogMargin">Margem</th><th className="catalogActionsCell">Ações</th></tr></thead>
+          <tbody>{visible.map((p: any) => p.isParent?<tr key={p.sku} className="catalogParentRow" onClick={()=>setOpenParents(current=>{const next=new Set(current);next.has(p.parentKey)?next.delete(p.parentKey):next.add(p.parentKey);return next})}>{selecting&&<td/>}<td className="catalogProductCell"><div className="tableCellRail catalogProductIdentity"><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span><button type="button" className="catalogParentButton">{openParents.has(p.parentKey)||normalizedProductQuery?<ChevronUp size={16}/>:<ChevronDown size={16}/>}<span><b>{p.product}</b><small>{p.variantCount} variações</small></span></button></div></td><td><div className="tableCellRail"><b>{p.parentSku||'—'}</b></div></td><td className="salesOriginCell"><div className="tableCellRail"><span className="salesOrigin catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment||(p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">—</div></td><td><div className="tableCellRail">{productMetrics(p).units}</div></td><td><div className="tableCellRail">{money(productMetrics(p).revenue)}</div></td><td className={productMetrics(p).fees ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</div></td><td className={productMetrics(p).shipping ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</div></td><td><div className="tableCellRail">{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</div></td><td className="catalogActionsCell"/></tr>:<tr key={p.sku} className={`${p.parentKey?'catalogVariationRow ':''}${selected.has(String(p.sku)) ? "mobileSelectedRow" : ''}`} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(p.sku)); else onEdit(editable(p)); } }}>
+            {selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><div className="tableCellRail"><input type="checkbox" checked={selected.has(String(p.sku))} onChange={() => toggleSelected(String(p.sku))} aria-label={`Selecionar ${p.product}`} /></div></td>}<td className="catalogProductCell" title={p.product}><div className="tableCellRail catalogProductIdentity"><span className="catalogImage">{p.imageUrl?<img src={p.imageUrl} alt={p.product}/>:<PackageCheck size={18}/>}</span><span className="catalogProductName">{p.externalUrl?<a href={p.externalUrl} target="_blank" rel="noreferrer" onClick={(event)=>event.stopPropagation()}>{p.product}</a>:p.product}</span></div></td><td><div className="tableCellRail"><b>{p.sku}</b></div></td><td className="salesOriginCell"><div className="tableCellRail"><span className="salesOrigin catalogOrigin">{p.source!=='MANUAL'&&<span className="filterPlatformLogo"><img src={integrationLogoSrc[p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':'Shopify']} alt="" /></span>}{originLabel(p.fulfillment|| (p.source==='MERCADO_LIVRE'?'Mercado Livre':p.source==='AMAZON'?'Amazon':p.source==='SHOPIFY'?'Shopify':'Manual'))}</span></div></td><td><div className="tableCellRail">{money(Number(p.salePrice || 0))}</div></td><td><div className="tableCellRail">{money(Number(p.unitCost || 0))}</div></td><td><div className="tableCellRail">{productMetrics(p).units}</div></td><td><div className="tableCellRail">{money(productMetrics(p).revenue)}</div></td><td className={productMetrics(p).fees ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).fees ? -Math.abs(productMetrics(p).fees) : 0)}</div></td><td className={productMetrics(p).shipping ? "negative" : undefined}><div className="tableCellRail">{money(productMetrics(p).shipping ? -Math.abs(productMetrics(p).shipping) : 0)}</div></td><td className="catalogMargin"><div className="tableCellRail">{(productMargin(p) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</div></td>
+            <td className="catalogActionsCell"><div className="tableCellRail"><div className="catalogRowActions"><button className="mini" title="Editar produto" aria-label={`Editar ${p.name}`} onClick={(event) => { event.stopPropagation(); onEdit(editable(p)); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir produto" aria-label={`Excluir ${p.name}`} onClick={(event) => { event.stopPropagation(); onDelete(p); }}><Trash2 size={15} /></button></div></div></td>
           </tr>)}</tbody>
         </table>
-      </div>
+      </TableScroll>
       {!productGroups.length && <div className="catalogEmpty">Nenhum produto encontrado.</div>}
       <div className="catalogPagination"><span>Página {Math.min(page, pages)} de {pages}</span><div><button disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button><button disabled={page >= pages} onClick={() => setPage(page + 1)}>Próxima</button></div></div>
       {importOpen && <div className="salesConfirmBackdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget&&!importing)setImportOpen(false)}}><div className="productImportDialog" role="dialog" aria-modal="true"><div className="modalHead"><div><h2>{importRows.length?'Importar produtos':'Sincronizar produtos'}</h2><p>{importRows.length?'Selecione os produtos encontrados no arquivo.':'Puxe os produtos das plataformas de venda integradas.'}</p></div><button className="close" onClick={()=>setImportOpen(false)}><X/></button></div><div className="productImportBody">
@@ -2199,7 +2165,7 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
           <h2>Lista de clientes</h2>
         </div>
       </div>
-      <div className="tableWrap">
+      <TableScroll>
         <table className="customerTable">
           <thead>
             <tr>
@@ -2212,7 +2178,7 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
               <th>Pedidos</th>
               <th>Receita</th>
               <th className="salesOriginCell">Origem</th>
-              <th></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -2260,7 +2226,7 @@ function Customers({ rows, onNew, onEdit, onDelete, onDeleteMany, onExport }: an
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
     </article>
       {confirmDelete && <div className="salesConfirmBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setConfirmDelete(false); }}>
         <div className="salesConfirmDialog" role="alertdialog" aria-modal="true" aria-labelledby="customers-confirm-title" aria-describedby="customers-confirm-description">
@@ -2515,7 +2481,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport,
         <button type="button" role="tab" aria-selected={status === "PAID"} className={status === "PAID" ? "active" : ""} onClick={() => setStatus("PAID")}>Aprovadas</button>
         <button type="button" role="tab" aria-selected={status !== "PAID"} className={status !== "PAID" ? "active" : ""} onClick={() => setStatus("Todos")}>Todas</button>
       </div>
-      <div className="tableWrap">
+      <TableScroll>
         <table>
           <thead>
             <tr>
@@ -2537,7 +2503,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport,
               <th>Lucro vendas</th>
               <th>Status</th>
               <th className="salesDocumentsHead">Documentos</th>
-              <th></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -2620,7 +2586,7 @@ function Sales({ q, setQ, rows, onNew, onOpen, onDelete, onDeleteMany, onExport,
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       <div className="pagination">
         <span>
           Página {safePage} de {totalPages}
@@ -2662,6 +2628,8 @@ function BillingDocumentIcon({ type }: { type: "SHIPPING_LABEL" | "REFUNDED_LABE
 }
 function BillingDocuments({ notify, mode }: { notify?: (message: string) => void; mode: "invoices" | "labels" }) {
   const [documents, setDocuments] = useState<any[]>([]);
+  const [billingSales, setBillingSales] = useState<any[]>([]);
+  const [billingReturns, setBillingReturns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [type, setType] = useState("ALL");
@@ -2678,18 +2646,19 @@ function BillingDocuments({ notify, mode }: { notify?: (message: string) => void
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const pageSize = 25;
   useEffect(() => {
     let active = true;
     setLoading(true);
     apiJson("/api/billing-documents")
-      .then((data) => { if (active) setDocuments(data.documents || []); })
+      .then((data) => { if (active) { setDocuments(data.documents || []); setBillingSales(data.sales || []); setBillingReturns(data.returns || []); } })
       .catch((error) => { if (active) notify?.(error.message || "Não foi possível carregar o faturamento"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []);
   const scopedDocuments = useMemo(() => documents.filter((document) => mode === "labels" ? document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" : document.type !== "SHIPPING_LABEL" && document.type !== "REFUNDED_LABEL"), [documents, mode]);
-  const channels = useMemo(() => [...new Set<string>(scopedDocuments.map((document) => String(document.order?.channel || "")).filter(Boolean))].sort(), [scopedDocuments]);
+  const channels = useMemo(() => [...new Set<string>([...scopedDocuments.map((document) => String(document.order?.channel || "")), ...billingSales.map((sale) => String(sale.channel || ""))].filter(Boolean))].sort(), [scopedDocuments, billingSales]);
   const selectedDates = period === "Tempo todo" ? null : periodRange(period, { from, to });
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
@@ -2697,19 +2666,60 @@ function BillingDocuments({ notify, mode }: { notify?: (message: string) => void
       const matchesType = type === "ALL" || document.type === type || (document.type === "INVOICE" && type === "INVOICE_PDF" && document.mimeType === "application/pdf") || (document.type === "INVOICE" && type === "INVOICE_XML" && document.mimeType?.includes("xml"));
       if (!matchesType) return false;
       if (channel && document.order?.channel !== channel) return false;
-      const documentDay = dateKey(document.updatedAt);
+      const isReturnDocument = document.type.startsWith("REFUNDED");
+      const documentDay = isReturnDocument
+        ? String(document.issuedAt || document.updatedAt).slice(0, 10)
+        : dateKey(document.order?.paidAt || document.order?.createdAt || document.updatedAt);
       if (selectedDates && (documentDay < selectedDates.from || documentDay > selectedDates.to)) return false;
       if (!needle) return true;
       return [document.fileName, document.order?.externalId, document.order?.customer?.name, document.order?.channel]
         .some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(needle));
     });
   }, [scopedDocuments, query, type, channel, period, from, to]);
+  const showingReturns = type === "REFUNDED_DANFE" || type === "REFUNDED_XML";
+  const salesCount = (showingReturns ? billingReturns : billingSales).filter((sale) => {
+    if (channel && sale.channel !== channel) return false;
+    const day = dateKey(sale.paidAt || sale.createdAt);
+    if (selectedDates && (day < selectedDates.from || day > selectedDates.to)) return false;
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    return !needle || [sale.externalId, sale.customer?.name, sale.channel].some(value => String(value || "").toLocaleLowerCase("pt-BR").includes(needle))
+      || scopedDocuments.some(document => document.orderId === sale.id && String(document.fileName || "").toLocaleLowerCase("pt-BR").includes(needle));
+  }).length;
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
   const allSelected = filtered.length > 0 && filtered.every((document) => selected.has(document.id));
   const toggleSelected = (id: string) => setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(filtered.map((document) => document.id)));
+  const downloadSelected = async () => {
+    const ids = filtered.filter((document) => selected.has(document.id)).map((document) => document.id);
+    if (!ids.length || downloading) return;
+    setDownloading(true);
+    try {
+      const response = await fetch("/api/billing-documents/download", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, mode }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || "Não foi possível baixar os documentos");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `${mode === "labels" ? "etiquetas" : "notas-fiscais"}-${todayISO()}.zip`;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify?.(`ZIP com ${ids.length} ${ids.length === 1 ? "documento" : "documentos"} baixado`);
+    } catch (error: any) {
+      notify?.(error.message || "Não foi possível baixar os documentos");
+    } finally {
+      setDownloading(false);
+    }
+  };
   const deleteDocuments = async () => {
     if (!pendingDelete.length || deleting) return;
     setDeleting(true);
@@ -2726,9 +2736,8 @@ function BillingDocuments({ notify, mode }: { notify?: (message: string) => void
     }
   };
   useEffect(() => { setPage(1); setSelected(new Set()); }, [query, type, channel, period, from, to]);
-  const fileSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB` : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString("pt-BR")} KB`;
   return <div className="billingPage">
-    <div className="sectionHead billingActions"><p className="billingIntro">{mode === "labels" ? "Etiquetas vinculadas às vendas e aos clientes" : "DANFEs e XMLs vinculados às vendas e aos clientes"}</p><button type="button" className="ghost clickable salesDeleteButton" disabled={!selected.size} onClick={() => setPendingDelete([...selected])}><Trash2 size={14} />Excluir selecionados</button></div>
+    <div className="sectionHead billingActions"><p className="billingIntro">{mode === "labels" ? "Etiquetas vinculadas às vendas e aos clientes" : "DANFEs e XMLs vinculados às vendas e aos clientes"}</p><div className="billingBulkActions"><button type="button" className="ghost clickable salesDeleteButton" disabled={!selected.size || downloading || deleting} onClick={() => setPendingDelete([...selected])}><Trash2 size={14} />Excluir selecionados</button><button type="button" className="ghost clickable" disabled={!selected.size || downloading || deleting} onClick={downloadSelected} title="Baixar os documentos selecionados em ZIP"><Download size={14} />{downloading ? "Preparando ZIP..." : "Baixar tudo"}</button></div></div>
     <section className="card salesSearchSection" aria-label="Busca e filtros de faturamento">
       <div className="salesSearchRow">
         <label className="search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar arquivo, venda ou cliente..." aria-label="Buscar documentos" /></label>
@@ -2755,31 +2764,30 @@ function BillingDocuments({ notify, mode }: { notify?: (message: string) => void
         <button type="button" className="mobileSalesFilterApply primary" onClick={() => setFiltersOpen(false)}>Aplicar</button>
       </div>
     </section>
-    <section className="billingSummary">
+    <section className={`billingSummary ${mode === "invoices" ? "billingSummaryInvoices" : "billingSummaryLabels"}`}><article className="card kpi"><span>{showingReturns ? "Devoluções" : "Vendas"}</span><strong>{loading ? "—" : salesCount}</strong><small>{showingReturns ? "No período" : "Pagas no período"}</small></article>
       <article className="card kpi"><span>{mode === "labels" ? "Etiquetas" : "Documentos fiscais"}</span><strong>{filtered.length}</strong></article>
       {mode === "invoices" && <article className="card kpi"><span>DANFEs</span><strong>{filtered.filter((document) => document.type === "INVOICE_PDF" || document.type === "REFUNDED_DANFE" || (document.type === "INVOICE" && document.mimeType === "application/pdf")).length}</strong></article>}
       {mode === "invoices" && <article className="card kpi"><span>XMLs</span><strong>{filtered.filter((document) => document.type === "INVOICE_XML" || document.type === "REFUNDED_XML" || (document.type === "INVOICE" && document.mimeType?.includes("xml"))).length}</strong></article>}
     </section>
     <article className="card tableCard">
       <div className="sectionHead"><div><h2>{mode === "labels" ? "Etiquetas" : "Documentos fiscais"}</h2><p>{filtered.length} {filtered.length === 1 ? "documento" : "documentos"}</p></div></div>
-      <div className="tableWrap"><table className="billingTable"><thead><tr><th className="checkCol"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Selecionar todos os documentos exibidos" /></th><th>Data</th><th>Tipo</th><th className="billingFileCell">Arquivo</th><th>Venda</th><th>Cliente</th><th className="salesOriginCell">Origem</th><th>Tamanho</th><th></th></tr></thead><tbody>
+      <TableScroll><table className="billingTable"><thead><tr><th className="checkCol"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Selecionar todos os documentos exibidos" /></th><th>Data</th><th>Tipo</th><th className="billingFileCell">Arquivo</th><th>Venda</th><th className="salesOriginCell">Origem</th><th>Cliente</th><th>Ações</th></tr></thead><tbody>
         {pageRows.map((document) => <tr key={document.id} className={selected.has(document.id) ? "mobileSelectedRow" : undefined}>
           <td className="checkCol"><div className="tableCellRail"><input type="checkbox" checked={selected.has(document.id)} onChange={() => toggleSelected(document.id)} aria-label={`Selecionar ${document.fileName}`} /></div></td>
-          <td><div className="tableCellRail">{new Date(document.updatedAt).toLocaleDateString("pt-BR")}</div></td>
+          <td><div className="tableCellRail">{formatDashboardDate(String(document.issuedAt || document.updatedAt).slice(0, 10))}</div></td>
           <td><div className="tableCellRail"><span className={`billingType ${document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" ? "label" : document.type.startsWith("REFUNDED") ? "refunded" : "invoice"}`}><BillingDocumentIcon type={document.type} />{document.type === "SHIPPING_LABEL" || document.type === "REFUNDED_LABEL" ? "Etiqueta" : document.type === "REFUNDED_DANFE" ? "DANFE devolução" : document.type === "REFUNDED_XML" ? "XML devolução" : document.type === "INVOICE_XML" || (document.type === "INVOICE" && document.mimeType?.includes("xml")) ? "XML da NF" : "DANFE"}</span></div></td>
           <td className="billingFileCell"><div className="tableCellRail" title={document.fileName}><strong>{document.fileName}</strong></div></td>
           <td><div className="tableCellRail"><strong>#{document.order?.externalId || "—"}</strong><small>{document.order?.paidAt ? new Date(document.order.paidAt).toLocaleDateString("pt-BR") : ""}</small></div></td>
-          <td><div className="tableCellRail">{document.order?.customer?.name || "Cliente não informado"}</div></td>
           <td className="salesOriginCell"><div className="tableCellRail">
             {document.order?.channel ? <span className="salesOrigin">
               {salesOriginLogo(document.order.channel) && <span className="salesOriginLogo"><img src={salesOriginLogo(document.order.channel)} alt="" /></span>}
               <span>{originLabel(document.order.channel)}</span>
             </span> : "—"}
           </div></td>
-          <td><div className="tableCellRail">{fileSize(document.size)}</div></td>
+          <td><div className="tableCellRail">{document.order?.customer?.name || "Cliente não informado"}</div></td>
           <td><div className="tableCellRail"><div className="rowActions"><a className="mini billingDownload" href={`/api/billing-documents/${document.id}`} title="Baixar documento" aria-label={`Baixar ${document.fileName}`}><Download size={15} /></a><button type="button" className="mini danger" title="Excluir documento" aria-label={`Excluir ${document.fileName}`} onClick={() => setPendingDelete([document.id])}><Trash2 size={15} /></button></div></div></td>
         </tr>)}
-      </tbody></table></div>
+      </tbody></table></TableScroll>
       {!loading && !filtered.length && <div className="catalogEmpty">Nenhum documento encontrado. Adicione uma etiqueta ou nota fiscal na tela de Vendas.</div>}
       {loading && <div className="catalogEmpty">Carregando documentos…</div>}
       {totalPages > 1 && <div className="pagination"><span>Página {safePage} de {totalPages}</span><div><button className="ghost clickable pageArrow" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>‹</button>{paginationNumbers(safePage, totalPages).map((number: any, index: number) => number === "…" ? <span className="pageDots" key={`dots-${index}`}>…</span> : <button key={number} className={`ghost clickable pageNumber ${safePage === number ? "selected" : ""}`} onClick={() => setPage(number)}>{number}</button>)}<button className="ghost clickable pageArrow" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>›</button></div></div>}
@@ -3026,7 +3034,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
           </table>
         </div>
       </>}
-      {!manager && <div className="tableWrap">
+      {!manager && <TableScroll>
         <table>
           <thead>
             <tr>
@@ -3045,7 +3053,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
               <th>Receita</th>
               <th>CPA</th>
               <th>ROAS</th>
-              {showActions && <th></th>}
+              {showActions && <th>Ações</th>}
             </tr>
           </thead>
           <tbody>
@@ -3078,7 +3086,7 @@ function Campaigns({ campaigns: inputCampaigns, adsets: inputAdsets = [], ads: i
             {!visibleRows.length && <tr><td className="adManagerEmpty" colSpan={(manager ? 14 : 7) + (showActions ? 1 : 0)}><div className="tableCellRail">{search ? "Nenhum resultado para esta busca." : `Nenhum dado de ${level.toLowerCase()} disponível para ${selectedPlatform} Ads.`}</div></td></tr>}
           </tbody>
         </table>
-      </div>}
+      </TableScroll>}
     </article>
   );
 }
@@ -3186,7 +3194,7 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
         <span className="ledgerResultCount">{filteredMovements.length} de {movements.length}</span>
         {filtersActive && <button type="button" className="ghost clickable ledgerClearFilters" onClick={() => { setLedgerPeriod("Tempo todo"); setSku("Todos"); setFolder("Todas"); setMovementType("Todos"); }}>Limpar filtros</button>}
       </div>
-      <div className="tableWrap">
+      <TableScroll>
         <table>
           <thead>
             <tr>
@@ -3197,7 +3205,7 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
               <th>Quantidade</th>
               <th>Referência</th>
               <th>Saldo</th>
-              <th></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -3223,7 +3231,7 @@ function Movements({ movements, onNew, onEdit, onDelete }: any) {
             {!filteredMovements.length && <tr><td colSpan={8} className="ledgerEmpty"><div className="tableCellRail">Nenhuma movimentação encontrada para os filtros selecionados.</div></td></tr>}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
     </article>
   );
 }
@@ -3272,6 +3280,19 @@ function Finance() {
     if (/OPEN|PEND/.test(normalized)) return "Em processamento";
     return value || "Status indisponível";
   };
+  const marketplaceNet = Array.isArray(data?.channels)
+    ? data.channels
+        .filter((channel: any) => ['MERCADO_LIVRE', 'AMAZON'].includes(String(channel.name || '').toUpperCase()))
+        .reduce((total: number, channel: any) => total + Number(channel.salesProfit || 0), 0)
+    : null;
+  const shopifyGrossProfit = Array.isArray(data?.channels)
+    ? data.channels
+        .filter((channel: any) => String(channel.name || '').toUpperCase() === 'SHOPIFY')
+        .reduce((total: number, channel: any) => total + Number(channel.salesProfit || 0), 0) - Number(data?.media || 0)
+    : null;
+  const platformReceivables = marketplaceNet != null && shopifyGrossProfit != null && transfers?.companyCash
+    ? marketplaceNet + shopifyGrossProfit - Number(transfers.companyCash.amount || 0)
+    : null;
   return (
     <>
       <section className="financeHeroGrid">
@@ -3282,17 +3303,17 @@ function Finance() {
           {transfers?.companyCash && !transfers.companyCash.complete && <p>Valor parcial: uma ou mais fontes de saques ainda não foram consultadas por completo.</p>}
         </article>
         <article className="card pad financeHeroCard financeExpectedCard">
-          <span>Lucro esperado</span>
-          <strong className={Number(data?.profit || 0) < 0 ? "negative" : undefined}>{data ? money(data.profit || 0) : "—"}</strong>
-          <small>Resultado estimado · tempo todo</small>
+          <span>A receber nas plataformas</span>
+          <strong className={platformReceivables != null && platformReceivables < 0 ? "negative" : undefined}>{platformReceivables == null ? "—" : money(platformReceivables)}</strong>
+          <small>Líq. marketplace + lucro Shopify − caixa · tempo todo</small>
         </article>
       </section>
       <section className="kpiGrid">
         {[
-          ["Líq. do marketplace", data?.salesProfit ?? (Number(data?.revenue || 0) - Number(data?.fees || 0))],
-          ["A receber nas plataformas", data && transfers?.companyCash ? Number(data.salesProfit ?? (Number(data.revenue || 0) - Number(data.fees || 0))) - Number(transfers.companyCash.amount || 0) : null],
-          ["Ads", data?.media || 0],
-          ["Despesas", data?.expenses || 0],
+          ["Líq. do marketplace", marketplaceNet],
+          ["Lucro Shopify", shopifyGrossProfit],
+          ["Ads", data ? -Math.abs(Number(data.media || 0)) : null],
+          ["Despesas", data ? -Math.abs(Number(data.expenses || 0)) : null],
         ].map(([a, b]: any) => (
           <article className="card kpi" key={a}>
             <span>{a}</span>
@@ -3307,7 +3328,7 @@ function Finance() {
         </div>
         {transfers?.mercadoPago?.status === 'credential_required' && <div className="financeTokenConnect"><label htmlFor="mp-access-token">Access Token de produção do Mercado Pago</label><div><input id="mp-access-token" type="password" autoComplete="off" spellCheck={false} value={mpToken} onChange={event => setMpToken(event.target.value)} placeholder="APP_USR-…" /><button className="primary" type="button" disabled={!mpToken || mpSaving} onClick={saveMpToken}>{mpSaving ? 'Conectando…' : 'Conectar'}</button></div><small>Salvo criptografado no servidor. O token não aparece novamente na tela.</small>{mpError && <p className="financeTransferNote">{mpError}</p>}</div>}
         {transferError && <p className="financeTransferNote">{transferError}</p>}
-        {payoutRows.length > 0 && <div className="tableWrap"><table className="expenseTable"><thead><tr><th>Plataforma</th><th>Período</th><th>Data da transferência</th><th>Valor</th><th>Status</th><th>Conta</th></tr></thead><tbody>{payoutRows.map((row: any) => <tr key={`${row.source}-${row.id}`}><td><div className="tableCellRail"><strong>{row.source}</strong><small>{row.id}</small></div></td><td><div className="tableCellRail">{row.period}</div></td><td><div className="tableCellRail">{row.date ? new Date(row.date).toLocaleDateString('pt-BR') : '—'}</div></td><td className={Number(row.amount) < 0 ? "negative" : undefined}><div className="tableCellRail">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: row.currency }).format(row.amount)}</div></td><td><div className="tableCellRail">{row.source === 'Amazon' ? transferStatus(row.status) : row.status === 'approved' ? 'Aprovado' : row.status}</div></td><td><div className="tableCellRail">{row.account}</div></td></tr>)}</tbody></table></div>}
+        {payoutRows.length > 0 && <TableScroll><table className="expenseTable"><thead><tr><th>Plataforma</th><th>Período</th><th>Data da transferência</th><th>Valor</th><th>Status</th><th>Conta</th></tr></thead><tbody>{payoutRows.map((row: any) => <tr key={`${row.source}-${row.id}`}><td><div className="tableCellRail"><strong>{row.source}</strong><small>{row.id}</small></div></td><td><div className="tableCellRail">{row.period}</div></td><td><div className="tableCellRail">{row.date ? new Date(row.date).toLocaleDateString('pt-BR') : '—'}</div></td><td className={Number(row.amount) < 0 ? "negative" : undefined}><div className="tableCellRail">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: row.currency }).format(row.amount)}</div></td><td><div className="tableCellRail">{row.source === 'Amazon' ? transferStatus(row.status) : row.status === 'approved' ? 'Aprovado' : row.status}</div></td><td><div className="tableCellRail">{row.account}</div></td></tr>)}</tbody></table></TableScroll>}
         <p className="financeTransferNote">A transferência informada pela plataforma não confirma o crédito na sua conta bancária. Esse saldo não entra novamente na receita nem no lucro.</p>
       </article>
     </>
@@ -3350,20 +3371,20 @@ function Expenses({ rows, onNew, onEdit, onDelete, onDeleteMany }: any) {
   const taxExpenses = rows.filter((expense: any) => /^imposto$/i.test(String(expense.category || "")));
   const variableExpenses = rows.filter((expense: any) => !fixedExpenses.includes(expense) && !taxExpenses.includes(expense));
   const expenseAmounts = new Map((expenseData?.expenseBreakdown || []).map((line: any) => [String(line.id), Number(line.amount || 0)]));
-  const groupTotal = (groupRows: any[]) => groupRows.reduce((total, expense) => total + Number(expenseAmounts.get(String(expense.id)) || 0), 0);
+  const groupTotal = (groupRows: any[]) => groupRows.reduce((total, expense) => total + Number(expense.amount || 0), 0);
   const expenseGroups = [
     { key: "fixed", label: "Fixas", description: "Custos operacionais e demais despesas", rows: fixedExpenses },
     { key: "variable", label: "Variáveis", description: "Custos operacionais e demais despesas", rows: variableExpenses },
     { key: "tax", label: "Impostos", description: "Tributos e taxas fiscais", rows: taxExpenses },
   ].map((group) => ({ ...group, total: groupTotal(group.rows) }));
   const expenseClassLabel = (expense: any) => taxExpenses.includes(expense) ? "Imposto" : fixedExpenses.includes(expense) ? "Fixa" : "Variável";
-  const renderExpenseRow = (expense: any) => <tr key={expense.id} className={selected.has(String(expense.id)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(expense.id)); else onEdit(expense); } }}>{selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><div className="tableCellRail"><input type="checkbox" checked={selected.has(String(expense.id))} onChange={() => toggleSelected(String(expense.id))} aria-label={`Selecionar ${expense.description}`} /></div></td>}<td><div className="tableCellRail"><b>{expense.description}</b></div></td><td><div className="tableCellRail">{expense.category}</div></td><td><div className="tableCellRail"><span className={`expenseClass expenseClass-${expenseClassLabel(expense).toLocaleLowerCase("pt-BR")}`}>{expenseClassLabel(expense)}</span></div></td><td><div className="tableCellRail">{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && expenseData?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{!expense.isFixed && expense.category !== "Imposto" && Number(expense.installments || 1) > 1 ? <small>{expense.installments}x de {money(Number(expense.amount) / Number(expense.installments))}</small> : annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}</div></td><td><div className="tableCellRail">{!expense.isFixed && expense.category !== "Imposto" ? formatDashboardDate(dateKey(expense.date)) : periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</div></td><td><div className="tableCellRail">{!expense.isFixed && expense.category !== "Imposto" ? `${Number(expense.installments || 1)}x` : ({ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única")}</div></td><td><div className="tableCellRail"><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={(event) => { event.stopPropagation(); onEdit(expense); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={(event) => { event.stopPropagation(); onDelete(expense); }}><Trash2 size={15} /></button></div></div></td></tr>;
+  const renderExpenseRow = (expense: any) => <tr key={expense.id} className={selected.has(String(expense.id)) ? "mobileSelectedRow" : undefined} onClick={() => { if (window.matchMedia("(max-width: 650px)").matches) { if (selecting) toggleSelected(String(expense.id)); else onEdit(expense); } }}>{selecting && <td className="checkCol" onClick={(event) => event.stopPropagation()}><div className="tableCellRail"><input type="checkbox" checked={selected.has(String(expense.id))} onChange={() => toggleSelected(String(expense.id))} aria-label={`Selecionar ${expense.description}`} /></div></td>}<td><div className="tableCellRail"><b>{expense.description}</b></div></td><td><div className="tableCellRail">{expense.category}</div></td><td><div className="tableCellRail"><span className={`expenseClass expenseClass-${expenseClassLabel(expense).toLocaleLowerCase("pt-BR")}`}>{expenseClassLabel(expense)}</span></div></td><td><div className="tableCellRail">{expense.kind === "PERCENT" ? <span className="expenseValue">{`${Number(expense.rate || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do faturamento`}{expense.schedule === "YEARLY" && expenseData?.expenseBreakdown?.find((line: any) => line.id === expense.id)?.basis !== undefined && <small>Base anual: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).basis)} · Abatimento: {money(expenseData.expenseBreakdown.find((line: any) => line.id === expense.id).amount)}</small>}</span> : <span className="expenseValue">{money(expense.amount)}{!expense.isFixed && expense.category !== "Imposto" && Number(expense.installments || 1) > 1 ? <small>{expense.installments}x de {money(Number(expense.amount) / Number(expense.installments))}</small> : annualCycles[expense.schedule] && <small>No ano: {money(Number(expense.amount) * annualCycles[expense.schedule])}</small>}</span>}<small className="expensePeriodTotal">Total no período: {periodLoading || !expenseData ? "—" : money(Number(expenseAmounts.get(String(expense.id)) || 0))}</small></div></td><td><div className="tableCellRail">{!expense.isFixed && expense.category !== "Imposto" ? formatDashboardDate(dateKey(expense.date)) : periodLabel[expense.schedule] || formatDashboardDate(dateKey(expense.date))}</div></td><td><div className="tableCellRail">{!expense.isFixed && expense.category !== "Imposto" ? `${Number(expense.installments || 1)}x` : ({ MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual", FIXED: "Única", CUSTOM: "Única" }[expense.schedule as string] || "Única")}</div></td><td><div className="tableCellRail"><div className="expenseRowActions"><button className="mini" title="Editar despesa" aria-label={`Editar ${expense.description}`} onClick={(event) => { event.stopPropagation(); onEdit(expense); }}><Pencil size={15} /></button><button className="mini danger" title="Excluir despesa" aria-label={`Excluir ${expense.description}`} onClick={(event) => { event.stopPropagation(); onDelete(expense); }}><Trash2 size={15} /></button></div></div></td></tr>;
   return <article className="card tableCard">
     <div className="sectionHead"><div><h2>Despesas</h2><p>Fixas, variáveis e impostos que abatem o lucro líquido</p></div><button className="primary" onClick={onNew}><Plus size={14} />Nova despesa</button></div>
     <MobileBulkActions ids={rows.map((expense: any) => String(expense.id))} selected={selected} setSelected={setSelected} selecting={selecting} setSelecting={setSelecting} onDeleteMany={onDeleteMany} label="despesas" />
     <div className="ledgerFilters expensePeriodFilter"><span className="ledgerResultCount">{expenseData ? `${formatDashboardDate(expenseData.periodFrom || selectedExpenseRange.from)} a ${formatDashboardDate(expenseData.periodTo || selectedExpenseRange.to)}` : "Carregando…"}</span><div className="dashboardFilter exportMenu"><span>Período</span><button className="filterTrigger" type="button" onClick={() => { setExpenseDraftRange(expensePeriod === "Personalizado" ? expenseRange : { from: "", to: "" }); setExpenseCalendarMonth((expenseRange.from || todayISO()).slice(0, 7)); setSelectingExpenseRangeEnd(false); setExpensePeriodOpen((open) => !open); }} aria-expanded={expensePeriodOpen}><CalendarDays size={14} />{expensePeriod}<ChevronDown size={14} /></button>{expensePeriodOpen && <div className="exportOptions dashboardOptions periodOptions">{periodOptions.map((option) => <button type="button" key={option} onClick={() => { setExpensePeriod(option); setExpenseRange({ from: "", to: "" }); setExpensePeriodOpen(false); }}>{option}</button>)}<div className="filterCustomDates"><div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setExpenseCalendarMonth(shiftCalendarMonth(expenseCalendarMonth, -1))}>←</button><b>{calendarMonthTitle(expenseCalendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setExpenseCalendarMonth(shiftCalendarMonth(expenseCalendarMonth, 1))}>→</button></div><div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(expenseCalendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === expenseDraftRange.from || day === expenseDraftRange.to ? "selected" : ""} ${expenseDraftRange.from && expenseDraftRange.to && day > expenseDraftRange.from && day < expenseDraftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingExpenseRangeEnd || (expenseDraftRange.from && day < expenseDraftRange.from)) { setExpenseDraftRange({ from: day, to: "" }); setSelectingExpenseRangeEnd(true); } else { setExpenseDraftRange((range) => ({ ...range, to: day })); setSelectingExpenseRangeEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div><small>{expenseDraftRange.from ? `${formatDashboardDate(expenseDraftRange.from)} → ${expenseDraftRange.to ? formatDashboardDate(expenseDraftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small><button type="button" className="primary" disabled={!expenseDraftRange.from || !expenseDraftRange.to} onClick={() => { setExpenseRange(expenseDraftRange); setExpensePeriod("Personalizado"); setExpensePeriodOpen(false); }}>Aplicar</button></div></div>}</div></div>
     <div className="expenseSummary"><span>Abatido no lucro líquido</span><strong>{periodLoading ? "—" : money(expenseData?.expenses || 0)}</strong><small>Recorrências seguem meses, trimestres, semestres e anos civis.</small></div>
-    <div className="tableWrap"><table className="expenseTable"><thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={rows.length > 0 && rows.every((item: any) => selected.has(String(item.id)))} onChange={() => setSelected(rows.every((item: any) => selected.has(String(item.id))) ? new Set() : new Set(rows.map((item: any) => String(item.id))))} aria-label="Selecionar todas as despesas" /></th>}<th>Descrição</th><th>Categoria</th><th>Classificação</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th></th></tr></thead><tbody>{expenseGroups.map((group) => <Fragment key={group.key}><tr className={`expenseGroupRow expenseGroup-${group.key}`}><td colSpan={selecting ? 8 : 7}><div className="tableCellRail"><span>{group.label}</span><small>{group.description}</small><b>{money(group.total)} · {group.rows.length} {group.rows.length === 1 ? "item" : "itens"}</b></div></td></tr>{group.rows.map(renderExpenseRow)}</Fragment>)}</tbody></table></div>
+    <TableScroll><table className="expenseTable"><thead><tr>{selecting && <th className="checkCol"><input type="checkbox" checked={rows.length > 0 && rows.every((item: any) => selected.has(String(item.id)))} onChange={() => setSelected(rows.every((item: any) => selected.has(String(item.id))) ? new Set() : new Set(rows.map((item: any) => String(item.id))))} aria-label="Selecionar todas as despesas" /></th>}<th>Descrição</th><th>Categoria</th><th>Classificação</th><th>Valor</th><th>Período / data</th><th>Frequência</th><th>Ações</th></tr></thead><tbody>{expenseGroups.map((group) => <Fragment key={group.key}><tr className={`expenseGroupRow expenseGroup-${group.key}`}><td colSpan={selecting ? 4 : 3}><div className="tableCellRail"><span>{group.label}</span><small>{group.description}</small></div></td><td className="expenseGroupTotal"><div className="tableCellRail"><b className="expenseGroupTotalValue">{money(-Math.abs(group.total))}</b><small>· {group.rows.length} {group.rows.length === 1 ? "item" : "itens"}</small></div></td><td colSpan={3}/></tr>{group.rows.map(renderExpenseRow)}</Fragment>)}</tbody></table></TableScroll>
     {!rows.length && <div className="catalogEmpty">Nenhuma despesa cadastrada.</div>}
   </article>;
 }
@@ -3428,15 +3449,15 @@ function Returns({ rows, syncing, onSync }: { rows: any[]; syncing: boolean; onS
     </section>
     <article className="card tableCard">
     <div className="sectionHead"><div><h2>Reembolsos dos canais</h2><p>{filteredRows.length} pedidos · {filteredRows.filter((row) => row.status === "IN_TRANSIT").length} a caminho · {confirmedRows.length} reembolsos confirmados · atualização automática a cada minuto</p></div><button className="ghost clickable returnsSyncButton" disabled={syncing} onClick={onSync}><RefreshCw size={14} className={syncing ? "spin" : undefined} /><span>{syncing ? "Sincronizando…" : "Sincronizar agora"}</span></button></div>
-    <div className="tableWrap"><table className="expenseTable returnsTable"><thead><tr><th>Data</th><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th className="salesOriginCell">Origem</th><th>Motivo</th><th>Situação</th><th>Reembolso</th></tr></thead><tbody>{filteredRows.map((row) => <tr key={row.id}>
+    <TableScroll><table className="expenseTable returnsTable"><thead><tr><th>Data</th><th>Pedido / pacote</th><th>Cliente</th><th>Produto</th><th className="salesOriginCell">Origem</th><th>Motivo</th><th>Situação</th><th>Reembolso</th></tr></thead><tbody>{filteredRows.map((row) => <tr key={row.id}>
       <td><div className="tableCellRail">{fmtDate(row.observedAt)}</div></td>
       <td><div className="tableCellRail"><strong>#{row.orderExternalId || "—"}</strong><br /><a href={row.sourceUrl} target="_blank" rel="noopener noreferrer">{originLabel(row.channel)} · #{row.externalOrderId}</a></div></td>
       <td><div className="tableCellRail">{row.customerName || "—"}</div></td>
       <td><div className="tableCellRail">{row.sku || "—"}</div></td>
       <td className="salesOriginCell"><div className="tableCellRail"><span className="salesOrigin">{salesOriginLogo(row.channel) && <span className="salesOriginLogo"><img src={salesOriginLogo(row.channel)} alt="" /></span>}<span>{originLabel(row.channel)}</span></span></div></td>
-      <td><div className="tableCellRail">{row.reason || "—"}</div></td><td><div className="tableCellRail"><span className={`status ${row.refundAmount !== null ? "danger" : "warn"}`}>{statusLabel[row.status] || row.status}</span></div></td>
+      <td><div className="tableCellRail">{row.reason || "—"}</div></td><td><div className="tableCellRail"><span className="status warn">{statusLabel[row.status] || row.status}</span></div></td>
       <td className={row.refundAmount === null ? undefined : "negative"}><div className="tableCellRail">{row.refundAmount === null ? "Pendente" : `-${money(row.refundAmount)}`}</div></td>
-    </tr>)}</tbody></table></div>
+    </tr>)}</tbody></table></TableScroll>
     {!filteredRows.length && <div className="catalogEmpty">Nenhum reembolso encontrado com esses filtros.</div>}
     </article>
   </div>;
@@ -3493,8 +3514,8 @@ function TrackingView({ notify, onOpenCampaign }: { notify: (message: string) =>
     <section className="card trackingFilters"><div className="salesSelectField"><span>Site</span><AnchoredSelect value={site} onChange={setSite} options={[{ value: "", label: "Todos os sites" }, ...(data?.sites || []).map((item:any) => ({ value: item.domain, label: item.domain }))]} compact /></div><div className="trackingPeriodControl"><button type="button" className="trackingPeriodTrigger" aria-expanded={periodOpen} onClick={() => { setPeriodOpen((open) => !open); setCalendarMonth((range.from || todayISO()).slice(0, 7)); setDraftRange(period === "Personalizado" ? range : { from: "", to: "" }); setSelectingEnd(false); }}><span>Período</span><b>{period}</b><ChevronDown size={15}/></button>{periodOpen && <div className="trackingPeriodOptions">{["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"].map((option) => <button type="button" key={option} className={period === option ? "active" : ""} onClick={() => { setPeriod(option); setRange({ from: "", to: "" }); setPeriodOpen(false); }}>{option}</button>)}<div className="salesPeriodCalendar"><div className="calendarHeader"><button type="button" aria-label="Mês anterior" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, -1))}>←</button><b>{calendarMonthTitle(calendarMonth)}</b><button type="button" aria-label="Próximo mês" onClick={() => setCalendarMonth(shiftCalendarMonth(calendarMonth, 1))}>→</button></div><div className="calendarGrid">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}{calendarDays(calendarMonth).map((day, index) => day ? <button type="button" key={day} className={`${day === draftRange.from || day === draftRange.to ? "selected" : ""} ${draftRange.from && draftRange.to && day > draftRange.from && day < draftRange.to ? "inRange" : ""}`} onClick={() => { if (!selectingEnd || (draftRange.from && day < draftRange.from)) { setDraftRange({ from: day, to: "" }); setSelectingEnd(true); } else { setDraftRange((current) => ({ ...current, to: day })); setSelectingEnd(false); } }}>{Number(day.slice(-2))}</button> : <span key={`blank-${index}`}/>)}</div><small>{draftRange.from ? `${formatDashboardDate(draftRange.from)} → ${draftRange.to ? formatDashboardDate(draftRange.to) : "selecione o fim"}` : "Selecione o início e o fim"}</small><button type="button" className="primary" disabled={!draftRange.from || !draftRange.to} onClick={() => { setRange(draftRange); setPeriod("Personalizado"); setPeriodOpen(false); }}>Aplicar</button></div></div>}</div><div className="salesSelectField"><span>Origem</span><AnchoredSelect value={source} onChange={setSource} options={[{ value: "", label: "Todas" }, ...(data?.sources || []).map((item:string) => ({ value: item, label: item }))]} compact /></div><button className="ghost trackingRefresh" onClick={() => void load()}><RefreshCw size={14}/>Atualizar</button></section>
     <section className="trackingKpis">{[["Visitas",metrics.visits],["Visitantes",metrics.visitors],["Páginas vistas",metrics.pageViews],["Cliques em comprar",metrics.buyClicks],["Vendas totais",metrics.sales],["Faturamento",money(metrics.revenue||0)]].map(([label,value]) => <article className="card" key={String(label)}><span>{label}</span><strong>{value ?? 0}</strong></article>)}</section>
     <section className="trackingFunnel"><article className="card"><div className="sectionHead"><div><h2>Funil de conversão</h2><p>Somente vendas ligadas a uma sessão rastreada</p></div></div><div className="funnelSteps"><div><b>{metrics.visits||0}</b><span>Visitas</span></div><i>→</i><div><b>{metrics.buyClicks||0}</b><span>Cliques em comprar</span><small>{Number(metrics.clickRate||0).toFixed(1)}%</small></div><i>→</i><div><b>{metrics.attributedSales||0}</b><span>Vendas atribuídas</span><small>{Number(metrics.conversionRate||0).toFixed(1)}%</small></div></div></article><article className="card trackingSnippet"><h2>Instalação na Shopify</h2><p>Cole antes de <code>&lt;/head&gt;</code> no arquivo <code>theme.liquid</code>.</p><code className="trackingCode">{trackerSnippet}</code><button className="ghost" onClick={async()=>{await navigator.clipboard.writeText(trackerSnippet);notify("Código de Trackeamento copiado");}}><Copy size={13}/>Copiar código</button><small>Captura páginas e cliques em comprar; a venda é conciliada pelo pedido Shopify.</small></article></section>
-    <article className="card tableCard"><div className="sectionHead"><div><h2>Sessões recentes</h2><p>Origem, campanha, páginas e intenção de compra</p></div></div><div className="tableWrap"><table><thead><tr><th>Última atividade</th><th>Origem</th><th>Campanha</th><th>Página de entrada</th><th>Páginas</th><th>Initiate Checkout</th></tr></thead><tbody>{visibleSessions.map((row:any) => <tr key={row.id}><td><div className="tableCellRail">{fmtDate(row.lastAt)}</div></td><td><div className="tableCellRail">{row.source}</div></td><td><div className="tableCellRail">{row.campaign}</div></td><td className="trackingUrl" title={row.landingPage}><div className="tableCellRail">{row.landingPage}</div></td><td><div className="tableCellRail">{row.pages}</div></td><td><div className="tableCellRail">{row.buyClicks ? <span className="status ok"><MousePointerClick size={12}/>{row.buyClicks}</span> : "—"}</div></td></tr>)}</tbody></table></div>{!sessions.length ? <div className="catalogEmpty">Nenhuma visita encontrada neste filtro.</div> : <TablePagination page={safeSessionsPage} totalPages={sessionsTotalPages} onChange={setSessionsPage} />}</article>
-    <article className="card tableCard"><div className="sectionHead"><div><h2>Vendas Shopify recentes</h2><p>{metrics.attributedSales || 0} atribuídas de {metrics.sales || 0} vendas totais no período</p></div><div className="catalogPageSize"><strong>{sales.length} vendas</strong><span>Itens por página</span><AnchoredSelect value={String(salesPageSize)} onChange={(value) => { setSalesPageSize(Number(value)); setSalesPage(1); }} options={["10", "25", "50"]} compact /></div></div><div className="tableWrap"><table><thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th>Primeira origem</th><th>Última origem</th><th>Campanha</th><th>Conjunto</th><th>Anúncio</th><th>Atribuição</th><th>Valor</th><th></th></tr></thead><tbody>{visibleSales.map((row:any) => <tr key={row.id}><td><div className="tableCellRail">{fmtDate(row.occurredAt)}</div></td><td><div className="tableCellRail"><b>#{row.order}</b></div></td><td><div className="tableCellRail">{row.customer}</div></td><td><div className="tableCellRail">{row.firstSource}</div></td><td><div className="tableCellRail">{row.lastSource}</div></td><td><div className="tableCellRail">{row.campaign && row.campaign !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Campanhas", row.campaignId || row.campaign)}>{row.campaign}</button> : "—"}</div></td><td><div className="tableCellRail">{row.adset && row.adset !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Conjuntos", row.adsetId || row.adset)}>{row.adset}</button> : "—"}</div></td><td><div className="tableCellRail">{row.ad && row.ad !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Anúncios", row.adId || row.ad)}>{row.ad}</button> : "—"}</div></td><td><div className="tableCellRail"><span className={`status ${row.attributed||row.manual ? "ok" : "warn"}`}>{row.manual ? "Manual" : row.attributed ? "Atribuída" : "Sem sessão"}</span></div></td><td className="positive"><div className="tableCellRail">{money(row.value)}</div></td><td><div className="tableCellRail"><button type="button" className="mini" title="Atribuir campanha" onClick={()=>{setAssigning(row);setAssignCampaign(row.campaignId||"");setAssignAdset(row.adsetId||"");setAssignAd(row.adId||"");}}><Pencil size={14}/></button></div></td></tr>)}</tbody></table></div>{!sales.length ? <div className="catalogEmpty">Nenhuma venda Shopify encontrada neste período.</div> : <TablePagination page={safeSalesPage} totalPages={salesTotalPages} onChange={setSalesPage} />}</article>
+    <article className="card tableCard"><div className="sectionHead"><div><h2>Sessões recentes</h2><p>Origem, campanha, páginas e intenção de compra</p></div></div><TableScroll><table><thead><tr><th>Sessão</th><th>Última atividade</th><th>Origem</th><th>Campanha</th><th>Página de entrada</th><th>Páginas</th><th>Initiate Checkout</th></tr></thead><tbody>{visibleSessions.map((row:any) => <tr key={row.id}><td title={row.id}><div className="tableCellRail">{row.id}</div></td><td className="trackingDateCell"><div className="tableCellRail">{fmtDate(row.lastAt)}</div></td><td><div className="tableCellRail">{row.source}</div></td><td><div className="tableCellRail">{row.campaign}</div></td><td className="trackingUrl" title={row.landingPage}><div className="tableCellRail">{row.landingPage}</div></td><td><div className="tableCellRail">{row.pages}</div></td><td><div className="tableCellRail">{row.buyClicks ? <span className="status ok"><MousePointerClick size={12}/>{row.buyClicks}</span> : "—"}</div></td></tr>)}</tbody></table></TableScroll>{!sessions.length ? <div className="catalogEmpty">Nenhuma visita encontrada neste filtro.</div> : <TablePagination page={safeSessionsPage} totalPages={sessionsTotalPages} onChange={setSessionsPage} />}</article>
+    <article className="card tableCard"><div className="sectionHead"><div><h2>Vendas Shopify recentes</h2><p>{metrics.attributedSales || 0} atribuídas de {metrics.sales || 0} vendas totais no período</p></div><div className="catalogPageSize"><strong>{sales.length} vendas</strong><span>Itens por página</span><AnchoredSelect value={String(salesPageSize)} onChange={(value) => { setSalesPageSize(Number(value)); setSalesPage(1); }} options={["10", "25", "50"]} compact /></div></div><TableScroll><table><thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th>Site de origem</th><th>Primeira origem</th><th>Última origem</th><th>Campanha</th><th>Conjunto</th><th>Anúncio</th><th>Atribuição</th><th>Valor</th><th>Ações</th></tr></thead><tbody>{visibleSales.map((row:any) => <tr key={row.id}><td className="trackingDateCell"><div className="tableCellRail">{fmtDate(row.occurredAt)}</div></td><td><div className="tableCellRail"><b>#{row.order}</b></div></td><td><div className="tableCellRail">{row.customer}</div></td><td><div className="tableCellRail">{row.originSite || "Não identificado"}</div></td><td><div className="tableCellRail">{row.firstSource}</div></td><td><div className="tableCellRail">{row.lastSource}</div></td><td><div className="tableCellRail">{row.campaign && row.campaign !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Campanhas", row.campaignId || row.campaign)}>{row.campaign}</button> : "—"}</div></td><td><div className="tableCellRail">{row.adset && row.adset !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Conjuntos", row.adsetId || row.adset)}>{row.adset}</button> : "—"}</div></td><td><div className="tableCellRail">{row.ad && row.ad !== "—" ? <button type="button" className="trackingCampaignLink" onClick={() => openCampaignFromSale(row, "Anúncios", row.adId || row.ad)}>{row.ad}</button> : "—"}</div></td><td><div className="tableCellRail"><span className={`status ${row.attributed||row.manual ? "ok" : "warn"}`}>{row.manual ? "Manual" : row.attributed ? "Atribuída" : "Sem sessão"}</span></div></td><td className="positive"><div className="tableCellRail">{money(row.value)}</div></td><td><div className="tableCellRail"><button type="button" className="mini" title="Atribuir campanha" onClick={()=>{setAssigning(row);setAssignCampaign(row.campaignId||"");setAssignAdset(row.adsetId||"");setAssignAd(row.adId||"");}}><Pencil size={14}/></button></div></td></tr>)}</tbody></table></TableScroll>{!sales.length ? <div className="catalogEmpty">Nenhuma venda Shopify encontrada neste período.</div> : <TablePagination page={safeSalesPage} totalPages={salesTotalPages} onChange={setSalesPage} />}</article>
     {assigning && <div className="modalBack"><div className="modal card trackingSiteModal"><div className="modalHead"><div><h2>Atribuir venda #{assigning.order}</h2><p>Selecione a campanha, o conjunto e o anúncio responsáveis.</p></div><button className="mini" onClick={()=>setAssigning(null)}><X size={18}/></button></div><div className="modalBody"><label className="field"><span>Campanha</span><AnchoredSelect value={assignCampaign} onChange={(value)=>{setAssignCampaign(value);setAssignAdset("");setAssignAd("");}} options={[{value:"",label:"Selecione..."},...campaignOptions]}/></label><label className="field"><span>Conjunto</span><AnchoredSelect value={assignAdset} onChange={(value)=>{setAssignAdset(value);setAssignAd("");}} options={[{value:"",label:"Selecione..."},...adsetOptions]}/></label><label className="field"><span>Anúncio</span><AnchoredSelect value={assignAd} onChange={setAssignAd} options={[{value:"",label:"Selecione..."},...adOptionsForSelection]}/></label></div><div className="modalFoot"><button className="ghost" onClick={()=>setAssigning(null)}>Cancelar</button><button className="primary" disabled={!assignCampaign} onClick={async()=>{try{await apiJson('/api/tracking/dashboard',{method:'POST',body:JSON.stringify({action:'attribute-order',orderId:assigning.id,campaignId:assignCampaign,adsetId:assignAdset,adId:assignAd})});setAssigning(null);await load();notify(`Venda #${assigning.order} atribuída`);}catch(error:any){notify(error.message);}}}>Salvar atribuição</button></div></div></div>}
     {adding && <div className="modalBack"><div className="modal card trackingSiteModal"><div className="modalHead"><div><h2>Adicionar site</h2><p>Cadastre o domínio ou conecte sua loja Shopify.</p></div><button className="mini" onClick={() => setAdding(false)}><X size={18}/></button></div><div className="modalBody"><label className="field"><span>Nome</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Loja Iron Air"/></label><label className="field"><span>Domínio</span><input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="ironair.com.br"/></label><button className="primary trackingManualSave" onClick={async () => { try { await apiJson('/api/tracking/dashboard',{method:'POST',body:JSON.stringify({name,domain})}); setAdding(false); setName(''); setDomain(''); await load(); notify('Site adicionado ao Trackeamento'); } catch(error:any){ notify(error.message); } }}>Salvar site manual</button><div className="trackingOr"><span>ou</span></div>{!data?.shopify?.connected && <label className="field"><span>Domínio da loja Shopify</span><input value={shopDomain} onChange={(event) => setShopDomain(event.target.value)} placeholder="sua-loja.myshopify.com"/></label>}<button className="shopifyConnectButton" onClick={() => { if(data?.shopify?.connected){setSite(data.shopify.shopDomain || "");setAdding(false);notify(`Loja Shopify ${data.shopify.shopDomain} selecionada`);return;} const shop=shopDomain.trim(); if(!shop){notify("Informe a loja Shopify");return;} location.href=`/api/integrations/shopify/connect?shop=${encodeURIComponent(shop)}`; }}><img src="/integration-logos/shopify.png" alt=""/><span>{data?.shopify?.connected ? "Conectado com Shopify" : "Continuar com Shopify"}</span></button>{data?.shopify?.connected && <small className="trackingConnectedShop">{data.shopify.shopDomain}</small>}</div><div className="modalFoot"><button className="ghost" onClick={() => setAdding(false)}>Cancelar</button></div></div></div>}
   </div>;

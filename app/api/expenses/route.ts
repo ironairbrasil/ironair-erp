@@ -82,11 +82,14 @@ export async function DELETE(req:Request){
   try{
     const tenantId=await getTenantId(req);
     if(req.headers.get('content-type')?.includes('application/json')){
-      const body=await req.json();
-      const ids=Array.isArray(body.ids)?body.ids.filter((id:unknown):id is string=>typeof id==='string'&&id.length>0):[];
-      if(!ids.length) return NextResponse.json({ok:false,error:'Selecione despesas para excluir'},{status:400});
-      const result=await db.expense.deleteMany({where:{tenantId,id:{in:ids}}});
-      return NextResponse.json({ok:true,deleted:result.count});
+      const raw=await req.text();
+      if(raw.trim()){
+        const body=JSON.parse(raw);
+        const ids=Array.isArray(body.ids)?body.ids.filter((id:unknown):id is string=>typeof id==='string'&&id.length>0):[];
+        if(!ids.length) return NextResponse.json({ok:false,error:'Selecione despesas para excluir'},{status:400});
+        const result=await db.expense.deleteMany({where:{tenantId,id:{in:ids}}});
+        return NextResponse.json({ok:true,deleted:result.count});
+      }
     }
     const id=new URL(req.url).searchParams.get('id');
     if(!id)return NextResponse.json({ok:false,error:'id obrigatório'},{status:400});

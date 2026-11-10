@@ -3,6 +3,7 @@ import { decryptSecret } from '@/lib/crypto-secrets';
 
 const BASE = 'https://api.mercadopago.com/v1/reporting/operations/activities_withdraw';
 const RELEASE_BASE = 'https://api.mercadopago.com/v1/account/release_report';
+const WITHDRAW_REPORT_MAX_AGE_MS = 5 * 60_000;
 type Withdrawal = { id: string; date: string | null; amount: number; status: string; operationType: string; account: string };
 
 async function mpFetch(token: string, path: string, init?: RequestInit) {
@@ -124,7 +125,11 @@ export async function listMercadoPagoWithdrawals(tenantId: string) {
     } else if (!config.ok) throw new Error(`Mercado Pago: configuração de saques retornou HTTP ${config.status}`);
 
     let reportId = typeof metadata.withdrawReportId === 'string' ? metadata.withdrawReportId : '';
-    if (metadata.withdrawReportCreatedAt && Date.now() - new Date(String(metadata.withdrawReportCreatedAt)).getTime() > 24 * 3600000) reportId = '';
+    // Withdrawal statements are snapshots. Reusing one for an entire day hides
+    // transfers made after the report was generated, even after a manual refresh.
+    // Five minutes keeps polling on the same pending report while allowing a new
+    // snapshot to pick up payouts made today.
+    if (metadata.withdrawReportCreatedAt && Date.now() - new Date(String(metadata.withdrawReportCreatedAt)).getTime() > WITHDRAW_REPORT_MAX_AGE_MS) reportId = '';
     if (!reportId) {
       const start = new Date(); start.setUTCFullYear(start.getUTCFullYear() - 1); start.setUTCDate(start.getUTCDate() + 1);
       const saoPaulo = (date: Date) => new Date(date.getTime() - 3 * 3600000).toISOString().replace('Z', '-03:00');

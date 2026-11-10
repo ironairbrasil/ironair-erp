@@ -32,27 +32,40 @@ const platformLogo = (value: string) => {
   if (normalized.includes("TIKTOK")) return "/integration-logos/tiktok-ads.webp";
   return "";
 };
-const PlatformName = ({ value }: { value: string }) => { const logo = platformLogo(value); return <span className="performancePlatformName">{logo && <span className="performancePlatformLogo"><img src={logo} alt="" /></span>}<span>{channelLabel(value)}</span></span>; };
+const PlatformName = ({ value }: { value: string }) => { const logo = platformLogo(value); return <span className="performancePlatformName">{logo && <span className="platformLogo performancePlatformLogo"><img src={logo} alt="" /></span>}<span>{channelLabel(value)}</span></span>; };
+export function PlatformKpiLabel({ label }: { label: string }) {
+  const logo = platformLogo(label);
+  return <span className="performanceKpiLabel">{logo && <span className="platformLogo performancePlatformLogo"><img src={logo} alt="" /></span>}{label}</span>;
+}
 const periodOptions = ["Hoje", "Ontem", "7 dias", "30 dias", "Este mês", "Mês passado", "Este ano", "Tempo todo"];
 const shiftMonth = (month: string, offset: number) => { const [year, value] = month.split("-").map(Number); const date = new Date(Date.UTC(year, value - 1 + offset, 1)); return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`; };
 const monthTitle = (month: string) => { const [year, value] = month.split("-").map(Number); const name = new Intl.DateTimeFormat("pt-BR", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, value - 1, 1))); return `${name[0].toUpperCase()}${name.slice(1)} ${year}`; };
 const monthDays = (month: string) => { const [year, value] = month.split("-").map(Number); const blanks = (new Date(Date.UTC(year, value - 1, 1)).getUTCDay() + 6) % 7; const count = new Date(Date.UTC(year, value, 0)).getUTCDate(); return [...Array(blanks).fill(""), ...Array.from({ length: count }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)]; };
-const performanceCardOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Taxas + frete", "Custo dos produtos", "Margem líquida", "Estoque", "Ticket médio", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "Faturamento Meta", "Faturamento Google", "Faturamento TikTok", "Faturamento Ads", "TACOS", "MPA", "ROAS total"];
+const performanceCardOrder = ["Faturamento", "Líq. do Marketplace", "Lucro bruto", "Lucro líquido", "Pedidos pagos", "Faturamento Shopify", "Lucro bruto Shopify", "Margem líquida", "Estoque", "Taxas + frete", "Impostos", "ROI", "Meta Ads", "Google Ads", "TikTok Ads", "Lucro bruto pós Ads", "Valor em Ads", "Faturamento Meta", "Faturamento Google", "Faturamento TikTok", "Faturamento Ads", "TACOS", "MPA", "ROAS total"];
 const performanceKpis = (data: Dashboard) => {
   const revenue = Number(data.revenue || 0), cogs = Number(data.cogs || 0), media = Number(data.media || 0), fees = Number(data.fees || 0), expenses = Number(data.expenses || 0);
   const adRevenue = Number(data.adRevenue || 0);
   const adCogs = Number(data.adCogs || 0);
-  const gross = Number(data.grossProfit ?? (revenue - fees - cogs));
+  const marketplaceNet = data.channels
+    .filter(channel => ["MERCADO_LIVRE", "AMAZON"].includes(String(channel.name || "").toUpperCase()))
+    .reduce((total, channel) => total + Number(channel.salesProfit || 0), 0);
+  const shopifyRevenue = data.channels
+    .filter(channel => String(channel.name || "").toUpperCase() === "SHOPIFY")
+    .reduce((total, channel) => total + Number(channel.revenue || 0), 0);
+  const shopifyGrossProfit = data.channels
+    .filter(channel => String(channel.name || "").toUpperCase() === "SHOPIFY")
+    .reduce((total, channel) => total + Number(channel.salesProfit || 0), 0) - media;
+  const grossProfitAfterAds = marketplaceNet + shopifyRevenue - media - cogs;
   const investment = cogs + fees + media + expenses;
   const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
   return [
-    { label: "Faturamento", value: brl(revenue), delta: `${data.orders || 0} pedidos pagos` },
+    { label: "Faturamento", value: brl(revenue), delta: "Vendas − taxas e fretes" },
     { label: "Pedidos pagos", value: String(data.orders || 0), delta: "Aprovados" },
-    { label: "Líq. do Marketplace", value: brl(data.salesProfit ?? (revenue - fees)), delta: "Faturamento − taxas e frete" },
-    { label: "Lucro líquido", value: brl(gross - expenses), delta: "Lucro bruto − despesas" },
+    { label: "Líq. do Marketplace", value: brl(marketplaceNet), delta: "Mercado Livre + Amazon − taxas e fretes ML/Amazon" },
+    { label: "Lucro líquido", value: brl(data.profit || 0), delta: "Lucro bruto − despesas" },
     { label: "Taxas + frete", value: brl(fees ? -Math.abs(fees) : 0), delta: "Plataforma / logística" },
-    { label: "Custo dos produtos", value: brl(cogs), delta: "Custo unitário × quantidade vendida" },
-    { label: "Ticket médio", value: brl(data.ticket || 0), delta: "Receita / pedidos" },
+    { label: "Faturamento Shopify", value: brl(shopifyRevenue), delta: "Vendas pagas na Shopify" },
+    { label: "Lucro bruto Shopify", value: brl(shopifyGrossProfit), delta: "Faturamento Shopify − taxas − fretes − Ads" },
     { label: "Estoque", value: `${data.available || 0} un.`, delta: "Disponíveis" },
     { label: "Impostos", value: brl(data.taxes || 0), delta: "% sobre o faturamento" },
     { label: "Lucro bruto pós Ads", value: brl(adRevenue - media), delta: "Faturamento Ads − anúncios" },
@@ -60,7 +73,7 @@ const performanceKpis = (data: Dashboard) => {
     { label: "ROI", value: investment > 0 ? String(Number((Math.max(0, (revenue - investment) / investment)).toFixed(2))) : "—", delta: "Retorno sobre o investimento" },
     { label: "TACOS", value: adRevenue > 0 ? percent(media / adRevenue) : "—", delta: "Anúncios / faturamento Ads" },
     { label: "MPA", value: adRevenue > 0 ? percent((adRevenue - media) / adRevenue) : "—", delta: "Faturamento Ads após anúncios / faturamento Ads" },
-    { label: "Lucro bruto", value: brl(revenue - media - cogs), delta: "Faturamento − anúncios − produtos" },
+    { label: "Lucro bruto", value: brl(grossProfitAfterAds), delta: "Líq. marketplace + Shopify − anúncios − produtos" },
     { label: "ROAS total", value: media > 0 ? `${(adRevenue / media).toFixed(2)}x` : "—", delta: "Faturamento Ads / anúncios" },
   ];
 };
@@ -235,10 +248,10 @@ export default function PerformanceView() {
       <div className="performancePeriodLabel">{dateLabel(data.periodFrom)} a {dateLabel(data.periodTo)} · {data.orders} pedidos pagos {loading ? "· Atualizando..." : ""}</div>
       <div className="performanceKpiSection">
         <div className="performanceKpis">
-          {orderedPerformanceCards.slice(0, 8).map((card) => <article className="card" id={card.id} key={card.id}><span className="performanceKpiLabel">{platformLogo(card.label) && <span className="performancePlatformLogo"><img src={platformLogo(card.label)} alt="" /></span>}{card.label}</span><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
+          {orderedPerformanceCards.slice(0, 8).map((card) => <article className="card" id={card.id} key={card.id}><PlatformKpiLabel label={card.label} /><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
         </div>
         <div className={`dashboardExtraCards performanceExtraCards ${kpisExpanded ? "expanded" : ""}`} aria-hidden={!kpisExpanded}><div className="performanceExtraCardsInner"><div className="performanceKpis">
-          {orderedPerformanceCards.slice(8).map((card) => <article className="card" id={card.id} key={card.id}><span className="performanceKpiLabel">{platformLogo(card.label) && <span className="performancePlatformLogo"><img src={platformLogo(card.label)} alt="" /></span>}{card.label}</span><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
+          {orderedPerformanceCards.slice(8).map((card) => <article className="card" id={card.id} key={card.id}><PlatformKpiLabel label={card.label} /><strong className={/^-(?:R\$)?/.test(String(card.value).replaceAll(" ", "")) ? "negative" : undefined}>{card.value}</strong><small>{card.delta}</small></article>)}
         </div></div></div>
         <div className="dashboardMoreDivider"><button type="button" className="dashboardMoreToggle" aria-expanded={kpisExpanded} aria-label={kpisExpanded ? "Mostrar menos cards" : "Mostrar mais cards"} onClick={() => setKpisExpanded((expanded) => !expanded)}>{kpisExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}</button><span>{kpisExpanded ? "Mostrar menos" : "Mostrar mais"}</span></div>
       </div>

@@ -135,7 +135,7 @@ export function mapShopifyOrder(o:any, tenantId?:string):IngestOrder{
       fbclid:a.fbclid,_fbp:a._fbp||a.fbp,_fbc:a._fbc||a.fbc,gclid:a.gclid,
       campaign_id:a.campaign_id||a.campaignId||(/^\d{8,}$/.test(a.utm_campaign||'')?a.utm_campaign:undefined),adset_id:a.adset_id||a.adsetId||(/^\d{8,}$/.test(a.utm_term||'')?a.utm_term:undefined),ad_id:a.ad_id||a.adId||(/^\d{8,}$/.test(a.utm_content||'')?a.utm_content:undefined),
       sessionId:a.sessionId||a.session_id,visitorId:a.visitorId||a.visitor_id,
-      landingPage:o.landing_site||o.customerJourneySummary?.firstVisit?.landingPage,referrer:o.referring_site||o.customerJourneySummary?.firstVisit?.referralInfoHtml,
+      landingPage:o.landing_site||o.customerJourneySummary?.firstVisit?.landingPage||a.landingPage,referrer:o.referring_site||o.customerJourneySummary?.firstVisit?.referralInfoHtml||a.referrer,
       firstTouch:a.firstTouch,lastTouch:a.lastTouch, externalReference:a.externalReference||a.external_reference
     }
   };

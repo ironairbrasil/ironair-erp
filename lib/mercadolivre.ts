@@ -6,6 +6,7 @@ import { normalizePaymentMethod } from './payment-method';
 import { moveStock } from './inventory';
 import { getTenantId } from './tenant';
 import { trustMercadoLivreWebhook } from './mercadolivre-webhook';
+import { mercadoLivreRefundAmount } from './mercadolivre-refund';
 
 const PROVIDER = 'Mercado Livre';
 const WEBHOOK_PROVIDER = 'MERCADO_LIVRE';
@@ -439,6 +440,13 @@ export async function syncMercadoLivreReturns(tenantId: string, claimId?: string
       summary.checked += result.checked;
       summary.delivered += result.delivered;
       summary.restocked += result.restocked;
+      if (returnCase.orderExternalId) {
+        const order = await mercadoLivreApi(`/orders/${encodeURIComponent(returnCase.orderExternalId)}`, {}, tenantId);
+        const refundAmount = mercadoLivreRefundAmount(order);
+        if (refundAmount !== null && refundAmount > 0) {
+          await db.returnCase.update({ where: { id: returnCase.id }, data: { refundAmount } });
+        }
+      }
     }catch(error){
       firstError ||= error;
     }

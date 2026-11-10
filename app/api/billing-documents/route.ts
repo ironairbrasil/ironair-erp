@@ -17,6 +17,7 @@ const publicDocument = (document: any) => ({
   size: document.size,
   createdAt: document.createdAt,
   updatedAt: document.updatedAt,
+  issuedAt: document.issuedAt || null,
   order: document.order
     ? {
         id: document.order.id,
@@ -32,7 +33,7 @@ const publicDocument = (document: any) => ({
 export async function GET(req: Request) {
   try {
     const tenantId = await getTenantId(req);
-    const documents = await db.billingDocument.findMany({
+    const [documents, orders, returnCases, invoiceXmls] = await Promise.all([db.billingDocument.findMany({
       where: { tenantId },
       orderBy: { updatedAt: "desc" },
       select: {
@@ -55,8 +56,22 @@ export async function GET(req: Request) {
           },
         },
       },
-    });
-    return NextResponse.json({ ok: true, documents: documents.map(publicDocument) });
+    }), db.order.findMany({
+      where: { tenantId, status: { in: ["PAID", "REFUNDED"] } },
+      select: { id: true, status: true, externalId: true, channel: true, paidAt: true, createdAt: true, customer: { select: { name: true } } },
+    }), db.returnCase.findMany({ where: { tenantId }, select: { channel: true, orderExternalId: true, externalOrderId: true } }), db.billingDocument.findMany({
+      where: { tenantId, OR: [{ type: { in: ["INVOICE_XML", "REFUNDED_XML"] } }, { type: "INVOICE", mimeType: { contains: "xml" } }] },
+      select: { orderId: true, type: true, data: true },
+    })]);
+    const issueDates = new Map<string, string>();
+    for (const xml of invoiceXmls) {
+      const value = Buffer.from(xml.data).toString("utf8").match(/<(?:\w+:)?(?:dhEmi|dEmi)\b[^>]*>([^<]+)</)?.[1]?.trim();
+      if (value && !Number.isNaN(Date.parse(value))) issueDates.set(`${xml.orderId}:${xml.type === "REFUNDED_XML" ? "return" : "sale"}`, value);
+    }
+    const returnedOrders = new Set(returnCases.map(item => `${item.channel}:${item.orderExternalId || item.externalOrderId}`));
+    const sales = orders.filter(order => order.status === "PAID");
+    const returns = orders.filter(order => order.status === "REFUNDED" || returnedOrders.has(`${order.channel}:${order.externalId}`));
+    return NextResponse.json({ ok: true, documents: documents.map(document => publicDocument({ ...document, issuedAt: issueDates.get(`${document.orderId}:${document.type.startsWith("REFUNDED") ? "return" : "sale"}`) })), sales, returns });
   } catch (error: any) {
     return NextResponse.json({ ok: false, error: error?.message || "Não foi possível carregar os documentos" }, { status: 400 });
   }
